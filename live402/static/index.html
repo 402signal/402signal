@@ -38,7 +38,7 @@
         <h2>How to use it</h2>
         <ol class="steps">
           <li>Type what you need, or paste a URL you already have.</li>
-          <li>Pay $0.01 USDC on Base in this browser, or pay Base / Solana / Algorand from an agent.</li>
+          <li>Pay $0.01 USDC on Base or Algorand in this browser, or pay Base / Solana / Algorand from an agent.</li>
           <li>We probe. You get a live URL or an honest miss.</li>
         </ol>
       </section>
@@ -60,9 +60,11 @@
           <div class="row">
             <button type="submit" id="go" class="btn">Find a live URL</button>
             <button type="button" id="pay-base" class="btn pay-base" hidden>Pay $0.01 on Base</button>
+            <button type="button" id="pay-algo" class="btn pay-algo">Pay $0.01 on Algorand</button>
             <span id="status" class="muted"></span>
           </div>
           <p id="pay-base-hint" class="muted" hidden>Uses an injected wallet on Base (8453): MetaMask, Coinbase Wallet, or Base App. One $0.01 USDC signature per click. No auto-pay.</p>
+          <p id="pay-algo-hint" class="muted">Pera on iPhone (Safari or Pera's browser) or Lute. Connects a wallet, then you sign one $0.01 USDC transfer. No auto-pay. Sample chips only prefill.</p>
           <div id="human-result" class="result-card" hidden>
             <h3 id="human-title"></h3>
             <p id="human-body"></p>
@@ -97,6 +99,9 @@
       <p><a href="https://402signal.com" rel="noopener noreferrer">402signal.com</a> · <a href="https://x.com/402Signal" rel="noopener noreferrer">@402Signal</a></p>
     </footer>
   </div>
+  <script src="/algosdk.min.js"></script>
+  <script src="/pera.js"></script>
+  <script src="/lute.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>

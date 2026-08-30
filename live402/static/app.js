@@ -4,6 +4,8 @@
   const go = document.getElementById("go");
   const payBaseBtn = document.getElementById("pay-base");
   const payBaseHint = document.getElementById("pay-base-hint");
+  const payAlgoBtn = document.getElementById("pay-algo");
+  const payAlgoHint = document.getElementById("pay-algo-hint");
   const out = document.getElementById("out");
   const status = document.getElementById("status");
   const preview = document.getElementById("preview");
@@ -17,7 +19,9 @@
   const BASE_CHAIN_ID = 8453;
   const BASE_CHAIN_HEX = "0x2105";
   const ATOMIC_AMOUNT = "10000";
+  const ALGO_ASSET = "31566704";
   let paying = false;
+  let algoSession = { kind: null, address: null, pera: null, lute: null };
 
   function setOutCaption(text) {
     if (!outCaption) return;
@@ -55,6 +59,14 @@
       : null;
   }
 
+  function algoWalletReady() {
+    return Boolean(
+      (window.algorand && typeof window.algorand.enable === "function") ||
+      window.LuteConnect ||
+      window.PeraWalletConnect
+    );
+  }
+
   function revealPayControl() {
     const ok = Boolean(injectedWallet());
     if (payBaseBtn) {
@@ -62,6 +74,11 @@
       if (!paying) payBaseBtn.disabled = !ok || !hasContent();
     }
     if (payBaseHint) payBaseHint.hidden = !ok;
+    if (payAlgoBtn) {
+      payAlgoBtn.hidden = false;
+      if (!paying) payAlgoBtn.disabled = !hasContent();
+    }
+    if (payAlgoHint) payAlgoHint.hidden = false;
   }
 
   function syncPreview() {
@@ -75,6 +92,10 @@
       const ok = Boolean(injectedWallet());
       payBaseBtn.hidden = !ok;
       payBaseBtn.disabled = !ok || !hasContent();
+    }
+    if (payAlgoBtn && !paying) {
+      payAlgoBtn.hidden = false;
+      payAlgoBtn.disabled = !hasContent();
     }
     markChip();
   }
@@ -158,6 +179,7 @@
     go.disabled = true;
     go.classList.add("posting");
     if (payBaseBtn) payBaseBtn.disabled = true;
+    if (payAlgoBtn) payAlgoBtn.disabled = true;
     status.textContent = "looking…";
     status.className = "muted";
     if (out) out.hidden = true;
@@ -199,6 +221,333 @@
     }
     return null;
   }
+
+  function pickAlgoAccept(required) {
+    const accepts = (required && required.accepts) || [];
+    for (let i = 0; i < accepts.length; i++) {
+      const item = accepts[i];
+      const net = String((item && item.network) || "").toLowerCase();
+      const asset = String((item && (item.asset || item.currency)) || "");
+      const amount = String((item && item.amount) || "");
+      if (net.indexOf("algorand") === 0 && asset === ALGO_ASSET && amount === ATOMIC_AMOUNT) {
+        return item;
+      }
+    }
+    return null;
+  }
+
+  function bytesToB64(bytes) {
+    const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+    let bin = "";
+    for (let i = 0; i < u8.length; i++) bin += String.fromCharCode(u8[i]);
+    return btoa(bin);
+  }
+
+  function b64ToBytes(b64) {
+    const bin = atob(String(b64).replace(/-/g, "+").replace(/_/g, "/"));
+    const out = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  }
+
+  function normalizeSigned(signed) {
+    if (!signed) throw new Error("Wallet did not return a signed payment.");
+    if (signed instanceof Uint8Array) return bytesToB64(signed);
+    if (typeof signed === "string") return signed;
+    if (ArrayBuffer.isView(signed)) return bytesToB64(new Uint8Array(signed.buffer, signed.byteOffset, signed.byteLength));
+    throw new Error("Unexpected signed transaction format.");
+  }
+
+  function suggestedParamsFrom(accept) {
+    const extra = (accept && accept.extra) || {};
+    const raw = extra.suggestedParams || extra.suggested_params || {};
+    const first = Number(raw.firstValid || raw.firstRound || raw["first-round"] || 0);
+    const last = Number(raw.lastValid || raw.lastRound || raw["last-round"] || 0);
+    const minFee = Number(raw.minFee || raw.fee || 1000);
+    if (!first || !last) {
+      throw new Error("402 is missing Algorand suggestedParams. Try again in a moment.");
+    }
+    let gh = raw.genesisHash || raw["genesis-hash"];
+    if (typeof gh === "string") gh = b64ToBytes(gh);
+    if (!(gh instanceof Uint8Array) || !gh.length) {
+      throw new Error("402 suggestedParams.genesisHash is missing.");
+    }
+    return {
+      genesisHash: gh,
+      genesisID: raw.genesisID || raw["genesis-id"] || "mainnet-v1.0",
+      firstValid: first,
+      lastValid: last,
+      fee: minFee,
+      minFee: minFee,
+      flatFee: true,
+    };
+  }
+
+  function copyAccept(accept) {
+    const out = JSON.parse(JSON.stringify(accept));
+    if (out.extra) {
+      delete out.extra.suggestedParams;
+      delete out.extra.suggested_params;
+      delete out.extra.unsignedGroup;
+      delete out.extra.decimals;
+      delete out.extra.sender;
+    }
+    return out;
+  }
+
+  function isLikelyIphone() {
+    return /iPhone|iPad|iPod/i.test(navigator.userAgent || "");
+  }
+
+  async function connectAlgoWallet() {
+    if (algoSession.address) return algoSession.address;
+    if (window.algorand && typeof window.algorand.enable === "function") {
+      const res = await window.algorand.enable({ genesisID: "mainnet-v1.0" });
+      const accounts = Array.isArray(res) ? res : (res && res.accounts) || [];
+      if (accounts[0]) {
+        algoSession = { kind: "injected", address: accounts[0], pera: null, lute: null };
+        return accounts[0];
+      }
+    }
+    if (window.LuteConnect && (window.lute || !isLikelyIphone())) {
+      try {
+        const lute = new window.LuteConnect("402Signal");
+        const addrs = await lute.connect("mainnet-v1.0");
+        if (addrs && addrs[0]) {
+          algoSession = { kind: "lute", address: addrs[0], pera: null, lute: lute };
+          return addrs[0];
+        }
+      } catch (err) {
+        if (window.lute) throw err;
+      }
+    }
+    if (!window.PeraWalletConnect) {
+      throw new Error("Algorand wallet libraries failed to load.");
+    }
+    const pera = new window.PeraWalletConnect({ chainId: 416001, shouldShowSignTxnToast: false });
+    let accounts = [];
+    try { accounts = await pera.reconnectSession(); } catch (e) { accounts = []; }
+    if (!accounts || !accounts.length) {
+      accounts = await pera.connect();
+    }
+    if (!accounts || !accounts[0]) {
+      throw new Error("Pera did not share an account.");
+    }
+    algoSession = { kind: "pera", address: accounts[0], pera: pera, lute: null };
+    try {
+      if (pera.connector && typeof pera.connector.on === "function") {
+        pera.connector.on("disconnect", function () {
+          algoSession = { kind: null, address: null, pera: null, lute: null };
+        });
+      }
+    } catch (e) {}
+    return accounts[0];
+  }
+
+  function makeAlgoGroup(from, accept) {
+    const sdk = window.algosdk;
+    if (!sdk) throw new Error("algosdk failed to load.");
+    const extra = accept.extra || {};
+    const ug = extra.unsignedGroup || {};
+    if (ug.txns && ug.txns.length === 2 && typeof sdk.decodeUnsignedTransaction === "function") {
+      try {
+        return [
+          sdk.decodeUnsignedTransaction(b64ToBytes(ug.txns[0])),
+          sdk.decodeUnsignedTransaction(b64ToBytes(ug.txns[1])),
+        ];
+      } catch (e) {}
+    }
+    const feePayer = extra.feePayer;
+    const payTo = accept.payTo;
+    const amount = String(accept.amount);
+    const asset = String(accept.asset || accept.currency || "");
+    if (amount !== ATOMIC_AMOUNT) {
+      throw new Error("Refusing to sign: amount must be 10000 atomic USDC ($0.01).");
+    }
+    if (asset !== ALGO_ASSET) {
+      throw new Error("Refusing to sign: asset must be USDC ASA 31566704.");
+    }
+    if (!payTo) throw new Error("Refusing to sign: 402 is missing payTo.");
+    if (!feePayer) throw new Error("Refusing to sign: 402 is missing extra.feePayer.");
+    const sp = suggestedParamsFrom(accept);
+    const feeSp = Object.assign({}, sp, { fee: (Number(sp.minFee) || 1000) * 2, flatFee: true });
+    const paySp = Object.assign({}, sp, { fee: 0, flatFee: true });
+    const feeNote = new TextEncoder().encode("x402-fee-payer");
+    const payNote = new TextEncoder().encode("x402-payment-v2");
+    let feeTxn;
+    let payTxn;
+    try {
+      feeTxn = sdk.makePaymentTxnWithSuggestedParamsFromObject({
+        sender: feePayer,
+        receiver: feePayer,
+        amount: 0,
+        suggestedParams: feeSp,
+        note: feeNote,
+      });
+    } catch (e) {
+      feeTxn = sdk.makePaymentTxnWithSuggestedParamsFromObject({
+        from: feePayer,
+        to: feePayer,
+        amount: 0,
+        suggestedParams: feeSp,
+        note: feeNote,
+      });
+    }
+    try {
+      payTxn = sdk.makeAssetTransferTxnWithSuggestedParamsFromObject({
+        sender: from,
+        receiver: payTo,
+        amount: Number(amount),
+        assetIndex: Number(ALGO_ASSET),
+        suggestedParams: paySp,
+        note: payNote,
+      });
+    } catch (e) {
+      payTxn = sdk.makeAssetTransferTxnWithSuggestedParamsFromObject({
+        from: from,
+        to: payTo,
+        amount: Number(amount),
+        assetIndex: Number(ALGO_ASSET),
+        suggestedParams: paySp,
+        note: payNote,
+      });
+    }
+    return sdk.assignGroupID([feeTxn, payTxn]);
+  }
+
+  async function signAlgoGroup(grouped) {
+    const sdk = window.algosdk;
+    const unsignedFee = bytesToB64(sdk.encodeUnsignedTransaction(grouped[0]));
+    const unsignedPay = bytesToB64(sdk.encodeUnsignedTransaction(grouped[1]));
+    if (algoSession.kind === "injected") {
+      const signed = await window.algorand.signTxns([
+        { txn: unsignedFee, signers: [] },
+        { txn: unsignedPay, message: "Pay $0.01 USDC on Algorand" },
+      ]);
+      return [unsignedFee, normalizeSigned(signed && signed[1])];
+    }
+    if (algoSession.kind === "lute") {
+      const signed = await algoSession.lute.signTxns([
+        { txn: unsignedFee, signers: [] },
+        { txn: unsignedPay },
+      ]);
+      return [unsignedFee, normalizeSigned(signed && signed[1])];
+    }
+    if (algoSession.kind === "pera") {
+      const signed = await algoSession.pera.signTransaction([
+        [
+          { txn: grouped[0], signers: [] },
+          { txn: grouped[1], message: "Pay $0.01 USDC on Algorand" },
+        ],
+      ]);
+      const paySigned = signed && (signed.length > 1 ? signed[1] : signed[0]);
+      return [unsignedFee, normalizeSigned(paySigned)];
+    }
+    throw new Error("No Algorand wallet is connected.");
+  }
+
+  async function payAlgo() {
+    if (paying) return;
+    if (!hasContent()) {
+      showClientError("need or url is required");
+      return;
+    }
+    if (!algoWalletReady()) {
+      showClientError("Algorand wallet libraries failed to load. Refresh, or POST /route from an agent.");
+      return;
+    }
+    paying = true;
+    if (go) {
+      go.disabled = true;
+      go.classList.add("posting");
+    }
+    if (payBaseBtn) payBaseBtn.disabled = true;
+    if (payAlgoBtn) {
+      payAlgoBtn.disabled = true;
+      payAlgoBtn.classList.add("posting");
+    }
+    status.textContent = "connecting Pera or Lute…";
+    status.className = "muted";
+    if (out) out.hidden = true;
+    if (human) human.hidden = true;
+    setOutCaption("");
+    const body = requestBody();
+    try {
+      const from = await connectAlgoWallet();
+      if (!from) throw new Error("Wallet did not share an account.");
+      status.textContent = "reading 402…";
+      const challenge = await fetch("/route", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Algorand-Sender": from,
+        },
+        body: JSON.stringify(body),
+      });
+      const challengeText = await challenge.text();
+      let required;
+      try { required = JSON.parse(challengeText); } catch (e) { required = null; }
+      if (challenge.status !== 402 || !required || typeof required !== "object") {
+        showResult(challenge.status, required == null ? challengeText : required);
+        return;
+      }
+      const accept = pickAlgoAccept(required);
+      if (!accept) {
+        throw new Error("402 did not advertise Algorand USDC ASA 31566704 amount 10000.");
+      }
+      const extra = accept.extra || {};
+      if (!extra.feePayer) {
+        throw new Error("402 Algorand accept is missing extra.feePayer. Refusing to invent one.");
+      }
+      if (!extra.facilitator) {
+        throw new Error("402 Algorand accept is missing extra.facilitator. Refusing to invent one.");
+      }
+      status.textContent = "Confirm $0.01 USDC in Pera or Lute…";
+      const grouped = makeAlgoGroup(from, accept);
+      const groupB64 = await signAlgoGroup(grouped);
+      const paymentPayload = {
+        x402Version: 2,
+        scheme: accept.scheme || "exact",
+        network: accept.network,
+        resource: required.resource,
+        accepted: copyAccept(accept),
+        payload: {
+          paymentIndex: 1,
+          paymentGroup: groupB64,
+        },
+        extensions: required.extensions || {},
+      };
+      const header = encodePaymentSignature(paymentPayload);
+      status.textContent = "paying…";
+      const paid = await fetch("/route", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "PAYMENT-SIGNATURE": header,
+        },
+        body: JSON.stringify(body),
+      });
+      const paidText = await paid.text();
+      let parsed;
+      try { parsed = JSON.parse(paidText); } catch (e) { parsed = paidText; }
+      showResult(paid.status, parsed);
+    } catch (err) {
+      const code = err && err.code;
+      let message = err && err.message ? String(err.message) : String(err);
+      if (code === 4001 || code === 4100) message = "Signature rejected. No payment was sent.";
+      if (/cancelled|canceled|rejected/i.test(message) && !/402/.test(message)) {
+        message = "Signature rejected. No payment was sent.";
+      }
+      showClientError(message);
+    } finally {
+      paying = false;
+      if (go) go.classList.remove("posting");
+      if (payBaseBtn) payBaseBtn.classList.remove("posting");
+      if (payAlgoBtn) payAlgoBtn.classList.remove("posting");
+      syncPreview();
+    }
+  }
+
 
   function randomNonce() {
     const bytes = new Uint8Array(32);
@@ -340,6 +689,7 @@
       payBaseBtn.disabled = true;
       payBaseBtn.classList.add("posting");
     }
+    if (payAlgoBtn) payAlgoBtn.disabled = true;
     status.textContent = "connecting wallet…";
     status.className = "muted";
     if (out) out.hidden = true;
@@ -422,6 +772,12 @@
     payBaseBtn.addEventListener("click", function (ev) {
       ev.preventDefault();
       payBase();
+    });
+  }
+  if (payAlgoBtn) {
+    payAlgoBtn.addEventListener("click", function (ev) {
+      ev.preventDefault();
+      payAlgo();
     });
   }
   [need, url].forEach(function (el) {

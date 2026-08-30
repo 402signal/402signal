@@ -214,7 +214,39 @@ BAZAAR_MCP = {
 }
 
 
-def payment_required(resource_url: str, bazaar: dict | None = None) -> dict:
+
+def _algorand_extra(sender: str | None = None) -> dict:
+    """Facilitator + feePayer + tag. suggestedParams / unsignedGroup from algo_tx."""
+    extra = {
+        "name": "USD Coin",
+        "facilitator": ALGORAND_FACILITATOR,
+        "feePayer": ALGORAND_FEE_PAYER,
+        "displayAmount": AMOUNT_USD,
+        "tag": "x402-global-challenge",
+    }
+    try:
+        from live402.algo_tx import algorand_accept_extra
+        extra.update(
+            algorand_accept_extra(
+                ALGORAND_FEE_PAYER,
+                payto_algorand(),
+                USDC_ALGORAND_ASA,
+                AMOUNT_ATOMIC,
+                sender=sender,
+            )
+        )
+    except Exception:
+        try:
+            from live402.algod import suggested_params
+            params = suggested_params()
+            if isinstance(params, dict) and params:
+                extra["suggestedParams"] = params
+        except Exception:
+            pass
+    return extra
+
+
+def payment_required(resource_url: str, bazaar: dict | None = None, algorand_sender: str | None = None) -> dict:
     pay_to = payto_address()
     return {
         "x402Version": 2,
@@ -270,13 +302,7 @@ def payment_required(resource_url: str, bazaar: dict | None = None) -> dict:
                 "amount": AMOUNT_ATOMIC,
                 "payTo": payto_algorand(),
                 "maxTimeoutSeconds": 60,
-                "extra": {
-                    "name": "USD Coin",
-                    "facilitator": ALGORAND_FACILITATOR,
-                    "feePayer": ALGORAND_FEE_PAYER,
-                    "displayAmount": AMOUNT_USD,
-                    "tag": "x402-global-challenge",
-                },
+                "extra": _algorand_extra(algorand_sender),
             },
         ],
         "extensions": {"bazaar": bazaar or BAZAAR_EXTENSION},
@@ -452,6 +478,10 @@ def official_requirements(accept: dict) -> dict:
         extra.setdefault("facilitator", ALGORAND_FACILITATOR)
         extra.setdefault("feePayer", ALGORAND_FEE_PAYER)
         extra.setdefault("tag", "x402-global-challenge")
+        extra.pop("suggestedParams", None)
+        extra.pop("unsignedGroup", None)
+        extra.pop("decimals", None)
+        extra.pop("sender", None)
         return {
             "scheme": accept.get("scheme") or "exact",
             "network": ALGORAND_MAINNET,

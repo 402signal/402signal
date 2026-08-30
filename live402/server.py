@@ -23,8 +23,13 @@ DEFAULT_PREVIEW_RPM = 180
 DEFAULT_PUBLIC_RPM = 180
 FACILITATOR_ROUTE_RPM = 180
 HSTS = "max-age=31536000"
+# script-src 'self' only (vendor /algosdk.min.js /pera.js /lute.js; no CDN).
+# connect-src prefers 'self'. Pinned extras are Pera WalletConnect v1 bridges
+# wallet-connect-[a-h].perawallet.app (https + wss) for iPhone Pera. Browser
+# does not call algod or the facilitator. Lute popup is postMessage to lute.app.
 CSP = (
-    "default-src 'none'; script-src 'self'; connect-src 'self'; "
+    "default-src 'none'; script-src 'self'; "
+    "connect-src 'self' https://wallet-connect-a.perawallet.app https://wallet-connect-b.perawallet.app https://wallet-connect-c.perawallet.app https://wallet-connect-d.perawallet.app https://wallet-connect-e.perawallet.app https://wallet-connect-f.perawallet.app https://wallet-connect-g.perawallet.app https://wallet-connect-h.perawallet.app wss://wallet-connect-a.perawallet.app wss://wallet-connect-b.perawallet.app wss://wallet-connect-c.perawallet.app wss://wallet-connect-d.perawallet.app wss://wallet-connect-e.perawallet.app wss://wallet-connect-f.perawallet.app wss://wallet-connect-g.perawallet.app wss://wallet-connect-h.perawallet.app; "
     "style-src 'self'; img-src 'self' data:; base-uri 'self'; "
     "frame-ancestors 'none'"
 )
@@ -155,7 +160,7 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header(
             "Access-Control-Allow-Headers",
-            "Content-Type, PAYMENT-SIGNATURE, PAYMENT-PAYLOAD, X-PAYMENT, PAYMENT-RESPONSE",
+            "Content-Type, PAYMENT-SIGNATURE, PAYMENT-PAYLOAD, X-PAYMENT, PAYMENT-RESPONSE, Algorand-Sender, X-Algorand-Sender",
         )
         self.send_header(
             "Access-Control-Expose-Headers",
@@ -244,14 +249,15 @@ class Handler(SimpleHTTPRequestHandler):
         parsed = urlparse(self.path)
         if parsed.path in {"/", "/index.html"}:
             return SimpleHTTPRequestHandler.do_GET(self)
-        if parsed.path in {"/styles.css", "/app.js", "/dashboard.js"}:
+        if parsed.path in {"/styles.css", "/app.js", "/dashboard.js", "/algosdk.min.js", "/pera.js", "/lute.js"}:
             return SimpleHTTPRequestHandler.do_GET(self)
         if parsed.path == "/route":
             allow = {"Allow": "GET, POST, OPTIONS"}
             if self._wants_html():
                 html = (STATIC_DIR / "route.html").read_text(encoding="utf-8")
                 return self._html(200, html, extra_headers=allow)
-            required = payment.payment_required(self._resource_url())
+            sender = self.headers.get("Algorand-Sender") or self.headers.get("X-Algorand-Sender")
+            required = payment.payment_required(self._resource_url(), algorand_sender=sender)
             extra = dict(allow)
             extra["PAYMENT-REQUIRED"] = payment.payment_required_header(required)
             return self._json(402, required, extra)

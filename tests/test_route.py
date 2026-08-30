@@ -92,7 +92,24 @@ class PaywallTests(unittest.TestCase):
         self.assertEqual(algo["payTo"], payment.DEFAULT_PAYTO_ALGORAND)
         self.assertEqual(algo["asset"], payment.USDC_ALGORAND_ASA)
         self.assertEqual(algo["extra"]["feePayer"], payment.ALGORAND_FEE_PAYER)
+        self.assertEqual(algo["extra"]["facilitator"], payment.ALGORAND_FACILITATOR)
         self.assertEqual(algo["extra"]["tag"], "x402-global-challenge")
+        sp = algo["extra"].get("suggestedParams") or {}
+        self.assertEqual(sp.get("genesisID"), "mainnet-v1.0")
+        self.assertIn("genesisHash", sp)
+        self.assertIn("firstRound", sp)
+        self.assertIn("lastRound", sp)
+        self.assertIn("firstValid", sp)
+        self.assertIn("lastValid", sp)
+        self.assertIn("minFee", sp)
+        ug = algo["extra"].get("unsignedGroup") or {}
+        self.assertEqual(ug.get("paymentIndex"), 1)
+        self.assertEqual((ug.get("feePayerTxn") or {}).get("from"), payment.ALGORAND_FEE_PAYER)
+        self.assertEqual((ug.get("paymentTxn") or {}).get("to"), payment.DEFAULT_PAYTO_ALGORAND)
+        self.assertEqual((ug.get("paymentTxn") or {}).get("asset"), 31566704)
+        self.assertEqual((ug.get("paymentTxn") or {}).get("amount"), 10000)
+        self.assertEqual((ug.get("paymentTxn") or {}).get("note"), "x402-payment-v2")
+        self.assertNotIn("txns", ug)
         self.assertNotIn("tag", base.get("extra") or {})
         sol = next(a for a in body["accepts"] if str(a.get("network","")).startswith("solana:"))
         self.assertEqual(sol["payTo"], payment.DEFAULT_PAYTO_SOLANA)
@@ -121,6 +138,77 @@ class PaywallTests(unittest.TestCase):
             "extra": dict(tagged),
         })
         self.assertNotIn("tag", sol["extra"])
+
+    def test_official_requirements_strips_algo_helpers(self):
+        algo = payment.official_requirements({
+            "network": payment.ALGORAND_MAINNET,
+            "extra": {
+                "suggestedParams": {"firstValid": 1},
+                "unsignedGroup": {"paymentIndex": 1, "txns": ["a", "b"]},
+                "decimals": 6,
+                "sender": "X",
+                "tag": "x402-global-challenge",
+            },
+        })
+        extra = algo["extra"]
+        self.assertEqual(extra["tag"], "x402-global-challenge")
+        self.assertEqual(extra["facilitator"], payment.ALGORAND_FACILITATOR)
+        self.assertEqual(extra["feePayer"], payment.ALGORAND_FEE_PAYER)
+        self.assertNotIn("suggestedParams", extra)
+        self.assertNotIn("unsignedGroup", extra)
+        self.assertNotIn("decimals", extra)
+        self.assertNotIn("sender", extra)
+
+    def test_unpaid_algorand_sender_unsigned_group(self):
+        sender = payment.DEFAULT_PAYTO_ALGORAND
+        status, body = _json_post(
+            self.port,
+            "/route",
+            {"need": "weather"},
+            extra_headers={"Algorand-Sender": sender},
+        )
+        self.assertEqual(status, 402)
+        algo = next(a for a in body["accepts"] if str(a.get("network", "")).startswith("algorand:"))
+        ug = algo["extra"]["unsignedGroup"]
+        self.assertEqual(ug["paymentIndex"], 1)
+        self.assertEqual(ug["sender"], sender)
+        self.assertEqual(len(ug["txns"]), 2)
+        fee_raw = base64.b64decode(ug["txns"][0])
+        pay_raw = base64.b64decode(ug["txns"][1])
+        self.assertIn(b"x402-fee-payer", fee_raw)
+        self.assertIn(b"x402-payment-v2", pay_raw)
+        self.assertIn(b"pay", fee_raw)
+        self.assertIn(b"axfer", pay_raw)
+
+    def test_algo_unsigned_group_encoder(self):
+        from live402 import algo_tx, algod
+        params = algod.suggested_params()
+        sender = payment.DEFAULT_PAYTO_ALGORAND
+        group, index = algo_tx.build_unsigned_group(
+            sender,
+            payment.ALGORAND_FEE_PAYER,
+            payment.DEFAULT_PAYTO_ALGORAND,
+            10000,
+            31566704,
+            params,
+        )
+        self.assertEqual(index, 1)
+        self.assertEqual(len(group), 2)
+        fee_raw = base64.b64decode(group[0])
+        pay_raw = base64.b64decode(group[1])
+        self.assertIn(b"x402-fee-payer", fee_raw)
+        self.assertIn(b"x402-payment-v2", pay_raw)
+        self.assertIn(b"pay", fee_raw)
+        self.assertIn(b"axfer", pay_raw)
+        group2, _ = algo_tx.build_unsigned_group(
+            sender,
+            payment.ALGORAND_FEE_PAYER,
+            payment.DEFAULT_PAYTO_ALGORAND,
+            10000,
+            31566704,
+            params,
+        )
+        self.assertEqual(group, group2)
 
     def test_payto_from_env(self):
 
@@ -189,6 +277,12 @@ class PaywallTests(unittest.TestCase):
         self.assertIn('q.get("url")', js)
         self.assertIn("window.ethereum", js)
         self.assertIn("payBase", js)
+        self.assertIn("payAlgo", js)
+        self.assertIn("paymentGroup", js)
+        self.assertIn("paymentIndex", js)
+        self.assertIn("31566704", js)
+        self.assertIn("PeraWalletConnect", js)
+        self.assertIn("LuteConnect", js)
         self.assertIn("PAYMENT-SIGNATURE", js)
         self.assertIn("eth_signTypedData_v4", js)
         self.assertIn("wallet_switchEthereumChain", js)
@@ -201,12 +295,14 @@ class PaywallTests(unittest.TestCase):
         sample_chunk = js[sample_idx:sample_idx + 600]
         self.assertIn("need.focus()", sample_chunk)
         self.assertNotIn("payBase", sample_chunk)
+        self.assertNotIn("payAlgo", sample_chunk)
         self.assertNotIn("eth_signTypedData", sample_chunk)
         self.assertNotIn("PAYMENT-SIGNATURE", sample_chunk)
         chip_idx = js.find('chips.addEventListener("click"')
         self.assertGreater(chip_idx, 0)
         chip_chunk = js[chip_idx:chip_idx + 400]
         self.assertNotIn("payBase", chip_chunk)
+        self.assertNotIn("payAlgo", chip_chunk)
         self.assertNotIn("eth_signTypedData", chip_chunk)
         css_path = os.path.join(os.path.dirname(__file__), "..", "live402", "static", "styles.css")
         with open(css_path, encoding="utf-8") as fh:
@@ -223,6 +319,15 @@ class PaywallTests(unittest.TestCase):
         self.assertIn('id="pay-base"', html)
         self.assertIn("Pay $0.01 on Base", html)
         self.assertIn('id="pay-base-hint"', html)
+        self.assertIn('id="pay-algo"', html)
+        self.assertIn("Pay $0.01 on Algorand", html)
+        self.assertIn('id="pay-algo-hint"', html)
+        self.assertIn('src="/algosdk.min.js"', html)
+        self.assertIn('src="/pera.js"', html)
+        self.assertIn('src="/lute.js"', html)
+        self.assertNotIn("cdn.", html)
+        self.assertNotIn("unpkg", html)
+        self.assertNotIn("jsdelivr", html)
         self.assertIn("hidden", html)
         self.assertIn('id="preview"', html)
         self.assertIn("/dashboard", html)
@@ -330,9 +435,15 @@ class PaywallTests(unittest.TestCase):
         self.assertEqual(headers.get("x-frame-options"), "DENY")
         self.assertEqual(headers.get("referrer-policy"), "no-referrer")
         self.assertEqual(headers.get("strict-transport-security"), "max-age=31536000")
+        csp = headers.get("content-security-policy") or ""
+        self.assertIn("script-src 'self'", csp)
+        self.assertNotIn("cdn.", csp)
+        self.assertNotIn("unsafe-eval", csp)
+        self.assertNotIn("*", csp.split("connect-src")[1].split(";")[0] if "connect-src" in csp else "")
         self.assertEqual(
-            headers.get("content-security-policy"),
-            "default-src 'none'; script-src 'self'; connect-src 'self'; "
+            csp,
+            "default-src 'none'; script-src 'self'; "
+            "connect-src 'self' https://wallet-connect-a.perawallet.app https://wallet-connect-b.perawallet.app https://wallet-connect-c.perawallet.app https://wallet-connect-d.perawallet.app https://wallet-connect-e.perawallet.app https://wallet-connect-f.perawallet.app https://wallet-connect-g.perawallet.app https://wallet-connect-h.perawallet.app wss://wallet-connect-a.perawallet.app wss://wallet-connect-b.perawallet.app wss://wallet-connect-c.perawallet.app wss://wallet-connect-d.perawallet.app wss://wallet-connect-e.perawallet.app wss://wallet-connect-f.perawallet.app wss://wallet-connect-g.perawallet.app wss://wallet-connect-h.perawallet.app; "
             "style-src 'self'; img-src 'self' data:; base-uri 'self'; "
             "frame-ancestors 'none'",
         )
@@ -342,6 +453,57 @@ class PaywallTests(unittest.TestCase):
         mcp_status, mcp_raw = _get(self.port, "/mcp.json")
         self.assertEqual(mcp_status, 200)
         self.assertIn("route", [t.get("name") for t in json.loads(mcp_raw).get("tools") or []])
+
+    def test_homepage_algorand_pay_no_mnemonic(self):
+        status, html = _get(self.port, "/")
+        self.assertEqual(status, 200)
+        self.assertIn("Pay $0.01 on Algorand", html)
+        self.assertIn('id="pay-algo"', html)
+        self.assertNotIn("mnemonic", html.lower())
+        static_dir = os.path.join(os.path.dirname(__file__), "..", "live402", "static")
+        for name in ("app.js", "pera.js", "lute.js", "index.html"):
+            with open(os.path.join(static_dir, name), encoding="utf-8") as fh:
+                text = fh.read()
+            self.assertNotIn("mnemonic", text.lower(), msg=name)
+            self.assertNotIn("secretkey", text.lower().replace(" ", ""), msg=name)
+            self.assertNotIn("LOCAL_FREE", text)
+        py_dir = os.path.join(os.path.dirname(__file__), "..", "live402")
+        for name in ("algod.py", "algo_tx.py"):
+            with open(os.path.join(py_dir, name), encoding="utf-8") as fh:
+                text = fh.read()
+            self.assertNotIn("mnemonic", text.lower(), msg=name)
+            self.assertNotIn("secretkey", text.lower().replace(" ", ""), msg=name)
+        for path in ("/algosdk.min.js", "/pera.js", "/lute.js", "/app.js"):
+            st, body, headers = _get_full(self.port, path)
+            self.assertEqual(st, 200, msg=path)
+            self.assertNotIn("text/html", headers.get("content-type", ""))
+            self.assertGreater(len(body), 100)
+        js_path = os.path.join(static_dir, "app.js")
+        with open(js_path, encoding="utf-8") as fh:
+            js = fh.read()
+        self.assertIn("payAlgoBtn.hidden = false", js)
+        self.assertIn("extra.feePayer", js)
+        self.assertIn("extra.facilitator", js)
+        self.assertIn('fetch("/route"', js)
+        self.assertIn("Algorand-Sender", js)
+        self.assertIn("unsignedGroup", js)
+        self.assertIn("paymentGroup", js)
+        self.assertIn('scheme: accept.scheme || "exact"', js)
+        with open(os.path.join(static_dir, "pera.js"), encoding="utf-8") as fh:
+            pera = fh.read()
+        self.assertIn("perawallet-wc://wc?uri=", pera)
+        self.assertIn("wallet-connect-a.perawallet.app", pera)
+
+    def test_csp_script_src_self_only(self):
+        _st, _raw, headers = _get_full(self.port, "/")
+        csp = headers.get("content-security-policy") or ""
+        self.assertIn("script-src 'self'", csp)
+        script_src = csp.split("script-src")[1].split(";")[0].strip()
+        self.assertEqual(script_src, "'self'")
+        self.assertIn("connect-src", csp)
+        self.assertNotIn("https://fonts.googleapis.com", csp)
+        self.assertNotIn("https://unpkg.com", csp)
+        self.assertNotIn("https://cdn.", csp)
 
     def test_dashboard_page(self):
         status, html = _get(self.port, "/dashboard")

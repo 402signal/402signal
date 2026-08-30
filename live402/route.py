@@ -56,8 +56,13 @@ def run_probe(body: dict) -> tuple[int, dict]:
     return 503, result
 
 
-def _required_pair(resource_url: str, error: str | None = None, bazaar: dict | None = None) -> tuple[dict, dict]:
-    required = payment.payment_required(resource_url, bazaar=bazaar)
+def _algorand_sender(headers) -> str | None:
+    raw = payment._header_get(headers, "Algorand-Sender", "X-Algorand-Sender")
+    return raw or None
+
+
+def _required_pair(resource_url: str, error: str | None = None, bazaar: dict | None = None, algorand_sender: str | None = None) -> tuple[dict, dict]:
+    required = payment.payment_required(resource_url, bazaar=bazaar, algorand_sender=algorand_sender)
     if error:
         required = dict(required)
         required["error"] = error
@@ -107,11 +112,12 @@ def handle_route(body: dict, headers, resource_url: str, bazaar: dict | None = N
         return code, result, None
 
     parsed = payment.extract_payment_payload(headers)
+    sender = _algorand_sender(headers)
     if not parsed:
-        required, extra = _required_pair(resource_url, bazaar=bazaar)
+        required, extra = _required_pair(resource_url, bazaar=bazaar, algorand_sender=sender)
         return 402, required, extra
 
-    required_body = payment.payment_required(resource_url, bazaar=bazaar)
+    required_body = payment.payment_required(resource_url, bazaar=bazaar, algorand_sender=sender)
     accept = payment.match_accept(parsed, required_body)
     if not accept:
         required, extra = _required_pair(

@@ -252,3 +252,9 @@ input:focus { outline: 2px solid var(--accent); background: var(--input); }
 }
 .btn.pay-base:disabled { opacity: 0.45; }
 
+
+.btn.pay-algo {
+  background: var(--fox);
+  color: #1c1c22;
+}
+.btn.pay-algo:disabled { opacity: 0.45; }
