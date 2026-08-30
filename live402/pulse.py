@@ -73,6 +73,8 @@ PREFERRED_SAMPLE_THEMES = ("weather", "onchain", "search", "market", "messaging"
 DEFER_SAMPLE_THEMES = frozenset({"games", "other"})
 MAX_SAMPLES = 4
 NEED_MAX = 40
+# Homepage mixed chips: Algorand first (x402scan skips GoPlausible). Per-chain columns stay CHAINS.
+SAMPLE_CHAIN_ORDER = ("algorand", "base", "solana")
 _PATH_SKIP = frozenset({
     "api", "v0", "v1", "v2", "v3", "v4", "http", "https", "www", "com",
     "index", "json", "xml", "html", "x402", "mcp", "rest", "public",
@@ -371,6 +373,45 @@ def sample_need_for(item: dict, url: str) -> str | None:
     if _is_bad_need(need, url):
         return None
     return _clip_need(need)
+
+
+def named_chain(need: str) -> str | None:
+    """If the caller names exactly one of base/solana/algorand, keep that chain.
+
+    Chain-ambiguous (none or more than one named) → None. Token match only so
+    'database' does not count as Base.
+    """
+    raw = (need or "").strip().lower()
+    if not raw:
+        return None
+    toks = probe._tokens(raw)
+    for piece in raw.replace("/", " ").replace("-", " ").replace(",", " ").split():
+        if piece:
+            toks.add(piece)
+    found = [c for c in CHAINS if c in toks]
+    if len(found) == 1:
+        return found[0]
+    return None
+
+
+def _mixed_samples(chains: dict) -> list[dict]:
+    """Homepage chips: real catalog URLs, Algorand-first. Never invents URLs."""
+    out: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+    for chain in SAMPLE_CHAIN_ORDER:
+        for sample in list((chains.get(chain) or {}).get("samples") or []):
+            if not isinstance(sample, dict):
+                continue
+            url = str(sample.get("url") or "").strip()
+            need = str(sample.get("need") or "").strip()
+            if not url:
+                continue
+            key = (need.lower(), url)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(sample)
+    return out
 
 
 def _item_price_label(item: dict) -> str:
@@ -709,9 +750,7 @@ def _collect() -> dict:
             if chain not in chains:
                 chains[chain] = _stale_chain(chain, "missing")
 
-    samples: list[dict] = []
-    for chain in CHAINS:
-        samples.extend(list((chains.get(chain) or {}).get("samples") or []))
+    samples = _mixed_samples(chains)
 
     return {
         "ok": True,
@@ -752,17 +791,21 @@ def preview_need(need: str) -> dict:
             "miss_reason": "invalid_need",
         }
     q = probe._tokens(raw)
+    named = named_chain(raw)
     hits: list[dict] = []
-    seen: set[str] = set()
+    seen: set[tuple[str, str]] = set()
     samples = list(pulse.get("samples") or [])
     chains = pulse.get("chains") or {}
     for chain in CHAINS:
         samples.extend(list((chains.get(chain) or {}).get("samples") or []))
-    scored: list[tuple[int, dict]] = []
+    scored: list[tuple[int, int, dict]] = []
     for sample in samples:
         if not isinstance(sample, dict):
             continue
         url = str(sample.get("url") or "").strip()
+        chain = str(sample.get("chain") or "")
+        if named and chain != named:
+            continue
         key = (str(sample.get("need") or "").lower(), url)
         if key in seen:
             continue
@@ -779,20 +822,23 @@ def preview_need(need: str) -> dict:
                 score += 2
         if score <= 0:
             continue
+        # Ranking/selection only. Do not mark live — preview is unpaid cache, not a probe.
+        algo_lead = 0 if (named is None and chain == "algorand") else 1
         scored.append(
             (
-                score,
+                algo_lead,
+                -score,
                 {
                     "need": sample.get("need") or sample.get("label"),
                     "label": sample.get("label") or sample.get("need"),
                     "url": url,
                     "price": sample.get("price"),
-                    "chain": sample.get("chain"),
+                    "chain": chain or None,
                 },
             )
         )
-    scored.sort(key=lambda pair: pair[0], reverse=True)
-    for _score, row in scored[:8]:
+    scored.sort()
+    for _lead, _neg, row in scored[:8]:
         hits.append(row)
     return {
         "need": raw,

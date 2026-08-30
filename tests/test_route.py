@@ -403,6 +403,12 @@ class PaywallTests(unittest.TestCase):
         self.assertTrue(any("weather" in n or "erc20" in n for n in needs))
         prices = {s["need"]: s["price"] for s in body["samples"]}
         self.assertTrue(any(v == "$0.01" for v in prices.values()))
+        chains_in_samples = [s["chain"] for s in body["samples"]]
+        self.assertIn("algorand", chains_in_samples)
+        first_algo = next(i for i, c in enumerate(chains_in_samples) if c == "algorand")
+        first_other = next((i for i, c in enumerate(chains_in_samples) if c != "algorand"), None)
+        if first_other is not None:
+            self.assertLess(first_algo, first_other)
 
     def test_discovery_docs_are_200(self):
         for path in (
@@ -441,6 +447,11 @@ class PaywallTests(unittest.TestCase):
         self.assertIn("402Signal", llms)
         self.assertIn("$0.01", llms)
         self.assertIn("POST /route, not GET", llms)
+        self.assertIn(
+            "x402scan skips Algorand/GoPlausible; POST /route returns a currently-alive Algo 402 plus the target contract when that's what is live.",
+            llms,
+        )
+        self.assertNotIn("Signal402", llms)
 
 
     def test_help_key_on_unpaid_402(self):
@@ -761,6 +772,79 @@ class UnitHelpers(unittest.TestCase):
             ],
         )
         self.assertTrue(any(s["need"] == "weather" for s in hinted))
+
+    def test_named_chain_token_match(self):
+        from live402 import pulse as pulse_mod
+        self.assertIsNone(pulse_mod.named_chain("weather"))
+        self.assertIsNone(pulse_mod.named_chain("database weather"))
+        self.assertIsNone(pulse_mod.named_chain("base or solana weather"))
+        self.assertEqual(pulse_mod.named_chain("base weather"), "base")
+        self.assertEqual(pulse_mod.named_chain("Algorand weather"), "algorand")
+        self.assertEqual(pulse_mod.named_chain("solana search"), "solana")
+        self.assertIsNone(pulse_mod.named_chain(""))
+
+    def test_mixed_samples_algorand_first_real_urls(self):
+        from live402 import pulse as pulse_mod
+        chains = {
+            "base": {
+                "samples": [
+                    {"need": "weather", "label": "weather", "url": "https://w.example/base-weather", "price": "$0.01", "chain": "base"},
+                ]
+            },
+            "solana": {
+                "samples": [
+                    {"need": "search", "label": "search", "url": "https://s.example/sol-search", "price": "$0.01", "chain": "solana"},
+                ]
+            },
+            "algorand": {
+                "samples": [
+                    {"need": "weather", "label": "weather", "url": "https://a.example/algo-weather", "price": "$0.01", "chain": "algorand"},
+                ]
+            },
+        }
+        mixed = pulse_mod._mixed_samples(chains)
+        self.assertEqual([s["chain"] for s in mixed], ["algorand", "base", "solana"])
+        self.assertTrue(all(str(s["url"]).startswith("https://") for s in mixed))
+        empty_algo = pulse_mod._mixed_samples(
+            {
+                "base": {"samples": chains["base"]["samples"]},
+                "solana": {"samples": chains["solana"]["samples"]},
+                "algorand": {"samples": []},
+            }
+        )
+        self.assertEqual([s["chain"] for s in empty_algo], ["base", "solana"])
+        self.assertFalse(any("invent" in str(s["url"]) for s in empty_algo))
+        self.assertEqual(pulse_mod._mixed_samples({}), [])
+
+    def test_preview_weights_algorand_when_need_ambiguous(self):
+        from live402 import pulse as pulse_mod
+        payload = {
+            "updated_at": "2026-08-30T00:00:00Z",
+            "cached_s": 15,
+            "samples": [
+                {"need": "weather", "label": "weather", "url": "https://w.example/base-weather", "price": "$0.01", "chain": "base"},
+                {"need": "weather", "label": "weather", "url": "https://a.example/algo-weather", "price": "$0.01", "chain": "algorand"},
+                {"need": "search", "label": "search", "url": "https://s.example/sol-search", "price": "$0.01", "chain": "solana"},
+            ],
+            "chains": {},
+        }
+        with patch.object(pulse_mod, "get_pulse", return_value=payload):
+            amb = pulse_mod.preview_need("weather")
+            named_base = pulse_mod.preview_need("base weather")
+            named_algo = pulse_mod.preview_need("algorand weather")
+            named_sol = pulse_mod.preview_need("solana search")
+        self.assertTrue(amb["not_probed"])
+        self.assertNotIn("live", amb)
+        self.assertTrue(all("live" not in h for h in amb["hits"]))
+        self.assertGreaterEqual(len(amb["hits"]), 2)
+        self.assertEqual(amb["hits"][0]["chain"], "algorand")
+        self.assertEqual(amb["hits"][0]["url"], "https://a.example/algo-weather")
+        self.assertTrue(any(h["chain"] == "base" for h in amb["hits"]))
+        self.assertTrue(all(h["chain"] == "base" for h in named_base["hits"]))
+        self.assertTrue(all(h["chain"] == "algorand" for h in named_algo["hits"]))
+        self.assertTrue(named_sol["not_probed"])
+        self.assertTrue(all(h["chain"] == "solana" for h in named_sol["hits"]))
+        self.assertEqual(named_sol["hits"][0]["url"], "https://s.example/sol-search")
 
     def test_theme_buckets(self):
         from live402 import pulse as pulse_mod
@@ -1258,6 +1342,8 @@ class ProductBriefTests(unittest.TestCase):
         cls.httpd.server_close()
 
     def test_preview_unpaid_200(self):
+        from live402 import pulse as pulse_mod
+        pulse_mod.reset_cache()
         with patch("live402.probe.probe_url") as mock_url, patch(
             "live402.probe.route_need"
         ) as mock_need:
@@ -1269,6 +1355,11 @@ class ProductBriefTests(unittest.TestCase):
             self.assertIn("hits", body)
             self.assertIn("freshness", body)
             self.assertIsInstance(body["hits"], list)
+            self.assertNotIn("live", body)
+            if body["hits"]:
+                self.assertEqual(body["hits"][0].get("chain"), "algorand")
+                self.assertTrue(str(body["hits"][0].get("url") or "").startswith("https://"))
+                self.assertNotIn("live", body["hits"][0])
             mock_url.assert_not_called()
             mock_need.assert_not_called()
 
@@ -1325,6 +1416,11 @@ class ProductBriefTests(unittest.TestCase):
         from live402 import mcp as mcp_mod
         tools = mcp_mod.manifest()["tools"]
         route = next(t for t in tools if t.get("name") == "route")
+        self.assertIn(
+            "x402scan skips Algorand/GoPlausible; POST /route returns a currently-alive Algo 402 plus the target contract when that's what is live.",
+            route["description"],
+        )
+        self.assertNotIn("Signal402", route["description"])
         self.assertEqual(route["inputSchema"].get("required"), ["need"])
         props = (route.get("outputSchema") or {}).get("properties") or {}
         for key in ("live", "url", "invocable", "target", "miss_reason", "tried", "latency_ms"):

@@ -12,6 +12,8 @@ ROUTE_DESCRIPTION = (
     "(method, inputSchema, outputSchema, accepts, facilitator, amountAtomic, "
     "displayAmount, timeoutSeconds). HTTP 503 = miss (typed miss_reason). "
     "POST, not GET, to pay. Solana/Algorand accepts include extra.feePayer. "
+    "x402scan skips Algorand/GoPlausible; POST /route returns a currently-alive "
+    "Algo 402 plus the target contract when that's what is live. "
     "Do not default facilitator to x402.org. Live MCP: https://402signal.com/mcp "
     "and https://402signal.com/mcp.json."
 )

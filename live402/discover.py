@@ -609,6 +609,7 @@ HTTP 200 = live URL plus target contract. HTTP 503 = typed miss_reason.
 ## Paid
 
 - POST /route  $0.01 USDC on Base, Solana, or Algorand
+- x402scan skips Algorand/GoPlausible; POST /route returns a currently-alive Algo 402 plus the target contract when that's what is live.
 - Body: {"need": "what you want", "url": "https://optional"}
 - Agents that intend to pay should POST /route, not GET.
 - GET /route with Accept: application/json (or no Accept) returns HTTP 402 so crawlers can index payment. Browsers that send Accept: text/html get a human page.

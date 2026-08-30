@@ -19,6 +19,42 @@
       ]
     },
     {
+      "url": "https://fixture.402signal.local/algorand/weather",
+      "description": "Algorand weather forecast fixture. Returns a 402 challenge when live.",
+      "type": "http",
+      "probe": {
+        "live": true,
+        "status": 402,
+        "latency_ms": 44,
+        "has_402_challenge": true,
+        "payTo": null
+      },
+      "accepts": [
+        {
+          "network": "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=",
+          "amount": "10000"
+        }
+      ]
+    },
+    {
+      "url": "https://fixture.402signal.local/solana/search",
+      "description": "Solana web search fixture. Returns a 402 challenge when live.",
+      "type": "http",
+      "probe": {
+        "live": true,
+        "status": 402,
+        "latency_ms": 36,
+        "has_402_challenge": true,
+        "payTo": null
+      },
+      "accepts": [
+        {
+          "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+          "amount": "10000"
+        }
+      ]
+    },
+    {
       "url": "https://fixture.402signal.local/weather-stale",
       "description": "Stale weather listing that no longer answers.",
       "type": "http",
