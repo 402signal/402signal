@@ -778,10 +778,40 @@ def attach_catalog_fields(result: dict, item: dict | None = None) -> dict:
     catalog_pay = _catalog_payto(item)
     probed = result.get("payTo")
     if catalog_pay:
-        result["payTo_changed"] = bool(
+        mismatched = bool(
             probed and str(probed).strip().lower() != catalog_pay.lower()
         )
+        if mismatched:
+            result["payTo_changed"] = True
+        else:
+            result.setdefault("payTo_changed", False)
     return result
+
+
+def _finalize_probe(result: dict) -> dict:
+    """Record history and attach freshness/readiness. Never raises."""
+    try:
+        from live402 import history as history_mod
+        meta = history_mod.record_probe(result.get("url") or "", result)
+        return history_mod.attach_to_result(result, meta)
+    except Exception:
+        result.setdefault("verified_at", result.get("probed_at"))
+        result.setdefault("verified_seconds_ago", 0)
+        if result.get("payTo_changed"):
+            result.setdefault("risk", ["payTo_changed"])
+        result.setdefault("readiness", "discovered")
+        result.setdefault(
+            "history",
+            {
+                "success_24h": None,
+                "success_7d": None,
+                "n_24h": 0,
+                "n_7d": 0,
+                "p50_latency_ms": None,
+                "p95_latency_ms": None,
+            },
+        )
+        return result
 
 
 def health_from_probe(url: str, snap: dict) -> dict:
@@ -903,18 +933,20 @@ def _fixture_probe(url: str, catalog_item: dict | None = None) -> dict:
     row = fixtures.lookup_url(url)
     probed_at = now_iso()
     if not row:
-        return health_from_probe(
-            url,
-            {
-                "live": False,
-                "status": None,
-                "latency_ms": 0,
-                "has_402_challenge": False,
-                "payTo": None,
-                "miss_reason": "http_404",
-                "probes": [],
-                "probed_at": probed_at,
-            },
+        return _finalize_probe(
+            health_from_probe(
+                url,
+                {
+                    "live": False,
+                    "status": None,
+                    "latency_ms": 0,
+                    "has_402_challenge": False,
+                    "payTo": None,
+                    "miss_reason": "http_404",
+                    "probes": [],
+                    "probed_at": probed_at,
+                },
+            )
         )
     canned = dict(row.get("probe") or {})
     canned["probed_at"] = probed_at
@@ -934,7 +966,8 @@ def _fixture_probe(url: str, catalog_item: dict | None = None) -> dict:
         canned["probes"] = [entry]
     result = health_from_probe(row.get("url") or url, canned)
     result = attach_catalog_fields(result, catalog_item or row)
-    return attach_invocable_target(result, catalog_item or row)
+    result = attach_invocable_target(result, catalog_item or row)
+    return _finalize_probe(result)
 
 
 def probe_url(url: str, catalog_item: dict | None = None, deadline: float | None = None) -> dict:
@@ -959,7 +992,7 @@ def probe_url(url: str, catalog_item: dict | None = None, deadline: float | None
             },
         )
         result = attach_catalog_fields(result, catalog_item)
-        return attach_invocable_target(result, catalog_item)
+        return _finalize_probe(attach_invocable_target(result, catalog_item))
 
     safe = safe_target(url)
     if not safe:
@@ -976,7 +1009,7 @@ def probe_url(url: str, catalog_item: dict | None = None, deadline: float | None
                 "probed_at": now_iso(),
             },
         )
-        return attach_invocable_target(result, catalog_item)
+        return _finalize_probe(attach_invocable_target(result, catalog_item))
 
     start = time.perf_counter()
     probes: list[dict] = []
@@ -989,7 +1022,7 @@ def probe_url(url: str, catalog_item: dict | None = None, deadline: float | None
         get_snap["probes"] = probes
         get_snap["probed_at"] = now_iso()
         result = health_from_probe(safe, get_snap)
-        return attach_invocable_target(result, catalog_item)
+        return _finalize_probe(attach_invocable_target(result, catalog_item))
 
     post_snap = None
     if not get_snap.get("live"):
@@ -1057,7 +1090,8 @@ def probe_url(url: str, catalog_item: dict | None = None, deadline: float | None
     if snap.get("envelope"):
         result["envelope"] = snap["envelope"]
     result = attach_catalog_fields(result, catalog_item)
-    return attach_invocable_target(result, catalog_item, snap.get("envelope"))
+    result = attach_invocable_target(result, catalog_item, snap.get("envelope"))
+    return _finalize_probe(result)
 
 
 def _tokens(text: str) -> set[str]:
@@ -1286,8 +1320,12 @@ def route_need(need: str, deadline: float | None = None, prefer_network: str | N
     ranked = rank_resources(need, items, prefer_network=prefer)
     tried = 0
     last = None
+    best_changed = None
     for item in ranked[:MAX_PROBE]:
         if remaining_timeout(deadline) is not None and remaining_timeout(deadline) <= 0:
+            if best_changed is not None:
+                best_changed["tried"] = tried
+                return best_changed
             last = {
                 "live": False,
                 "invocable": False,
@@ -1304,14 +1342,28 @@ def route_need(need: str, deadline: float | None = None, prefer_network: str | N
         url = _resource_url(item)
         last = probe_url(url, catalog_item=item, deadline=deadline)
         last = attach_catalog_fields(last, item)
+        try:
+            from live402 import history as history_mod
+            last = history_mod.attach_to_result(last)
+        except Exception:
+            if last.get("payTo_changed"):
+                last["risk"] = ["payTo_changed"]
         tried += 1
         last["tried"] = tried
         last["need"] = need
         last["rail"] = _item_rail(item)
         last["source"] = "fixture" if fixtures.fixture_mode() else "discovery"
         # Crash-402 / 5xx / empty envelope are not live; try the next candidate.
+        # payTo_changed is not a silent live winner if a stable live hit exists in window.
         if last.get("live"):
+            if last.get("payTo_changed"):
+                if best_changed is None:
+                    best_changed = last
+                continue
             return last
+    if best_changed is not None:
+        best_changed["tried"] = tried
+        return best_changed
     body = {
         "live": False,
         "invocable": False,

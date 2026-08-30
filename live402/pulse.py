@@ -763,31 +763,45 @@ def _collect() -> dict:
             chains[chain] = payload
             _remember(chain, payload)
     else:
-        idx = catalog.get_index()
-        by_rail = idx.get("by_rail") or {}
-        errors = idx.get("errors") or {}
-        for rail, url in probe.pulse_catalogs():
-            if rail not in CHAINS:
-                continue
-            if not probe.catalog_url_allowed(url):
-                chains[rail] = _stale_chain(rail, "not_allowlisted")
-                continue
-            host = (urlparse(url).hostname or "").lower()
-            items = list(by_rail.get(rail) or [])
-            err = errors.get(rail)
-            if not items and err:
-                chains[rail] = _stale_chain(rail, "fetch_failed")
-                continue
-            payload = _chain_payload(
-                rail,
-                items,
-                {"ok": True, "host": host},
-            )
-            chains[rail] = payload
-            _remember(rail, payload)
-        for chain in CHAINS:
-            if chain not in chains:
-                chains[chain] = _stale_chain(chain, "missing")
+        idx = catalog.peek_index()
+        if idx is None:
+            # Do not call get_index() — that blocks ~1 min on PayAI cold start.
+            # Daemon start_refresher still fills. Serve last-good / empty counts.
+            for rail, url in probe.pulse_catalogs():
+                if rail not in CHAINS:
+                    continue
+                if not probe.catalog_url_allowed(url):
+                    chains[rail] = _stale_chain(rail, "not_allowlisted")
+                    continue
+                chains[rail] = _stale_chain(rail, "index_pending")
+            for chain in CHAINS:
+                if chain not in chains:
+                    chains[chain] = _stale_chain(chain, "missing")
+        else:
+            by_rail = idx.get("by_rail") or {}
+            errors = idx.get("errors") or {}
+            for rail, url in probe.pulse_catalogs():
+                if rail not in CHAINS:
+                    continue
+                if not probe.catalog_url_allowed(url):
+                    chains[rail] = _stale_chain(rail, "not_allowlisted")
+                    continue
+                host = (urlparse(url).hostname or "").lower()
+                items = list(by_rail.get(rail) or [])
+                err = errors.get(rail)
+                if not items and err:
+                    chains[rail] = _stale_chain(rail, "fetch_failed")
+                    continue
+                payload = _chain_payload(
+                    rail,
+                    items,
+                    {"ok": True, "host": host},
+                )
+                chains[rail] = payload
+                _remember(rail, payload)
+            for chain in CHAINS:
+                if chain not in chains:
+                    chains[chain] = _stale_chain(chain, "missing")
 
     samples = _mixed_samples(chains)
 

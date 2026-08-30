@@ -12,3 +12,6 @@
 credentials.json
 *wallet*.json
 *payer*.json
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm

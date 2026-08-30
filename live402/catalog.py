@@ -698,6 +698,12 @@ def refresh() -> dict:
     return idx
 
 
+def peek_index() -> dict | None:
+    """Cached index or None. Never refreshes. Pulse must not block on cold start."""
+    with _lock:
+        return _index
+
+
 def get_index() -> dict:
     """Return cached index. Recrawl only on cold start. Daemon refresher handles TTL."""
     with _lock:

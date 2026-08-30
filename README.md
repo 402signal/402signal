@@ -95,6 +95,7 @@ Base CDP calls need `CDP_API_KEY_ID` + `CDP_API_KEY_SECRET` (or `CDP_ACCESS_TOKE
 | `LOCAL_FREE` | unset | `1` skips the paywall (tests only) |
 | `LIVE402_FIXTURE` | unset | `1` uses local JSON, no network |
 | `LIVE402_PROBE_TIMEOUT` | `4` | probe timeout seconds |
+| `LIVE402_HISTORY_DB` | `/data/live402-history.sqlite` on Fly (`/tmp` fallback) | sqlite probe history (WAL, 0600, capped) |
 | `LIVE402_ROUTE_RPM` | `60` | paid `POST /route` per IP per minute |
 | `LIVE402_ROUTE_RPM_FACILITATOR` | `180` | higher burst for Coinbase / PayAI / GoPlausible UAs |
 | `LIVE402_PREVIEW_RPM` | `180` (or 2× route, whichever is larger) | unpaid `GET /preview` and MCP preview per IP per minute |

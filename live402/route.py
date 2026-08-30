@@ -35,6 +35,12 @@ def run_probe(body: dict) -> tuple[int, dict]:
         item = fixtures.lookup_url(url)
         result = probe.probe_url(url, catalog_item=item, deadline=deadline)
         result = probe.attach_catalog_fields(result, item)
+        try:
+            from live402 import history as history_mod
+            result = history_mod.attach_to_result(result)
+        except Exception:
+            if result.get("payTo_changed"):
+                result["risk"] = ["payTo_changed"]
         result["need"] = need or None
         result["tried"] = 1
         result["source"] = "fixture" if fixtures.fixture_mode() else "url"

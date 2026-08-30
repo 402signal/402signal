@@ -32,3 +32,6 @@ primary_region = "iad"
 [[mounts]]
   source = "data"
   destination = "/data"
+
+[env]
+  LIVE402_HISTORY_DB = "/data/live402-history.sqlite"

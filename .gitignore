@@ -51,3 +51,9 @@ venv/
 
 # Fly local
 .fly/
+
+# Probe history (default lives in /tmp; never commit local DBs)
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+
