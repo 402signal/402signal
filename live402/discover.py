@@ -639,6 +639,22 @@ HTTP 200 = live URL plus target contract. HTTP 503 = typed miss_reason.
 - GET /robots.txt
 - POST /mcp initialize, tools/list, and tools/call preview (no payment)
 
+## Listed on
+
+- Glama: https://glama.ai/mcp/servers/402signal/402signal
+- MCP Registry: https://registry.modelcontextprotocol.io/?q=402signal (io.github.402signal/402signal)
+- Gold-402: https://github.com/Haustorium12/gold-402/blob/main/directory/aggregators.md
+- Smithery: https://smithery.ai/servers/live402/signal
+- Agentic Market: https://agentic.market/services/402signal-com
+- x402-dev: https://github.com/michielpost/x402-dev/blob/master/Projects.md
+
+## Discovery (machine)
+
+- CDP: https://api.cdp.coinbase.com/platform/v2/x402/discovery/search?query=402signal
+- PayAI: https://facilitator.payai.network/discovery/resources
+- GoPlausible: https://facilitator.goplausible.xyz/discovery/resources
+- 402index: https://402index.io/api/v1/services/ee14cbd5-19c4-4408-84aa-e465323699b1
+
 ## Paid retry
 
 Unpaid 402 → sign accepts[0] → PAYMENT-SIGNATURE → 200 or 503.

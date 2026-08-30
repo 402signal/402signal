@@ -136,6 +136,7 @@ input:focus { outline: 2px solid var(--accent); background: var(--input); }
 .foot { margin-top: 28px; color: var(--muted); font-size: 13px; max-width: 68ch; }
 .foot a { color: var(--accent); }
 .foot a:hover { color: var(--teal); }
+.listed-on { margin-top: 8px; line-height: 1.5; }
 .http-402 { color: var(--accent); }
 .http-ok { color: var(--live); }
 .http-dead { color: var(--dead); }

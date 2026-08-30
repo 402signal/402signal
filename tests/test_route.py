@@ -253,6 +253,12 @@ class PaywallTests(unittest.TestCase):
         self.assertNotIn("What's listed", html)
         self.assertIn("Examples", html)
         self.assertIn("@402Signal", html)
+        self.assertIn("Listed on", html)
+        self.assertIn("https://glama.ai/mcp/servers/402signal/402signal", html)
+        self.assertIn("https://smithery.ai/servers/live402/signal", html)
+        self.assertIn("https://agentic.market/services/402signal-com", html)
+        self.assertNotIn("24klabs.ai/listing/402signal", html)
+        self.assertNotIn("api.cdp.coinbase.com", html)
         self.assertIn("$0.01", html)
         self.assertIn("Find a live URL", html)
         self.assertIn("POST /route", html)
@@ -636,6 +642,11 @@ class PaywallTests(unittest.TestCase):
             llms,
         )
         self.assertNotIn("Signal402", llms)
+        self.assertIn("https://glama.ai/mcp/servers/402signal/402signal", llms)
+        self.assertIn("https://smithery.ai/servers/live402/signal", llms)
+        self.assertIn("api.cdp.coinbase.com/platform/v2/x402/discovery/search?query=402signal", llms)
+        self.assertIn("facilitator.goplausible.xyz/discovery/resources", llms)
+        self.assertNotIn("24klabs.ai/listing/402signal", llms)
 
 
     def test_help_key_on_unpaid_402(self):
