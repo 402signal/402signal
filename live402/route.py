@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import sys
+import time
+
 from live402 import facilitator, fixtures, payment, probe
 
 
@@ -16,20 +19,21 @@ def run_probe(body: dict) -> tuple[int, dict]:
     need = body.get("need")
     url = body.get("url")
     if need is not None and not isinstance(need, str):
-        return 400, {"error": "need must be a string"}
+        return 400, {"error": "need must be a string", "miss_reason": "invalid_need", "live": False, "invocable": False}
     if url is not None and not isinstance(url, str):
-        return 400, {"error": "url must be a string"}
+        return 400, {"error": "url must be a string", "miss_reason": "invalid_need", "live": False, "invocable": False}
     need = (need or "").strip()
     url = (url or "").strip()
     if not need and not url:
-        return 400, {"error": "need or url is required"}
+        return 400, {"error": "need or url is required", "miss_reason": "invalid_need", "live": False, "invocable": False}
 
+    deadline = time.monotonic() + probe.PROBE_BUDGET_SECONDS
     if url:
         parsed_ok = url.lower().startswith("https://")
         if not parsed_ok:
-            return 400, {"error": "url must be https"}
+            return 400, {"error": "url must be https", "miss_reason": "invalid_need", "live": False, "invocable": False}
         item = fixtures.lookup_url(url)
-        result = probe.probe_url(url, catalog_item=item)
+        result = probe.probe_url(url, catalog_item=item, deadline=deadline)
         result = probe.attach_catalog_fields(result, item)
         result["need"] = need or None
         result["tried"] = 1
@@ -39,9 +43,12 @@ def run_probe(body: dict) -> tuple[int, dict]:
         if result.get("live"):
             return 200, result
         result["live"] = False
+        result["invocable"] = False
+        if result.get("miss_reason"):
+            result["miss_reason"] = probe.public_miss_reason(result.get("miss_reason")) or result.get("miss_reason")
         return 503, result
 
-    result = probe.route_need(need)
+    result = probe.route_need(need, deadline=deadline)
     result.setdefault("payTo", None)
     result.setdefault("traction", "unknown")
     if result.get("live"):
@@ -49,8 +56,8 @@ def run_probe(body: dict) -> tuple[int, dict]:
     return 503, result
 
 
-def _required_pair(resource_url: str, error: str | None = None) -> tuple[dict, dict]:
-    required = payment.payment_required(resource_url)
+def _required_pair(resource_url: str, error: str | None = None, bazaar: dict | None = None) -> tuple[dict, dict]:
+    required = payment.payment_required(resource_url, bazaar=bazaar)
     if error:
         required = dict(required)
         required["error"] = error
@@ -63,19 +70,32 @@ def _bad_request(body: dict) -> tuple[int, dict] | None:
     need = body.get("need")
     url = body.get("url")
     if need is not None and not isinstance(need, str):
-        return 400, {"error": "need must be a string"}
+        return 400, {"error": "need must be a string", "miss_reason": "invalid_need", "live": False, "invocable": False}
     if url is not None and not isinstance(url, str):
-        return 400, {"error": "url must be a string"}
+        return 400, {"error": "url must be a string", "miss_reason": "invalid_need", "live": False, "invocable": False}
     need_s = (need or "").strip() if isinstance(need, str) else ""
     url_s = (url or "").strip() if isinstance(url, str) else ""
     if not need_s and not url_s:
-        return 400, {"error": "need or url is required"}
+        return 400, {"error": "need or url is required", "miss_reason": "invalid_need", "live": False, "invocable": False}
     if url_s and not url_s.lower().startswith("https://"):
-        return 400, {"error": "url must be https"}
+        return 400, {"error": "url must be https", "miss_reason": "invalid_need", "live": False, "invocable": False}
     return None
 
 
-def handle_route(body: dict, headers, resource_url: str) -> tuple[int, dict, dict | None]:
+def _log_settle(body: dict | None) -> None:
+    """Log settlement, network, tx from PAYMENT-RESPONSE. No secrets."""
+    if not isinstance(body, dict):
+        return
+    tx = body.get("transaction") or body.get("txHash") or body.get("tx") or body.get("hash")
+    network = body.get("network")
+    success = body.get("success")
+    sys.stderr.write(
+        "settle ok=%s network=%s tx=%s\n"
+        % (success, network, tx)
+    )
+
+
+def handle_route(body: dict, headers, resource_url: str, bazaar: dict | None = None) -> tuple[int, dict, dict | None]:
     """Returns (status, json_body, extra_headers). Never probes before verify.
 
     Unpaid requests always 402 (empty JSON / missing need+url included) so
@@ -88,21 +108,21 @@ def handle_route(body: dict, headers, resource_url: str) -> tuple[int, dict, dic
 
     parsed = payment.extract_payment_payload(headers)
     if not parsed:
-        required, extra = _required_pair(resource_url)
+        required, extra = _required_pair(resource_url, bazaar=bazaar)
         return 402, required, extra
 
-    required_body = payment.payment_required(resource_url)
+    required_body = payment.payment_required(resource_url, bazaar=bazaar)
     accept = payment.match_accept(parsed, required_body)
     if not accept:
         required, extra = _required_pair(
-            resource_url, "Payment does not match an advertised accept"
+            resource_url, "Payment does not match an advertised accept", bazaar=bazaar
         )
         return 402, required, extra
 
     verify = facilitator.verify(parsed, accept)
     if not verify.ok:
         required, extra = _required_pair(
-            resource_url, verify.error or "Payment verification failed"
+            resource_url, verify.error or "Payment verification failed", bazaar=bazaar
         )
         return 402, required, extra
 
@@ -123,8 +143,9 @@ def handle_route(body: dict, headers, resource_url: str) -> tuple[int, dict, dic
         extra["PAYMENT-RESPONSE"] = payment.payment_response_header(settle.body)
     if not settle.ok:
         required, pay_extra = _required_pair(
-            resource_url, settle.error or "Payment settlement failed"
+            resource_url, settle.error or "Payment settlement failed", bazaar=bazaar
         )
         extra.update(pay_extra)
         return 402, required, extra
+    _log_settle(settle.body)
     return code, result, extra or None

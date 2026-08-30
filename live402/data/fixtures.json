@@ -43,10 +43,64 @@
       },
       "accepts": [
         {
-          "network": "base",
-          "amount": "10000"
+          "scheme": "exact",
+          "network": "eip155:8453",
+          "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+          "amount": "10000",
+          "maxTimeoutSeconds": 60,
+          "extra": {
+            "name": "USD Coin",
+            "facilitator": "https://api.cdp.coinbase.com/platform/v2/x402",
+            "caip2": "eip155:8453",
+            "displayAmount": "$0.01"
+          }
         }
-      ]
+      ],
+      "extensions": {
+        "bazaar": {
+          "info": {
+            "input": {
+              "type": "http",
+              "method": "POST",
+              "bodyType": "json",
+              "body": {
+                "address": "0x0000000000000000000000000000000000000000"
+              },
+              "inputSchema": {
+                "type": "object",
+                "properties": {
+                  "address": {
+                    "type": "string",
+                    "description": "Token holder"
+                  }
+                },
+                "required": [
+                  "address"
+                ]
+              }
+            },
+            "output": {
+              "type": "json",
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "balance": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "balance": {
+            "type": "string"
+          }
+        }
+      }
     },
     {
       "url": "https://fixture.402signal.local/echo",

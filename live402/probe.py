@@ -31,9 +31,44 @@ CATALOG_HOSTS = frozenset(
 PULSE_LIMIT = 100
 CATALOG_READ_LIMIT = 524_288
 DEFAULT_TIMEOUT = 4.0
+MAX_SINGLE_TIMEOUT = 10.0
+PROBE_BUDGET_SECONDS = 55.0
 MAX_PROBE = 5
 READ_LIMIT = 65536
 MAX_REDIRECTS = 2
+MISS_REASONS = (
+    "no_candidates",
+    "no_402_envelope",
+    "reachable_200",
+    "probe_timeout",
+    "quote_expired",
+    "invalid_need",
+    "upstream_5xx",
+    "ssrf",
+    "no_input_schema",
+)
+_MISS_MAP = {
+    "empty_402": "no_402_envelope",
+    "no_accepts": "no_402_envelope",
+    "http_200_no_challenge": "reachable_200",
+    "timeout": "probe_timeout",
+    "no_match": "no_candidates",
+    "discovery_unavailable": "no_candidates",
+    "get_405_post_failed": "no_402_envelope",
+    "http_400": "no_402_envelope",
+    "http_404": "no_402_envelope",
+    "http_405": "no_402_envelope",
+    "http_501": "no_402_envelope",
+    "ssrf": "ssrf",
+    "quote_expired": "quote_expired",
+    "invalid_need": "invalid_need",
+    "no_input_schema": "no_input_schema",
+    "no_candidates": "no_candidates",
+    "no_402_envelope": "no_402_envelope",
+    "reachable_200": "reachable_200",
+    "probe_timeout": "probe_timeout",
+    "upstream_5xx": "upstream_5xx",
+}
 BLOCKED_HOSTS = {
     "localhost",
     "localhost.localdomain",
@@ -53,9 +88,249 @@ STOP = {
 
 def probe_timeout() -> float:
     try:
-        return float(os.environ.get("LIVE402_PROBE_TIMEOUT", DEFAULT_TIMEOUT))
+        t = float(os.environ.get("LIVE402_PROBE_TIMEOUT", DEFAULT_TIMEOUT))
     except ValueError:
-        return DEFAULT_TIMEOUT
+        t = DEFAULT_TIMEOUT
+    return min(max(t, 0.1), MAX_SINGLE_TIMEOUT)
+
+
+def public_miss_reason(raw: str | None) -> str | None:
+    """Map internal/legacy miss codes onto the public typed enum."""
+    if raw is None:
+        return None
+    key = str(raw).strip()
+    if not key:
+        return None
+    if key in _MISS_MAP:
+        return _MISS_MAP[key]
+    low = key.lower()
+    if "expired" in low:
+        return "quote_expired"
+    if "ssrf" in low:
+        return "ssrf"
+    if "timeout" in low:
+        return "probe_timeout"
+    if key.startswith("http_"):
+        try:
+            code = int(key.split("_", 1)[1])
+        except ValueError:
+            return "no_402_envelope"
+        if code == 200:
+            return "reachable_200"
+        if 500 <= code <= 599:
+            return "upstream_5xx"
+        return "no_402_envelope"
+    if key in MISS_REASONS:
+        return key
+    return "no_402_envelope"
+
+
+def remaining_timeout(deadline: float | None) -> float | None:
+    """Seconds left before the <60s probe budget. None if no deadline."""
+    if deadline is None:
+        return None
+    left = float(deadline) - time.monotonic()
+    return left
+
+
+def _request_timeout(deadline: float | None) -> float:
+    cap = probe_timeout()
+    left = remaining_timeout(deadline)
+    if left is None:
+        return cap
+    if left <= 0.05:
+        return 0.05
+    return min(cap, left)
+
+
+def _display_amount(amount, extra: dict | None) -> str | None:
+    extra = extra if isinstance(extra, dict) else {}
+    display = extra.get("displayAmount")
+    if display:
+        return str(display)
+    if amount is None or amount == "":
+        return None
+    raw = str(amount).strip()
+    if raw.startswith("$"):
+        return raw
+    try:
+        n = int(raw)
+    except (TypeError, ValueError):
+        return None
+    return f"${n / 1_000_000:.2f}"
+
+
+def _bazaar_blobs(item: dict | None, envelope: dict | None) -> list[dict]:
+    out: list[dict] = []
+    for blob in (envelope, item):
+        if not isinstance(blob, dict):
+            continue
+        bazaar = (blob.get("extensions") or {}).get("bazaar")
+        if isinstance(bazaar, dict):
+            out.append(bazaar)
+    return out
+
+
+def extract_input_schema(item: dict | None, envelope: dict | None = None) -> dict | None:
+    for blob in (envelope, item):
+        if isinstance(blob, dict) and isinstance(blob.get("inputSchema"), dict) and blob["inputSchema"]:
+            schema = blob["inputSchema"]
+            if schema.get("properties") or schema.get("required") or schema.get("type"):
+                return schema
+    for bazaar in _bazaar_blobs(item, envelope):
+        info = bazaar.get("info") or {}
+        inp = info.get("input") or {}
+        if isinstance(inp, dict) and isinstance(inp.get("inputSchema"), dict) and inp["inputSchema"]:
+            return inp["inputSchema"]
+        schema = bazaar.get("schema") or {}
+        props = (schema.get("properties") or {}).get("input") if isinstance(schema, dict) else None
+        if not isinstance(props, dict):
+            continue
+        inner = props.get("properties") if isinstance(props.get("properties"), dict) else {}
+        for key in ("body", "queryParams", "inputSchema"):
+            cand = inner.get(key) if inner else props.get(key)
+            if isinstance(cand, dict) and (cand.get("properties") or cand.get("required")):
+                return cand
+        if props.get("properties") or props.get("required"):
+            if props.get("type") == "object" or props.get("properties"):
+                # Avoid returning the whole input descriptor (type/method) as a body schema.
+                if "body" in inner or "queryParams" in inner or "method" in inner:
+                    continue
+                return props
+    return None
+
+
+def extract_output_schema(item: dict | None, envelope: dict | None = None) -> dict | None:
+    for blob in (envelope, item):
+        if isinstance(blob, dict) and isinstance(blob.get("outputSchema"), dict) and blob["outputSchema"]:
+            return blob["outputSchema"]
+    for bazaar in _bazaar_blobs(item, envelope):
+        info = bazaar.get("info") or {}
+        out = info.get("output") or {}
+        if isinstance(out, dict) and isinstance(out.get("schema"), dict) and out["schema"]:
+            return out["schema"]
+        schema = bazaar.get("schema") or {}
+        props = (schema.get("properties") or {}).get("output") if isinstance(schema, dict) else None
+        if isinstance(props, dict) and (props.get("properties") or props.get("type")):
+            return props
+    return None
+
+
+def extract_method(item: dict | None, envelope: dict | None = None) -> str:
+    for bazaar in _bazaar_blobs(item, envelope):
+        info = bazaar.get("info") or {}
+        inp = info.get("input") or {}
+        if isinstance(inp, dict):
+            method = str(inp.get("method") or "").strip().upper()
+            if method:
+                return method
+            if str(inp.get("type") or "").lower() == "mcp":
+                return "POST"
+    return "POST"
+
+
+def _facilitator_object(acc: dict) -> dict:
+    extra = acc.get("extra") if isinstance(acc.get("extra"), dict) else {}
+    raw = extra.get("facilitator")
+    url = None
+    fee_payer = extra.get("feePayer")
+    caip2 = extra.get("caip2")
+    scheme = acc.get("scheme") or extra.get("scheme") or "exact"
+    if isinstance(raw, str) and raw.strip().startswith("https://"):
+        url = raw.strip()
+    elif isinstance(raw, dict):
+        cand = str(raw.get("url") or "").strip()
+        if cand.startswith("https://"):
+            url = cand
+        fee_payer = raw.get("feePayer") or fee_payer
+        caip2 = raw.get("caip2") or caip2
+        scheme = raw.get("scheme") or scheme
+    network = str(acc.get("network") or "")
+    if not caip2 and ":" in network:
+        caip2 = network
+    obj = {}
+    if url:
+        obj["url"] = url
+    if fee_payer:
+        obj["feePayer"] = fee_payer
+    if caip2:
+        obj["caip2"] = caip2
+    if scheme:
+        obj["scheme"] = scheme
+    return obj
+
+
+def normalize_target_accepts(accepts: list | None) -> list[dict]:
+    """Copy facilitator URL/feePayer/caip2/scheme onto each accept. Never invent x402.org."""
+    out: list[dict] = []
+    for acc in accepts or []:
+        if not isinstance(acc, dict):
+            continue
+        row = dict(acc)
+        extra = dict(row.get("extra") or {}) if isinstance(row.get("extra"), dict) else {}
+        fac = _facilitator_object(row)
+        if fac:
+            extra["facilitator"] = fac
+            if fac.get("feePayer") and not extra.get("feePayer"):
+                extra["feePayer"] = fac["feePayer"]
+            if fac.get("caip2") and not extra.get("caip2"):
+                extra["caip2"] = fac["caip2"]
+        row["extra"] = extra
+        out.append(row)
+    return out
+
+
+def _accepts_from(item: dict | None, envelope: dict | None) -> list[dict]:
+    for blob in (envelope, item):
+        if isinstance(blob, dict):
+            raw = blob.get("accepts")
+            if isinstance(raw, list) and raw:
+                return [a for a in raw if isinstance(a, dict)]
+    return []
+
+
+def build_target(item: dict | None, envelope: dict | None = None) -> dict:
+    accepts = normalize_target_accepts(_accepts_from(item, envelope))
+    first = accepts[0] if accepts else {}
+    extra = first.get("extra") if isinstance(first.get("extra"), dict) else {}
+    fac = extra.get("facilitator") if isinstance(extra.get("facilitator"), dict) else {}
+    amount = first.get("amount") or first.get("maxAmountRequired")
+    timeout = first.get("maxTimeoutSeconds")
+    try:
+        timeout_s = int(timeout) if timeout is not None else 60
+    except (TypeError, ValueError):
+        timeout_s = 60
+    fac_url = fac.get("url") if isinstance(fac, dict) else None
+    return {
+        "method": extract_method(item, envelope),
+        "inputSchema": extract_input_schema(item, envelope),
+        "outputSchema": extract_output_schema(item, envelope),
+        "accepts": accepts,
+        "facilitator": fac_url,
+        "amountAtomic": str(amount) if amount is not None else None,
+        "displayAmount": _display_amount(amount, extra),
+        "timeoutSeconds": timeout_s,
+    }
+
+
+def attach_invocable_target(result: dict, item: dict | None = None, envelope: dict | None = None) -> dict:
+    """On a live probe, attach the invocable contract. Missing schema is not a fake miss of liveness."""
+    env = envelope if isinstance(envelope, dict) else result.get("envelope")
+    target = build_target(item, env)
+    result["target"] = target
+    schema = target.get("inputSchema")
+    has_schema = isinstance(schema, dict) and bool(schema.get("properties") or schema.get("required"))
+    live = bool(result.get("live"))
+    result["invocable"] = bool(live and has_schema)
+    if live and not result["invocable"]:
+        result["miss_reason"] = "no_input_schema"
+    elif not live:
+        result["invocable"] = False
+        if result.get("miss_reason"):
+            result["miss_reason"] = public_miss_reason(result.get("miss_reason"))
+        # Keep target so the caller still sees catalog accepts/prices, but
+        # a 503 is not an invocable handoff.
+    return result
 
 
 def now_iso() -> str:
@@ -307,20 +582,12 @@ def parse_envelope(status: int | None, headers: dict[str, str], body: bytes) -> 
 
     if status != 402:
         if status == 200:
-            return None, "http_200_no_challenge"
-        if status == 400:
-            return None, "http_400"
-        if status == 404:
-            return None, "http_404"
-        if status == 405:
-            return None, "http_405"
-        if status == 501:
-            return None, "http_501"
+            return None, "reachable_200"
         if status is None:
-            return None, "timeout"
+            return None, "probe_timeout"
         if 500 <= int(status) <= 599:
-            return None, f"http_{status}"
-        return None, f"http_{status}"
+            return None, "upstream_5xx"
+        return None, "no_402_envelope"
 
     envelope = header_env if _envelope_is_parseable(header_env) else None
     if envelope is None and body_env is not None:
@@ -330,13 +597,7 @@ def parse_envelope(status: int | None, headers: dict[str, str], body: bytes) -> 
     if envelope is not None:
         return envelope, None
 
-    empty_body = body_env is None or body_env == {}
-    no_header = header_env is None or header_env == {}
-    if empty_body and no_header:
-        return None, "empty_402"
-    if header_env or body_env:
-        return None, "no_accepts"
-    return None, "empty_402"
+    return None, "no_402_envelope"
 
 
 def _read_limited(fp) -> bytes:
@@ -348,18 +609,12 @@ def _read_limited(fp) -> bytes:
 
 def _miss_from_status(status: int | None) -> str:
     if status == 200:
-        return "http_200_no_challenge"
-    if status == 400:
-        return "http_400"
-    if status == 404:
-        return "http_404"
-    if status == 405:
-        return "http_405"
-    if status == 501:
-        return "http_501"
+        return "reachable_200"
     if status is None:
-        return "timeout"
-    return f"http_{status}"
+        return "probe_timeout"
+    if isinstance(status, int) and 500 <= status <= 599:
+        return "upstream_5xx"
+    return "no_402_envelope"
 
 
 def _declared_input_body(item: dict | None) -> dict | None:
@@ -457,7 +712,7 @@ def health_from_probe(url: str, snap: dict) -> dict:
     if snap.get("probes") is not None:
         out["probes"] = snap["probes"]
     if not live and snap.get("miss_reason"):
-        out["miss_reason"] = snap["miss_reason"]
+        out["miss_reason"] = public_miss_reason(snap["miss_reason"]) or snap["miss_reason"]
     if snap.get("traction") is not None:
         out["traction"] = snap["traction"]
     if "payTo_changed" in snap:
@@ -468,13 +723,22 @@ def health_from_probe(url: str, snap: dict) -> dict:
 def _probe_entry(method: str, snap: dict) -> dict:
     entry = {"method": method, "status": snap.get("status")}
     if not snap.get("live") and snap.get("miss_reason"):
-        entry["miss_reason"] = snap["miss_reason"]
+        entry["miss_reason"] = public_miss_reason(snap["miss_reason"]) or snap["miss_reason"]
     return entry
 
 
-def _one_request(url: str, method: str, data: bytes | None = None) -> dict:
+def _one_request(url: str, method: str, data: bytes | None = None, deadline: float | None = None) -> dict:
     """Single unpaid HTTP probe. Never pays. ProbeBlocked is ssrf, never live."""
-    timeout = probe_timeout()
+    if remaining_timeout(deadline) is not None and remaining_timeout(deadline) <= 0:
+        return {
+            "live": False,
+            "status": None,
+            "has_402_challenge": False,
+            "payTo": None,
+            "miss_reason": "probe_timeout",
+            "envelope": None,
+        }
+    timeout = _request_timeout(deadline)
     headers = {"User-Agent": USER_AGENT, "Accept": "application/json"}
     if data is not None:
         headers["Content-Type"] = "application/json"
@@ -506,13 +770,13 @@ def _one_request(url: str, method: str, data: bytes | None = None) -> dict:
             "envelope": None,
         }
     except Exception as exc:
-        reason = "timeout"
+        reason = "no_402_envelope"
         name = type(exc).__name__.lower()
         msg = str(getattr(exc, "reason", exc) or "").lower()
         if "timed out" in msg or "timeout" in name or "timeout" in msg:
-            reason = "timeout"
+            reason = "probe_timeout"
         elif isinstance(exc, socket.timeout):
-            reason = "timeout"
+            reason = "probe_timeout"
         return {
             "live": False,
             "status": None,
@@ -536,21 +800,9 @@ def _one_request(url: str, method: str, data: bytes | None = None) -> dict:
 
 def _infer_fixture_miss(canned: dict) -> str:
     if canned.get("miss_reason"):
-        return str(canned["miss_reason"])
+        return public_miss_reason(str(canned["miss_reason"])) or "no_402_envelope"
     status = canned.get("status")
-    if status == 200:
-        return "http_200_no_challenge"
-    if status == 402:
-        return "empty_402"
-    if status == 400:
-        return "http_400"
-    if status == 404:
-        return "http_404"
-    if status == 405:
-        return "get_405_post_failed"
-    if status is None:
-        return "timeout"
-    return f"http_{status}"
+    return _miss_from_status(status)
 
 
 def _fixture_probe(url: str, catalog_item: dict | None = None) -> dict:
@@ -587,17 +839,37 @@ def _fixture_probe(url: str, catalog_item: dict | None = None) -> dict:
             entry["miss_reason"] = canned["miss_reason"]
         canned["probes"] = [entry]
     result = health_from_probe(row.get("url") or url, canned)
-    return attach_catalog_fields(result, catalog_item or row)
+    result = attach_catalog_fields(result, catalog_item or row)
+    return attach_invocable_target(result, catalog_item or row)
 
 
-def probe_url(url: str, catalog_item: dict | None = None) -> dict:
+def probe_url(url: str, catalog_item: dict | None = None, deadline: float | None = None) -> dict:
     """Unpaid dual probe. Live = HTTP 402 with a parseable payment envelope."""
+    if deadline is None:
+        deadline = time.monotonic() + PROBE_BUDGET_SECONDS
     if fixtures.fixture_mode():
         return _fixture_probe(url, catalog_item)
 
+    if remaining_timeout(deadline) is not None and remaining_timeout(deadline) <= 0:
+        result = health_from_probe(
+            url,
+            {
+                "live": False,
+                "status": None,
+                "latency_ms": 0,
+                "has_402_challenge": False,
+                "payTo": None,
+                "miss_reason": "probe_timeout",
+                "probes": [],
+                "probed_at": now_iso(),
+            },
+        )
+        result = attach_catalog_fields(result, catalog_item)
+        return attach_invocable_target(result, catalog_item)
+
     safe = safe_target(url)
     if not safe:
-        return health_from_probe(
+        result = health_from_probe(
             url,
             {
                 "live": False,
@@ -610,38 +882,40 @@ def probe_url(url: str, catalog_item: dict | None = None) -> dict:
                 "probed_at": now_iso(),
             },
         )
+        return attach_invocable_target(result, catalog_item)
 
     start = time.perf_counter()
     probes: list[dict] = []
 
-    get_snap = _one_request(safe, "GET")
+    get_snap = _one_request(safe, "GET", deadline=deadline)
     probes.append(_probe_entry("GET", get_snap))
     if get_snap.get("miss_reason") == "ssrf":
         latency_ms = int((time.perf_counter() - start) * 1000)
         get_snap["latency_ms"] = latency_ms
         get_snap["probes"] = probes
         get_snap["probed_at"] = now_iso()
-        return health_from_probe(safe, get_snap)
+        result = health_from_probe(safe, get_snap)
+        return attach_invocable_target(result, catalog_item)
 
     post_snap = None
     if not get_snap.get("live"):
-        post_snap = _one_request(safe, "POST", data=b"{}")
+        post_snap = _one_request(safe, "POST", data=b"{}", deadline=deadline)
         if get_snap.get("status") in {405, 501} and not post_snap.get("live"):
-            post_snap["miss_reason"] = "get_405_post_failed"
+            post_snap["miss_reason"] = "no_402_envelope"
         probes.append(_probe_entry("POST", post_snap))
 
     declared_snap = None
     declared = _declared_input_body(catalog_item)
     if declared is not None:
         raw = json.dumps(declared, separators=(",", ":")).encode("utf-8")
-        declared_snap = _one_request(safe, "POST", data=raw)
+        declared_snap = _one_request(safe, "POST", data=raw, deadline=deadline)
         probes.append(_probe_entry("POST", declared_snap))
 
     unpaid_live = bool(get_snap.get("live") or (post_snap and post_snap.get("live")))
     if declared_snap is not None:
         dstatus = declared_snap.get("status")
         dmiss = declared_snap.get("miss_reason")
-        if dstatus == 200 or dmiss in {"empty_402", "http_200_no_challenge"}:
+        if dstatus == 200 or dmiss in {"no_402_envelope", "reachable_200", "empty_402", "http_200_no_challenge"}:
             unpaid_live = False
 
     winner = None
@@ -657,6 +931,8 @@ def probe_url(url: str, catalog_item: dict | None = None) -> dict:
             if declared_snap.get("status") == 200 or declared_snap.get("miss_reason") in {
                 "empty_402",
                 "http_200_no_challenge",
+                "no_402_envelope",
+                "reachable_200",
             }:
                 winner = declared_snap
 
@@ -664,9 +940,9 @@ def probe_url(url: str, catalog_item: dict | None = None) -> dict:
     miss_reason = None
     if not live:
         if get_snap.get("status") in {405, 501} and not (post_snap and post_snap.get("live")):
-            miss_reason = "get_405_post_failed"
+            miss_reason = "no_402_envelope"
         else:
-            miss_reason = (winner or {}).get("miss_reason") or "timeout"
+            miss_reason = public_miss_reason((winner or {}).get("miss_reason") or "probe_timeout")
 
     latency_ms = int((time.perf_counter() - start) * 1000)
     snap = {
@@ -681,8 +957,13 @@ def probe_url(url: str, catalog_item: dict | None = None) -> dict:
     if not live:
         snap["miss_reason"] = miss_reason
         snap["payTo"] = None if not live else snap.get("payTo")
+    if winner and winner.get("envelope"):
+        snap["envelope"] = winner.get("envelope")
     result = health_from_probe(safe, snap)
-    return attach_catalog_fields(result, catalog_item)
+    if snap.get("envelope"):
+        result["envelope"] = snap["envelope"]
+    result = attach_catalog_fields(result, catalog_item)
+    return attach_invocable_target(result, catalog_item, snap.get("envelope"))
 
 
 def _tokens(text: str) -> set[str]:
@@ -858,19 +1139,23 @@ def fetch_discovery(limit: int = 20) -> list[dict]:
     return merged
 
 
-def route_need(need: str) -> dict:
+def route_need(need: str, deadline: float | None = None) -> dict:
     """Fuzzy-match discovery, probe up to 5, first payable 402 wins. Else fail-closed."""
+    if deadline is None:
+        deadline = time.monotonic() + PROBE_BUDGET_SECONDS
     try:
         items = fetch_discovery()
     except Exception:
         return {
             "live": False,
+            "invocable": False,
             "url": None,
             "tried": 0,
             "error": "discovery_unavailable",
             "payTo": None,
             "traction": "unknown",
-            "miss_reason": "discovery_unavailable",
+            "miss_reason": "no_candidates",
+            "target": None,
             "probes": [],
             "probed_at": now_iso(),
             "health": {
@@ -885,8 +1170,22 @@ def route_need(need: str) -> dict:
     tried = 0
     last = None
     for item in ranked[:MAX_PROBE]:
+        if remaining_timeout(deadline) is not None and remaining_timeout(deadline) <= 0:
+            last = {
+                "live": False,
+                "invocable": False,
+                "url": _resource_url(item),
+                "status": None,
+                "latency_ms": 0,
+                "has_402_challenge": False,
+                "payTo": None,
+                "miss_reason": "probe_timeout",
+                "probes": [],
+                "probed_at": now_iso(),
+            }
+            break
         url = _resource_url(item)
-        last = probe_url(url, catalog_item=item)
+        last = probe_url(url, catalog_item=item, deadline=deadline)
         last = attach_catalog_fields(last, item)
         tried += 1
         last["tried"] = tried
@@ -898,6 +1197,7 @@ def route_need(need: str) -> dict:
             return last
     body = {
         "live": False,
+        "invocable": False,
         "url": None,
         "tried": tried,
         "need": need,
@@ -908,6 +1208,7 @@ def route_need(need: str) -> dict:
         "status": (last or {}).get("status"),
         "latency_ms": (last or {}).get("latency_ms"),
         "has_402_challenge": bool((last or {}).get("has_402_challenge")),
+        "target": None,
         "probed_at": now_iso(),
         "health": {
             "live": False,
@@ -918,9 +1219,9 @@ def route_need(need: str) -> dict:
         },
     }
     if last and last.get("miss_reason"):
-        body["miss_reason"] = last.get("miss_reason")
+        body["miss_reason"] = public_miss_reason(last.get("miss_reason")) or last.get("miss_reason")
     elif tried == 0:
-        body["miss_reason"] = "no_match"
+        body["miss_reason"] = "no_candidates"
     if last:
         body["last"] = {
             "url": last.get("url"),

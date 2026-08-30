@@ -1,0 +1,133 @@
+"""GET /rails — pay-in networks. Not stuffed into /health. Cache cheaply."""
+
+from __future__ import annotations
+
+import threading
+import time
+import urllib.request
+
+from live402 import fixtures, payment, probe
+
+CACHE_TTL = 30.0
+PING_TIMEOUT = 1.5
+USER_AGENT = "402Signal/0.1 (rails health; no payment)"
+
+_lock = threading.Lock()
+_cache: dict = {"at": 0.0, "payload": None}
+
+
+def reset_cache() -> None:
+    with _lock:
+        _cache["at"] = 0.0
+        _cache["payload"] = None
+
+
+def _ping(url: str) -> tuple[bool, int | None]:
+    """GET facilitator /supported. up = HTTP response, not an invented x402.org default."""
+    raw = (url or "").strip()
+    if not raw.startswith("https://"):
+        return False, None
+    if not probe.catalog_url_allowed(raw):
+        return False, None
+    start = time.perf_counter()
+    req = urllib.request.Request(
+        raw,
+        method="GET",
+        headers={"User-Agent": USER_AGENT, "Accept": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=PING_TIMEOUT) as resp:
+            status = getattr(resp, "status", None) or resp.getcode()
+            try:
+                resp.read(2048)
+            except Exception:
+                pass
+        latency = int((time.perf_counter() - start) * 1000)
+        up = isinstance(status, int) and 200 <= status < 500
+        return up, latency
+    except Exception:
+        latency = int((time.perf_counter() - start) * 1000)
+        return False, latency
+
+
+def _supported_url(facilitator_base: str) -> str:
+    return facilitator_base.rstrip("/") + "/supported"
+
+
+def _rail_row(name: str, network: str, caip2: str, asset: str, pay_to: str, facilitator: str, fee_payer: str | None) -> dict:
+    if fixtures.fixture_mode():
+        up, latency = True, 1
+    else:
+        up, latency = _ping(_supported_url(facilitator))
+    return {
+        "network": name,
+        "v1Network": name,
+        "caip2": caip2,
+        "asset": asset,
+        "amountAtomic": payment.AMOUNT_ATOMIC,
+        "displayAmount": payment.AMOUNT_USD,
+        "facilitator": facilitator,
+        "feePayer": fee_payer,
+        "payTo": pay_to,
+        "maxTimeoutSeconds": 60,
+        "up": up,
+        "latency_ms": latency,
+    }
+
+
+def collect() -> dict:
+    rails = [
+        _rail_row(
+            "base",
+            "base",
+            payment.BASE_CAIP2,
+            payment.USDC_BASE,
+            payment.payto_address(),
+            payment.CDP_FACILITATOR,
+            None,
+        ),
+        _rail_row(
+            "solana",
+            "solana",
+            payment.SOLANA_MAINNET,
+            payment.USDC_SOLANA_MINT,
+            payment.payto_solana(),
+            payment.SOLANA_FACILITATOR,
+            payment.SOLANA_FEE_PAYER,
+        ),
+        _rail_row(
+            "algorand",
+            "algorand",
+            payment.ALGORAND_MAINNET,
+            payment.USDC_ALGORAND_ASA,
+            payment.payto_algorand(),
+            payment.ALGORAND_FACILITATOR,
+            payment.ALGORAND_FEE_PAYER,
+        ),
+    ]
+    return {
+        "ok": True,
+        "asset": "USDC",
+        "amountAtomic": payment.AMOUNT_ATOMIC,
+        "displayAmount": payment.AMOUNT_USD,
+        "maxTimeoutSeconds": 60,
+        "updated_at": probe.now_iso(),
+        "cached_s": CACHE_TTL,
+        "note": "Copy each rail's facilitator URL from this document. Do not default to x402.org.",
+        "rails": rails,
+        "facilitators": [r["facilitator"] for r in rails],
+        "feePayers": {r["network"]: r["feePayer"] for r in rails},
+    }
+
+
+def get_rails() -> dict:
+    now = time.monotonic()
+    with _lock:
+        payload = _cache.get("payload")
+        if payload is not None and (now - _cache["at"]) < CACHE_TTL:
+            return payload
+    built = collect()
+    with _lock:
+        _cache["at"] = time.monotonic()
+        _cache["payload"] = built
+    return built

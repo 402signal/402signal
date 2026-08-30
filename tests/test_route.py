@@ -582,7 +582,7 @@ class FixtureProbeTests(unittest.TestCase):
         )
         self.assertEqual(status, 503)
         self.assertFalse(body["live"])
-        self.assertEqual(body.get("miss_reason"), "http_200_no_challenge")
+        self.assertEqual(body.get("miss_reason"), "reachable_200")
         self.assertEqual(body.get("status"), 200)
         self.assertFalse(body.get("has_402_challenge"))
 
@@ -608,7 +608,7 @@ class FixtureProbeTests(unittest.TestCase):
         )
         self.assertEqual(status, 503)
         self.assertFalse(body["live"])
-        self.assertEqual(body.get("miss_reason"), "empty_402")
+        self.assertEqual(body.get("miss_reason"), "no_402_envelope")
 
     def test_post_only_402_fixture_is_live(self):
         status, body = _json_post(
@@ -809,10 +809,10 @@ class UnitHelpers(unittest.TestCase):
     def test_parse_envelope_empty_402(self):
         env, miss = probe.parse_envelope(402, {}, b"{}")
         self.assertIsNone(env)
-        self.assertEqual(miss, "empty_402")
+        self.assertEqual(miss, "no_402_envelope")
         env, miss = probe.parse_envelope(200, {}, b'{"ok":true}')
         self.assertIsNone(env)
-        self.assertEqual(miss, "http_200_no_challenge")
+        self.assertEqual(miss, "reachable_200")
         env, miss = probe.parse_envelope(
             402, {}, b'{"x402Version":2,"accepts":[{"payTo":"0xabc"}]}'
         )
@@ -821,7 +821,7 @@ class UnitHelpers(unittest.TestCase):
         self.assertEqual(probe._payto_from_envelope(env), "0xabc")
         env, miss = probe.parse_envelope(402, {}, b'{"x402Version":2,"accepts":[]}')
         self.assertIsNone(env)
-        self.assertEqual(miss, "no_accepts")
+        self.assertEqual(miss, "no_402_envelope")
 
     def test_rank_weather(self):
         ranked = probe.rank_resources("weather forecast", fixtures.load_resources())
@@ -1107,6 +1107,229 @@ class RateLimitTests(unittest.TestCase):
             )
             statuses.append(status)
         self.assertEqual(statuses, [402, 402, 402])
+
+
+
+class ProductBriefTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        os.environ.pop("LOCAL_FREE", None)
+        os.environ["LIVE402_FIXTURE"] = "1"
+        cls.httpd, cls.host, cls.port = _serve()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.httpd.shutdown()
+        cls.httpd.server_close()
+
+    def test_preview_unpaid_200(self):
+        with patch("live402.probe.probe_url") as mock_url, patch(
+            "live402.probe.route_need"
+        ) as mock_need:
+            status, raw = _get(self.port, "/preview?need=weather")
+            self.assertEqual(status, 200)
+            body = json.loads(raw)
+            self.assertTrue(body.get("not_probed"))
+            self.assertEqual(body.get("need"), "weather")
+            self.assertIn("hits", body)
+            self.assertIn("freshness", body)
+            self.assertIsInstance(body["hits"], list)
+            mock_url.assert_not_called()
+            mock_need.assert_not_called()
+
+    def test_rails_200(self):
+        status, raw = _get(self.port, "/rails")
+        self.assertEqual(status, 200)
+        body = json.loads(raw)
+        self.assertTrue(body.get("ok"))
+        self.assertEqual(str(body.get("amountAtomic")), "10000")
+        self.assertEqual(body.get("asset"), "USDC")
+        rails = body.get("rails") or []
+        self.assertEqual(len(rails), 3)
+        names = [r.get("network") for r in rails]
+        self.assertEqual(names, ["base", "solana", "algorand"])
+        for row in rails:
+            self.assertIn("facilitator", row)
+            self.assertIn("amountAtomic", row)
+            self.assertEqual(str(row.get("amountAtomic")), "10000")
+            self.assertIn("maxTimeoutSeconds", row)
+            self.assertIn("up", row)
+            self.assertIn("latency_ms", row)
+            self.assertNotIn("x402.org", str(row.get("facilitator") or "").lower())
+        self.assertEqual(len(body.get("facilitators") or []), 3)
+        self.assertIn("feePayers", body)
+        health_status, health_raw = _get(self.port, "/health")
+        self.assertEqual(health_status, 200)
+        self.assertEqual(json.loads(health_raw), {"ok": True})
+        self.assertNotIn("rails", json.loads(health_raw))
+
+    def test_miss_reason_enum(self):
+        from live402.probe import MISS_REASONS, public_miss_reason
+        expected = {
+            "no_candidates",
+            "no_402_envelope",
+            "reachable_200",
+            "probe_timeout",
+            "quote_expired",
+            "invalid_need",
+            "upstream_5xx",
+            "ssrf",
+            "no_input_schema",
+        }
+        self.assertEqual(set(MISS_REASONS), expected)
+        self.assertEqual(public_miss_reason("empty_402"), "no_402_envelope")
+        self.assertEqual(public_miss_reason("http_200_no_challenge"), "reachable_200")
+        self.assertEqual(public_miss_reason("timeout"), "probe_timeout")
+        self.assertEqual(public_miss_reason("no_match"), "no_candidates")
+        self.assertEqual(public_miss_reason("http_503"), "upstream_5xx")
+        self.assertEqual(public_miss_reason("ssrf"), "ssrf")
+        for key in expected:
+            self.assertIn(public_miss_reason(key), expected)
+
+    def test_mcp_output_schema(self):
+        from live402 import mcp as mcp_mod
+        tools = mcp_mod.manifest()["tools"]
+        route = next(t for t in tools if t.get("name") == "route")
+        self.assertEqual(route["inputSchema"].get("required"), ["need"])
+        props = (route.get("outputSchema") or {}).get("properties") or {}
+        for key in ("live", "url", "invocable", "target", "miss_reason", "tried", "latency_ms"):
+            self.assertIn(key, props)
+        bazaar = (mcp_mod.handle_mcp(
+            {"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+             "params": {"name": "route", "arguments": {"need": "weather"}}},
+            {},
+            "https://402signal.com/mcp",
+        )[1].get("extensions") or {}).get("bazaar") or {}
+        inp = (bazaar.get("info") or {}).get("input") or {}
+        self.assertEqual(inp.get("type"), "mcp")
+        self.assertEqual(inp.get("toolName"), "route")
+
+    def test_openapi_preview_and_rails(self):
+        spec = json.loads(_get(self.port, "/openapi.json")[1])
+        self.assertIn("/preview", spec["paths"])
+        self.assertIn("get", spec["paths"]["/preview"])
+        self.assertIn("/rails", spec["paths"])
+        self.assertIn("get", spec["paths"]["/rails"])
+        self.assertEqual(spec["info"]["contact"]["email"], "402signal@gmail.com")
+        self.assertIn("feePayer", spec["info"]["x-guidance"])
+        self.assertIn("eip155:8453", spec["info"]["x-guidance"])
+        self.assertIn("x402.org", spec["info"]["x-guidance"])
+        post_402 = spec["paths"]["/route"]["post"]["responses"]["402"]["content"]["application/json"]["example"]
+        self.assertIn("help", post_402)
+        self.assertIn("bazaar", (post_402.get("extensions") or {}))
+        self.assertEqual(post_402.get("network"), "base")
+        need_req = spec["paths"]["/route"]["post"]["requestBody"]["content"]["application/json"]["schema"].get("required")
+        self.assertEqual(need_req, ["need"])
+        probes = spec["paths"]["/route"]["post"]["responses"]["200"]["content"]["application/json"]["schema"]["properties"]["probes"]
+        self.assertIn("items", probes)
+        for path, methods in spec["paths"].items():
+            for method, op in methods.items():
+                if not isinstance(op, dict):
+                    continue
+                summary = op.get("summary") or ""
+                self.assertGreaterEqual(len(summary), 24, "%s %s %r" % (method, path, summary))
+                self.assertLessEqual(len(summary), 63, "%s %s %r" % (method, path, summary))
+                self.assertNotIn("free", summary.lower(), "%s %s" % (method, path))
+
+    def test_preview_ignores_caller_url(self):
+        with patch("live402.pulse._fetch_catalog") as mock_fetch, patch(
+            "urllib.request.urlopen"
+        ) as urlopen:
+            status, raw = _get(
+                self.port,
+                "/preview?need=weather&url=http://127.0.0.1/latest/meta-data",
+            )
+            self.assertEqual(status, 200)
+            body = json.loads(raw)
+            self.assertTrue(body.get("not_probed"))
+            mock_fetch.assert_not_called()
+            urlopen.assert_not_called()
+
+    def test_root_mcp_json_is_remote_no_secrets(self):
+        path = os.path.join(os.path.dirname(__file__), "..", ".mcp.json")
+        with open(path, encoding="utf-8") as fh:
+            card = json.load(fh)
+        server = (card.get("mcpServers") or {}).get("402Signal") or {}
+        self.assertEqual(server.get("url"), "https://402signal.com/mcp")
+        self.assertEqual(server.get("type"), "streamable-http")
+        blob = json.dumps(card).lower()
+        for banned in ("secret", "api_key", "apikey", "token", "password", "authorization"):
+            self.assertNotIn(banned, blob)
+
+    def test_mcp_preview_unpaid_200(self):
+        status, body = _json_post(
+            self.port,
+            "/mcp",
+            {
+                "jsonrpc": "2.0",
+                "id": 9,
+                "method": "tools/call",
+                "params": {"name": "preview", "arguments": {"need": "weather"}},
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(body.get("not_probed"))
+        self.assertIn("hits", body)
+
+
+class FixtureTargetTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        os.environ["LOCAL_FREE"] = "1"
+        os.environ["LIVE402_FIXTURE"] = "1"
+        cls.httpd, cls.host, cls.port = _serve()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.httpd.shutdown()
+        cls.httpd.server_close()
+        os.environ.pop("LOCAL_FREE", None)
+
+    def test_target_object_on_live_route_without_schema(self):
+        status, body = _json_post(
+            self.port,
+            "/route",
+            {
+                "need": "weather",
+                "url": "https://fixture.402signal.local/weather",
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(body["live"])
+        self.assertFalse(body.get("invocable"))
+        self.assertEqual(body.get("miss_reason"), "no_input_schema")
+        target = body.get("target")
+        self.assertIsInstance(target, dict)
+        for key in (
+            "method",
+            "inputSchema",
+            "outputSchema",
+            "accepts",
+            "facilitator",
+            "amountAtomic",
+            "displayAmount",
+            "timeoutSeconds",
+        ):
+            self.assertIn(key, target)
+
+    def test_target_object_on_live_route_with_schema(self):
+        status, body = _json_post(
+            self.port, "/route", {"need": "erc20 token balance"}
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(body["live"])
+        self.assertTrue(body.get("invocable"))
+        target = body.get("target")
+        self.assertIsInstance(target, dict)
+        self.assertIsInstance(target.get("inputSchema"), dict)
+        self.assertTrue(target["inputSchema"].get("properties") or target["inputSchema"].get("required"))
+        accepts = target.get("accepts") or []
+        self.assertTrue(accepts)
+        fac = (accepts[0].get("extra") or {}).get("facilitator")
+        self.assertIsInstance(fac, dict)
+        self.assertTrue(str(fac.get("url") or "").startswith("https://"))
+        self.assertNotIn("x402.org", str(fac.get("url") or "").lower())
+        self.assertEqual(str(target.get("amountAtomic")), "10000")
 
 
 if __name__ == "__main__":

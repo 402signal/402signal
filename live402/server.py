@@ -11,9 +11,9 @@ import threading
 import time
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
-from live402 import discover, mcp, payment, pulse
+from live402 import discover, mcp, payment, pulse, rails
 from live402.route import handle_route
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -180,6 +180,15 @@ class Handler(SimpleHTTPRequestHandler):
             proto = "http" if local else "https"
         return f"{proto}://{host}/route"
 
+    def _origin(self) -> str:
+        route = self._resource_url()
+        if route.endswith("/route"):
+            return route[: -len("/route")]
+        return route.rstrip("/")
+
+    def _mcp_resource_url(self) -> str:
+        return self._origin() + "/mcp"
+
     def _discard_body(self) -> None:
         try:
             length = int(self.headers.get("Content-Length") or 0)
@@ -216,6 +225,20 @@ class Handler(SimpleHTTPRequestHandler):
             return self._json(402, required, extra)
         if parsed.path == "/health":
             return self._json(200, {"ok": True})
+        if parsed.path == "/preview":
+            qs = parse_qs(parsed.query)
+            need = (qs.get("need") or [""])[0]
+            return self._json(
+                200,
+                pulse.preview_need(need),
+                extra_headers={"Cache-Control": "no-store"},
+            )
+        if parsed.path == "/rails":
+            return self._json(
+                200,
+                rails.get_rails(),
+                extra_headers={"Cache-Control": "public, max-age=15"},
+            )
         if parsed.path == "/pulse":
             # Query string is ignored on purpose — never fetch caller URLs.
             return self._json(
@@ -290,7 +313,7 @@ class Handler(SimpleHTTPRequestHandler):
             return self._json(400, {"error": "JSON object required"})
         if mcp.is_paid_call(payload) and not self._route_allowed():
             return self._json(429, {"error": "rate limit"})
-        code, body, extra = mcp.handle_mcp(payload, self.headers, self._resource_url())
+        code, body, extra = mcp.handle_mcp(payload, self.headers, self._mcp_resource_url())
         if extra is None and code == 402:
             extra = {"PAYMENT-REQUIRED": payment.payment_required_header(body)}
         return self._json(code, body, extra)

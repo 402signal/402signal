@@ -736,6 +736,73 @@ def get_pulse() -> dict:
     return built
 
 
+def preview_need(need: str) -> dict:
+    """Cached catalog preflight. Never probes. Never charges."""
+    raw = (need or "").strip()
+    pulse = get_pulse()
+    freshness = pulse.get("updated_at")
+    cached_s = pulse.get("cached_s")
+    if not raw:
+        return {
+            "need": "",
+            "not_probed": True,
+            "freshness": freshness,
+            "cached_s": cached_s,
+            "hits": [],
+            "miss_reason": "invalid_need",
+        }
+    q = probe._tokens(raw)
+    hits: list[dict] = []
+    seen: set[str] = set()
+    samples = list(pulse.get("samples") or [])
+    chains = pulse.get("chains") or {}
+    for chain in CHAINS:
+        samples.extend(list((chains.get(chain) or {}).get("samples") or []))
+    scored: list[tuple[int, dict]] = []
+    for sample in samples:
+        if not isinstance(sample, dict):
+            continue
+        url = str(sample.get("url") or "").strip()
+        key = (str(sample.get("need") or "").lower(), url)
+        if key in seen:
+            continue
+        seen.add(key)
+        blob = " ".join([str(sample.get("need") or ""), str(sample.get("label") or ""), url])
+        hay = probe._tokens(blob)
+        score = len(q & hay) * 10 if q else 0
+        low = blob.lower()
+        need_l = raw.lower()
+        if need_l and need_l in low:
+            score += 20
+        for tok in q:
+            if tok in low:
+                score += 2
+        if score <= 0:
+            continue
+        scored.append(
+            (
+                score,
+                {
+                    "need": sample.get("need") or sample.get("label"),
+                    "label": sample.get("label") or sample.get("need"),
+                    "url": url,
+                    "price": sample.get("price"),
+                    "chain": sample.get("chain"),
+                },
+            )
+        )
+    scored.sort(key=lambda pair: pair[0], reverse=True)
+    for _score, row in scored[:8]:
+        hits.append(row)
+    return {
+        "need": raw,
+        "not_probed": True,
+        "freshness": freshness,
+        "cached_s": cached_s,
+        "hits": hits,
+    }
+
+
 def _esc(value: str) -> str:
     return html.escape(value or "", quote=True)
 

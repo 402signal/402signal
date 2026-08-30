@@ -131,7 +131,90 @@ def payment_presented(headers) -> bool:
     return False
 
 
-def payment_required(resource_url: str) -> dict:
+# MCP bazaar so CDP indexes the route tool, not only HTTP POST /route.
+# Live MCP: https://402signal.com/mcp and /mcp.json
+BAZAAR_MCP = {
+    "info": {
+        "input": {
+            "type": "mcp",
+            "toolName": "route",
+            "description": (
+                "Pay $0.01 USDC (10000 atomic, 6 decimals) for a live payable URL "
+                "or an honest miss. Unpaid tools/call returns HTTP 402. Retry with "
+                "PAYMENT-SIGNATURE. HTTP 200 = live unpaid 402 envelope plus target "
+                "contract. HTTP 503 = miss (miss_reason). POST, not GET."
+            ),
+            "transport": "streamable-http",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "need": {
+                        "type": "string",
+                        "description": "What to route (plain English).",
+                    },
+                    "url": {
+                        "type": "string",
+                        "description": "Optional https URL to probe.",
+                    },
+                },
+                "required": ["need"],
+            },
+            "example": {"need": "erc20 token balance"},
+        },
+        "output": {
+            "type": "json",
+            "example": {
+                "live": True,
+                "url": "https://example.com/x402/balance",
+                "invocable": True,
+                "target": {
+                    "method": "POST",
+                    "inputSchema": {"type": "object", "properties": {"address": {"type": "string"}}},
+                    "outputSchema": {"type": "object"},
+                    "accepts": [],
+                    "facilitator": "https://api.cdp.coinbase.com/platform/v2/x402",
+                    "amountAtomic": "10000",
+                    "displayAmount": "$0.01",
+                    "timeoutSeconds": 60,
+                },
+                "miss_reason": None,
+                "tried": 1,
+                "latency_ms": 87,
+            },
+        },
+    },
+    "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+            "input": {
+                "type": "object",
+                "properties": {
+                    "type": {"type": "string", "const": "mcp"},
+                    "toolName": {"type": "string"},
+                    "description": {"type": "string"},
+                    "transport": {"type": "string", "enum": ["streamable-http", "sse"]},
+                    "inputSchema": {"type": "object"},
+                    "example": {"type": "object"},
+                },
+                "required": ["type", "toolName", "inputSchema"],
+                "additionalProperties": False,
+            },
+            "output": {
+                "type": "object",
+                "properties": {
+                    "type": {"type": "string"},
+                    "example": {"type": "object"},
+                },
+                "required": ["type"],
+            },
+        },
+        "required": ["input"],
+    },
+}
+
+
+def payment_required(resource_url: str, bazaar: dict | None = None) -> dict:
     pay_to = payto_address()
     return {
         "x402Version": 2,
@@ -195,7 +278,7 @@ def payment_required(resource_url: str) -> dict:
                 },
             },
         ],
-        "extensions": {"bazaar": BAZAAR_EXTENSION},
+        "extensions": {"bazaar": bazaar or BAZAAR_EXTENSION},
         "help": {
             "docs": "https://402signal.com/llms.txt",
             "openapi": "https://402signal.com/openapi.json",
