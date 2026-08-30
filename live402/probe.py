@@ -774,6 +774,49 @@ def _traction(item: dict | None) -> str:
     return "unknown"
 
 
+def _catalog_amount(item: dict | None) -> str | None:
+    if not item or not isinstance(item, dict):
+        return None
+    accepts = item.get("accepts") or []
+    if isinstance(accepts, list):
+        for acc in accepts:
+            if not isinstance(acc, dict):
+                continue
+            for key in ("amount", "maxAmountRequired"):
+                val = acc.get(key)
+                if val is not None and str(val).strip() != "":
+                    return str(val).strip()
+    return None
+
+
+def _catalog_schema_present(item: dict | None) -> bool:
+    if not item or not isinstance(item, dict):
+        return False
+    schema = item.get("inputSchema")
+    if isinstance(schema, dict) and (schema.get("properties") or schema.get("required") or schema.get("type")):
+        return True
+    bazaar = ((item.get("extensions") or {}).get("bazaar") or {})
+    info = bazaar.get("info") or {}
+    inp = info.get("input") or {}
+    return bool(isinstance(inp, dict) and inp)
+
+
+def _catalog_facilitator(item: dict | None) -> str | None:
+    if not item or not isinstance(item, dict):
+        return None
+    accepts = item.get("accepts") or []
+    if not isinstance(accepts, list):
+        return None
+    for acc in accepts:
+        if not isinstance(acc, dict):
+            continue
+        extra = acc.get("extra") if isinstance(acc.get("extra"), dict) else {}
+        fac = extra.get("facilitator")
+        if fac and str(fac).strip():
+            return str(fac).strip()
+    return None
+
+
 def attach_catalog_fields(result: dict, item: dict | None = None) -> dict:
     result["traction"] = _traction(item)
     result.setdefault("payTo", None)
@@ -787,6 +830,23 @@ def attach_catalog_fields(result: dict, item: dict | None = None) -> dict:
             result["payTo_changed"] = True
         else:
             result.setdefault("payTo_changed", False)
+    claimed = {}
+    if catalog_pay:
+        claimed["payTo"] = catalog_pay
+    amt = _catalog_amount(item)
+    if amt is not None:
+        claimed["amount"] = amt
+    if _catalog_schema_present(item):
+        claimed["schema_present"] = True
+    fac = _catalog_facilitator(item)
+    if fac:
+        claimed["facilitator"] = fac
+        claimed["source"] = fac
+    rail = item.get("_rail") if isinstance(item, dict) else None
+    if rail and str(rail).strip():
+        claimed.setdefault("source", str(rail).strip())
+    if claimed:
+        result["claimed"] = claimed
     return result
 
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import sqlite3
 import tempfile
 import time
 import unittest
@@ -163,6 +164,214 @@ class HistoryDbTests(unittest.TestCase):
         for pth in (path, path + "-wal", path + "-shm"):
             if os.path.exists(pth):
                 self.assertEqual(os.stat(pth).st_mode & 0o777, 0o600, pth)
+
+    def _probe_cols(self, url):
+        conn = sqlite3.connect(history.db_path())
+        try:
+            return conn.execute(
+                "SELECT amount, schema_present, payTo FROM probes WHERE url = ? ORDER BY id DESC LIMIT 1",
+                (url,),
+            ).fetchone()
+        finally:
+            conn.close()
+
+    def _obs_types(self, url):
+        conn = sqlite3.connect(history.db_path())
+        try:
+            return conn.execute(
+                "SELECT source_type, field, value, status FROM observations WHERE url = ? ORDER BY id",
+                (url,),
+            ).fetchall()
+        finally:
+            conn.close()
+
+    def test_record_probe_writes_observed_not_claimed(self):
+        url = "https://hist.example/obs-only"
+        history.record_probe(url, _snap(live=True, payTo="0xabc", amount="10000", status=402))
+        latest = history.latest_observations(url)
+        self.assertTrue(latest["observed"])
+        self.assertFalse(latest["claimed"])
+        for field, row in latest["observed"].items():
+            self.assertEqual(row["source_type"], "402signal_observed")
+            self.assertEqual(row["provenance"], "402signal_observed")
+            self.assertNotEqual(row["source_type"], "catalog_claimed")
+            self.assertNotEqual(row["source_type"], "legacy_mixed")
+        self.assertEqual(latest["observed"]["payTo"]["value"], "0xabc")
+        types = {r[0] for r in self._obs_types(url)}
+        self.assertEqual(types, {"402signal_observed"})
+        self.assertIn(("402signal_observed", "payTo", "0xabc", "observed"), self._obs_types(url))
+
+    def test_claimed_dict_does_not_change_url_state(self):
+        url = "https://hist.example/claim-state"
+        history.record_probe(
+            url,
+            _snap(
+                live=True,
+                payTo="0xobs",
+                amount="10000",
+                claimed={"payTo": "0xcat", "amount": "1", "source": "cdp"},
+            ),
+        )
+        summ = history.summary(url)
+        self.assertEqual(summ["last_payTo"], "0xobs")
+        latest = history.latest_observations(url)
+        self.assertEqual(latest["claimed"]["payTo"]["value"], "0xcat")
+        self.assertEqual(latest["claimed"]["payTo"]["source_type"], "catalog_claimed")
+        self.assertEqual(latest["observed"]["payTo"]["value"], "0xobs")
+        self.assertEqual(latest["observed"]["payTo"]["source_type"], "402signal_observed")
+        row = self._probe_cols(url)
+        self.assertEqual(row[2], "0xobs")
+        self.assertEqual(row[0], "10000")
+
+    def test_later_claim_does_not_overwrite_observed(self):
+        url = "https://hist.example/later-claim"
+        history.record_probe(url, _snap(live=True, payTo="0xobs", amount="10000"))
+        history.record_claim(url, {"payTo": "0xother", "amount": "999"}, source="cdp")
+        latest = history.latest_observations(url)
+        self.assertEqual(latest["observed"]["payTo"]["value"], "0xobs")
+        self.assertEqual(latest["observed"]["payTo"]["source_type"], "402signal_observed")
+        self.assertEqual(latest["claimed"]["payTo"]["value"], "0xother")
+        self.assertEqual(latest["claimed"]["payTo"]["source_type"], "catalog_claimed")
+        self.assertEqual(latest["observed"]["amount"]["value"], "10000")
+        summ = history.summary(url)
+        self.assertEqual(summ["last_payTo"], "0xobs")
+        row = self._probe_cols(url)
+        self.assertEqual(row[2], "0xobs")
+        self.assertEqual(row[0], "10000")
+
+    def test_attach_to_result_claimed_observed_unknown_is_none(self):
+        url = "https://hist.example/attach-sides"
+        snap = _snap(live=True, payTo="0xobs", amount="10000", latency_ms=15, status=402)
+        snap["claimed"] = {"payTo": "0xcat"}
+        history.record_probe(url, snap)
+        result = {
+            "url": url,
+            "live": True,
+            "payTo": "0xobs",
+            "probed_at": "2026-08-30T00:00:00Z",
+        }
+        out = history.attach_to_result(result)
+        self.assertIn("claimed", out)
+        self.assertIn("observed", out)
+        self.assertEqual(out["claimed"]["payTo"], "0xcat")
+        self.assertIsNone(out["claimed"]["amount"])
+        self.assertIsNone(out["claimed"]["schema_present"])
+        self.assertIsNone(out["claimed"]["facilitator"])
+        self.assertIsNot(out["claimed"]["amount"], "10000")
+        self.assertEqual(out["observed"]["payTo"], "0xobs")
+        self.assertEqual(out["observed"]["amount"], "10000")
+        self.assertEqual(out["observed"]["http_status"], 402)
+        self.assertEqual(out["observed"]["latency_ms"], 15)
+        self.assertIsNone(out["observed"]["schema_present"])
+        self.assertEqual(out["verified_at"], out["probed_at"])
+        self.assertNotIn("verified", str(out["claimed"]).lower() or "")
+        self.assertTrue(out.get("payTo_changed"))
+        self.assertEqual(out.get("risk"), ["payTo_changed"])
+
+    def test_catalog_fallback_not_stored_as_observed(self):
+        url = "https://hist.example/catalog-only"
+        snap = {
+            "live": True,
+            "payTo": "0xabc",
+            "status": 402,
+            "latency_ms": 10,
+            "target": {
+                "amountAtomic": "99999",
+                "inputSchema": {"type": "object", "properties": {"q": {"type": "string"}}},
+            },
+            "schema_source": "catalog",
+            "invocable": True,
+        }
+        history.record_probe(url, snap)
+        latest = history.latest_observations(url)
+        self.assertNotIn("amount", latest["observed"])
+        self.assertNotIn("schema_present", latest["observed"])
+        self.assertNotIn("invocable", latest["observed"])
+        self.assertEqual(latest["observed"]["payTo"]["value"], "0xabc")
+        self.assertEqual(latest["observed"]["http_status"]["value"], "402")
+        self.assertFalse(latest["claimed"])
+        row = self._probe_cols(url)
+        self.assertIsNone(row[0])
+        self.assertIsNone(row[1])
+        types = {r[0] for r in self._obs_types(url)}
+        self.assertEqual(types, {"402signal_observed"})
+        for _stype, field, value, _status in self._obs_types(url):
+            self.assertNotEqual(field, "amount")
+            self.assertNotEqual(value, "99999")
+
+    def test_envelope_amount_and_schema_are_observed(self):
+        url = "https://hist.example/envelope"
+        snap = _snap(live=True, payTo="0xabc")
+        snap["envelope"] = {
+            "accepts": [{"amount": "10000", "payTo": "0xabc"}],
+            "inputSchema": {"type": "object", "properties": {"q": {"type": "string"}}, "required": ["q"]},
+        }
+        history.record_probe(url, snap)
+        latest = history.latest_observations(url)
+        self.assertEqual(latest["observed"]["amount"]["value"], "10000")
+        self.assertEqual(latest["observed"]["schema_present"]["value"], "1")
+        self.assertEqual(latest["observed"]["invocable"]["value"], "1")
+        row = self._probe_cols(url)
+        self.assertEqual(row[0], "10000")
+        self.assertEqual(row[1], 1)
+
+    def test_attach_catalog_fields_records_claimed_not_as_observed(self):
+        url = "https://wx.example/forecast"
+        result = {
+            "live": True,
+            "url": url,
+            "status": 402,
+            "latency_ms": 12,
+            "has_402_challenge": True,
+            "payTo": "0xobs",
+            "probed_at": probe.now_iso(),
+            "envelope": {"accepts": [{"amount": "10000", "payTo": "0xobs"}]},
+        }
+        item = {
+            "_rail": "solana",
+            "accepts": [
+                {
+                    "payTo": "0xclaim",
+                    "amount": "5000",
+                    "extra": {"facilitator": "https://facilitator.payai.network"},
+                }
+            ],
+            "inputSchema": {"type": "object", "properties": {"q": {"type": "string"}}},
+        }
+        result = probe.attach_catalog_fields(result, item)
+        self.assertEqual(result["payTo"], "0xobs")
+        self.assertEqual(result["claimed"]["payTo"], "0xclaim")
+        self.assertEqual(result["claimed"]["amount"], "5000")
+        result = probe._finalize_probe(result)
+        latest = history.latest_observations(url)
+        self.assertEqual(latest["observed"]["payTo"]["value"], "0xobs")
+        self.assertEqual(latest["observed"]["payTo"]["source_type"], "402signal_observed")
+        self.assertEqual(latest["claimed"]["payTo"]["value"], "0xclaim")
+        self.assertEqual(latest["claimed"]["payTo"]["source_type"], "catalog_claimed")
+        self.assertEqual(latest["claimed"]["amount"]["value"], "5000")
+        self.assertNotEqual(latest["observed"].get("amount", {}).get("value"), "5000")
+        self.assertTrue(result.get("payTo_changed"))
+        types = {r[0] for r in self._obs_types(url)}
+        self.assertEqual(types, {"402signal_observed", "catalog_claimed"})
+        self.assertNotIn("legacy_mixed", types)
+
+    def test_thin_envelope_bazaar_source_is_not_observed_schema(self):
+        url = "https://hist.example/thin-bazaar"
+        snap = _snap(live=True, payTo="0xabc")
+        snap["schema_source"] = "bazaar"
+        snap["envelope"] = {"accepts": [{"payTo": "0xabc", "amount": "10000"}]}
+        snap["invocable"] = True
+        history.record_probe(url, snap)
+        latest = history.latest_observations(url)
+        self.assertNotIn("schema_present", latest["observed"])
+        self.assertNotIn("invocable", latest["observed"])
+        row = self._probe_cols(url)
+        self.assertIsNone(row[1])
+        types = {r[0] for r in self._obs_types(url)}
+        self.assertEqual(types, {"402signal_observed"})
+        fields = {r[1] for r in self._obs_types(url)}
+        self.assertNotIn("schema_present", fields)
+        self.assertNotIn("invocable", fields)
 
 
 class PulsePeekTests(unittest.TestCase):
