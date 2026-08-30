@@ -335,6 +335,21 @@
     if (qNeed && need) need.value = qNeed;
   } catch (e) {}
 
+  function applyHomeTab() {
+    const overviewEl = document.getElementById("panel-overview");
+    const useEl = document.getElementById("panel-use");
+    if (!overviewEl || !useEl) return;
+    const use = String(window.location.hash || "").toLowerCase() === "#use";
+    overviewEl.hidden = use;
+    useEl.hidden = !use;
+    const tabOverview = document.getElementById("tab-overview");
+    const tabUse = document.getElementById("tab-use");
+    if (tabOverview) tabOverview.classList.toggle("is-active", !use);
+    if (tabUse) tabUse.classList.toggle("is-active", use);
+  }
+  applyHomeTab();
+  window.addEventListener("hashchange", applyHomeTab);
+
   revealPayControl();
   window.addEventListener("ethereum#initialized", revealPayControl, { once: true });
   setTimeout(revealPayControl, 500);

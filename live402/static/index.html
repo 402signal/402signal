@@ -25,10 +25,13 @@
         <h1>402Signal</h1>
       </div>
       <p class="sub">Paid APIs go dark. We check before you pay them.</p>
-      <nav class="nav"><a href="/">Home</a> · <a href="/pulse">Pulse</a></nav>
+      <nav class="nav" id="home-tabs">
+        <a href="#overview" id="tab-overview" class="tab is-active">Overview</a><span class="sep">|</span><a href="#use" id="tab-use" class="tab">How you'd use this</a><span class="sep">|</span><a href="/pulse">Pulse</a>
+      </nav>
     </header>
 
     <main>
+      <div id="panel-overview">
       <section class="panel">
         <h2>What it is</h2>
         <p>Fail-closed x402 router. Paid APIs go dark. Catalogs still list them. We probe first. Live means an unpaid HTTP 402 with a parseable payment envelope, not merely reachable. $0.01 USDC on Base, Solana, or Algorand.</p>
@@ -64,6 +67,44 @@
           <p id="human-body"></p>
         </div>
       </form>
+      </div>
+
+      <div id="panel-use" hidden>
+      <section class="panel">
+        <h2>Shared</h2>
+        <p>POST <a href="https://402signal.com/route">https://402signal.com/route</a> with <code>{"need":"weather"}</code>. Optional <code>url</code>. Optional <code>prefer_network</code> <code>base</code>, <code>solana</code>, or <code>algorand</code>. Unpaid HTTP 402. Sign the matching <code>accepts[]</code> entry. Retry the same POST with PAYMENT-SIGNATURE. HTTP 200 is a live URL plus <code>target</code> <code>{method,inputSchema,facilitator}</code>. HTTP 503 is a typed <code>miss_reason</code>. Amount 10000 atomic USDC = $0.01.</p>
+        <pre class="code">curl -sS -D - https://402signal.com/route -H 'Content-Type: application/json' -d '{"need":"weather"}'</pre>
+        <pre class="code">{"need":"weather","url":"https://optional.example","prefer_network":"base"}</pre>
+        <pre class="code">curl -sS https://402signal.com/route -H 'Content-Type: application/json' -H "PAYMENT-SIGNATURE: $SIG" -d '{"need":"weather"}'</pre>
+      </section>
+
+      <section class="panel">
+        <h2>Front of a larger process</h2>
+        <p>Free <a href="/preview?need=weather">GET /preview?need=weather</a> is cached, <code>not_probed</code>, and does not probe. Then paid POST /route for a live probe. Then call the returned URL with <code>target.method</code> and <code>inputSchema</code>. MCP: POST /mcp <code>tools/call</code> <code>preview</code> (free) then <code>route</code> (paid). Docs <a href="/llms.txt">/llms.txt</a> <a href="/openapi.json">OpenAPI</a> <a href="/.well-known/x402.json">/.well-known/x402.json</a>.</p>
+        <pre class="code">curl -sS 'https://402signal.com/preview?need=weather'</pre>
+        <pre class="code">{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"preview","arguments":{"need":"weather"}}}</pre>
+      </section>
+
+      <section class="panel">
+        <h2>Base</h2>
+        <p><code>prefer_network</code> <code>base</code>. EVM PAYMENT-SIGNATURE. Hidden Pay $0.01 on Base if an injected wallet exists (MetaMask, Coinbase Wallet, Base App). Chain 8453.</p>
+      </section>
+
+      <section class="panel">
+        <h2>Solana</h2>
+        <p><code>prefer_network</code> <code>solana</code>. Agent/CLI only. Sign the Solana accept from the 402. x402scan lists Solana/Base; it skips Algorand.</p>
+      </section>
+
+      <section class="panel">
+        <h2>Algorand</h2>
+        <p><code>prefer_network</code> <code>algorand</code>. Agent/CLI only (no Pera button). USDC ASA 31566704. <code>extra.tag</code> <code>x402-global-challenge</code>. GoPlausible facilitator. POST /route still returns a live Algo 402 when that's what is up.</p>
+      </section>
+
+      <section class="panel">
+        <h2>Facilitator</h2>
+        <p>The facilitator is echoed from the target <code>accepts</code>. Never default x402.org.</p>
+      </section>
+      </div>
     </main>
 
     <footer class="foot">

@@ -274,6 +274,13 @@ class PaywallTests(unittest.TestCase):
         self.assertNotIn("Listed right now", html)
         self.assertNotIn("What's listed", html)
         self.assertIn("Pulse", html)
+        self.assertIn("How you'd use this", html)
+        self.assertIn('href="#use"', html)
+        self.assertIn('href="#overview"', html)
+        self.assertIn('id="panel-use"', html)
+        self.assertIn('id="panel-overview"', html)
+        use_html = html.split('id="panel-use"', 1)[1]
+        self.assertIn("prefer_network", use_html)
         self.assertNotIn("href=\"/dashboard\"", html)
         self.assertIn("@402Signal", html)
         self.assertIn("Listed on", html)
@@ -308,6 +315,9 @@ class PaywallTests(unittest.TestCase):
         with open(js_path, encoding="utf-8") as fh:
             js = fh.read()
         self.assertIn("This call costs $0.01 USDC", js)
+        self.assertIn("#use", js)
+        self.assertIn("panel-use", js)
+        self.assertIn("panel-overview", js)
         self.assertNotIn('fetch("/pulse")', js)
         self.assertNotIn("need-chips", js)
         self.assertNotIn("route-samples", js)
@@ -333,6 +343,9 @@ class PaywallTests(unittest.TestCase):
             css = fh.read()
         for swatch in ("#1c1c22", "#2a2a32", "#f7ebd4", "#c8ad88", "#4a453c", "#fec865", "#e49c60", "#3ecfc9", "#14141a"):
             self.assertIn(swatch, css)
+        self.assertIn("a:visited", css)
+        self.assertIn("a:link, a:visited", css)
+        self.assertIn("var(--accent)", css)
         self.assertNotIn("#e8a317", css)
         self.assertNotIn("#0b0d0c", css)
         self.assertNotIn("#0c0c0c", css)
@@ -385,6 +398,9 @@ class PaywallTests(unittest.TestCase):
             css = fh.read()
         for swatch in ("#1c1c22", "#2a2a32", "#f7ebd4", "#c8ad88", "#4a453c", "#fec865", "#e49c60", "#3ecfc9", "#14141a"):
             self.assertIn(swatch, css)
+        self.assertIn("a:visited", css)
+        self.assertIn("a:link, a:visited", css)
+        self.assertIn("var(--accent)", css)
         self.assertNotIn("#e8a317", css)
         self.assertNotIn("#0b0d0c", css)
         self.assertNotIn("#0c0c0c", css)
