@@ -60,11 +60,9 @@
           <div class="row">
             <button type="submit" id="go" class="btn">Find a live URL</button>
             <button type="button" id="pay-base" class="btn pay-base" hidden>Pay $0.01 on Base</button>
-            <button type="button" id="pay-algo" class="btn pay-algo">Pay $0.01 on Algorand</button>
             <span id="status" class="muted"></span>
           </div>
           <p id="pay-base-hint" class="muted" hidden>Uses an injected wallet on Base (8453): MetaMask, Coinbase Wallet, or Base App. One $0.01 USDC signature per click. No auto-pay.</p>
-          <p id="pay-algo-hint" class="muted">Pera on iPhone (Safari or Pera's browser) or Lute. Connects a wallet, then you sign one $0.01 USDC transfer. No auto-pay. Sample chips only prefill.</p>
           <div id="human-result" class="result-card" hidden>
             <h3 id="human-title"></h3>
             <p id="human-body"></p>
@@ -88,7 +86,7 @@
 
       <section class="panel agents">
         <h2>For agents</h2>
-        <p>POST https://402signal.com/route with a need, then pay the 402.</p>
+        <p>POST https://402signal.com/route with a need, then pay the 402. Base, Solana, or Algorand. Humans with an injected wallet can pay Base on this page. Algorand is agent/CLI, not a Pera button.</p>
         <pre class="code" id="agent-example">POST https://402signal.com/route
 {"need":"erc20 token balance"}</pre>
         <p class="muted"><a href="/openapi.json">openapi.json</a> · <a href="/.well-known/x402.json">.well-known/x402.json</a> · <a href="/mcp.json">mcp.json</a></p>
@@ -107,9 +105,6 @@
       </p>
     </footer>
   </div>
-  <script src="/algosdk.min.js"></script>
-  <script src="/pera.js"></script>
-  <script src="/lute.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>
