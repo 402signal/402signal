@@ -24,7 +24,7 @@ primary_region = "iad"
 
 [[vm]]
   size = "shared-cpu-1x"
-  memory = "256mb"
+  memory = "1gb"
   cpus = 1
 
 # 1GB persistent volume for probe history (Ross approved ~$0.15/mo).

@@ -7,14 +7,16 @@ import time
 import urllib.error
 import urllib.request
 
-from live402 import fixtures, payment, probe
+from live402 import catalog, fixtures, payment, probe
 
 CACHE_TTL = 30.0
 PING_TIMEOUT = 1.5
 USER_AGENT = "402Signal/0.1 (rails health; no payment)"
 
 _lock = threading.Lock()
+_collect_cv = threading.Condition(_lock)
 _cache: dict = {"at": 0.0, "payload": None}
+_collecting = False
 
 
 class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
@@ -29,9 +31,12 @@ def _ping_opener():
 
 
 def reset_cache() -> None:
+    global _collecting
     with _lock:
         _cache["at"] = 0.0
         _cache["payload"] = None
+        _collecting = False
+        _collect_cv.notify_all()
 
 
 def _ping(url: str) -> tuple[bool, int | None]:
@@ -151,13 +156,51 @@ def collect() -> dict:
 
 
 def get_rails() -> dict:
+    """Cached facilitator pings. Single-flight: one in-flight collect.
+
+    Waiters reuse the in-flight result. If last-good exists and a collect is
+    already running (or a catalog crawl is holding the process), return
+    last-good immediately so ThreadingHTTPServer handlers do not stack pings.
+    """
+    global _collecting
     now = time.monotonic()
     with _lock:
         payload = _cache.get("payload")
         if payload is not None and (now - _cache["at"]) < CACHE_TTL:
             return payload
-    built = collect()
+
+    refreshing = False
+    try:
+        refreshing = catalog.refresh_in_progress()
+    except Exception:
+        refreshing = False
+
+    with _lock:
+        payload = _cache.get("payload")
+        now = time.monotonic()
+        if payload is not None and (now - _cache["at"]) < CACHE_TTL:
+            return payload
+        if payload is not None and (_collecting or refreshing):
+            return payload
+        if _collecting:
+            while _collecting:
+                _collect_cv.wait()
+            cached = _cache.get("payload")
+            if cached is not None:
+                return cached
+            # reset_cache raced; become leader
+        _collecting = True
+
+    try:
+        built = collect()
+    except Exception:
+        with _lock:
+            _collecting = False
+            _collect_cv.notify_all()
+        raise
     with _lock:
         _cache["at"] = time.monotonic()
         _cache["payload"] = built
+        _collecting = False
+        _collect_cv.notify_all()
     return built

@@ -1,7 +1,8 @@
 """Full-catalog index: paginated discovery, slim records, capability labels.
 
-Fly VM is 256MB — slim at ingest, never retain raw JSON schemas.
+Fly VM is 1GB — slim at ingest, never retain raw JSON schemas.
 Pagination is limit+offset+total only. Never send page= or cursor=.
+refresh() is single-flight: overlapping daemon / get_index callers share one walk.
 """
 
 from __future__ import annotations
@@ -147,10 +148,13 @@ _CAPABILITY_RULES: tuple[tuple[str, frozenset[str]], ...] = (
 )
 
 _lock = threading.Lock()
-_refresh_lock = threading.Lock()
+_refresh_cv = threading.Condition(_lock)
 _index: dict | None = None
 _fetched_mono = 0.0
 _refresher_thread: threading.Thread | None = None
+_refreshing = False
+_refresh_result: dict | None = None
+_refresh_error: BaseException | None = None
 
 
 def _empty_index() -> dict:
@@ -165,12 +169,30 @@ def _empty_index() -> dict:
     }
 
 
+def _in_progress_index() -> dict:
+    """Peek marker: crawl running, no completed index yet. Not a finished empty catalog."""
+    idx = _empty_index()
+    idx["in_progress"] = True
+    idx["complete"] = False
+    return idx
+
+
 def reset_index() -> None:
-    """Drop the in-memory catalog. Tests only."""
-    global _index, _fetched_mono
+    """Drop the in-memory catalog and in-flight crawl flags. Tests only."""
+    global _index, _fetched_mono, _refreshing, _refresh_result, _refresh_error
     with _lock:
         _index = None
         _fetched_mono = 0.0
+        _refreshing = False
+        _refresh_result = None
+        _refresh_error = None
+        _refresh_cv.notify_all()
+
+
+def refresh_in_progress() -> bool:
+    """True while a catalog walk is running. Never starts a walk."""
+    with _lock:
+        return _refreshing
 
 
 def page_url(base: str, limit: int, offset: int) -> str | None:
@@ -647,10 +669,10 @@ def _merge_items(by_rail: dict) -> list[dict]:
     return [merged[k] for k in order]
 
 
-def refresh() -> dict:
-    """Fetch all three rails sequentially (RAM/CPU). Keep previous items on rail error."""
-    global _index, _fetched_mono
-    prev = _index if isinstance(_index, dict) else _empty_index()
+def _crawl_index() -> dict:
+    """Walk all three rails sequentially (RAM/CPU). Keep previous items on rail error."""
+    with _lock:
+        prev = _index if isinstance(_index, dict) else _empty_index()
     prev_by = prev.get("by_rail") or {}
     prev_totals = prev.get("totals") or {}
     prev_trunc = prev.get("truncated") or {}
@@ -683,7 +705,7 @@ def refresh() -> dict:
 
     items = _merge_items(by_rail)
     complete = (not any(truncated.values())) and (not errors)
-    idx = {
+    return {
         "items": items,
         "by_rail": by_rail,
         "fetched_at": time.time(),
@@ -692,28 +714,65 @@ def refresh() -> dict:
         "complete": complete,
         "errors": errors,
     }
+
+
+def refresh() -> dict:
+    """Fetch all three rails sequentially. Single-flight: waiters reuse the in-flight walk."""
+    global _index, _fetched_mono, _refreshing, _refresh_result, _refresh_error
     with _lock:
-        _index = idx
-        _fetched_mono = time.monotonic()
-    return idx
+        if _refreshing:
+            while _refreshing:
+                _refresh_cv.wait()
+            if _refresh_error is not None:
+                raise _refresh_error
+            if _refresh_result is not None:
+                return _refresh_result
+            # reset_index raced; do not start a second walk from a waiter
+            return _empty_index()
+        _refreshing = True
+        _refresh_error = None
+
+    try:
+        idx = _crawl_index()
+        with _lock:
+            _index = idx
+            _fetched_mono = time.monotonic()
+            _refresh_result = idx
+            _refresh_error = None
+            _refreshing = False
+            _refresh_cv.notify_all()
+        return idx
+    except Exception as exc:
+        with _lock:
+            _refresh_error = exc
+            _refreshing = False
+            _refresh_cv.notify_all()
+        raise
 
 
 def peek_index() -> dict | None:
-    """Cached index or None. Never refreshes. Pulse must not block on cold start."""
-    with _lock:
-        return _index
+    """Cached index or None. Never refreshes. Pulse must not block on cold start.
 
-
-def get_index() -> dict:
-    """Return cached index. Recrawl only on cold start. Daemon refresher handles TTL."""
+    During an in-flight crawl with no completed index, returns a status dict
+    with in_progress=True — not a finished empty catalog.
+    """
     with _lock:
         if _index is not None:
             return _index
-    with _refresh_lock:
-        with _lock:
-            if _index is not None:
-                return _index
-        return refresh()
+        if _refreshing:
+            return _in_progress_index()
+        return None
+
+
+def get_index() -> dict:
+    """Return cached index. Recrawl only on cold start. Daemon refresher handles TTL.
+
+    Cold start shares the in-flight daemon walk when one is already running.
+    """
+    with _lock:
+        if _index is not None:
+            return _index
+    return refresh()
 
 
 def _refresh_loop() -> None:

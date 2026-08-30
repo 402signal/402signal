@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import os
+import threading
+import time
 import unittest
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
@@ -302,6 +304,90 @@ class CatalogIndexTests(unittest.TestCase):
         self.assertIn("solana", merged[0].get("also_on") or [])
         self.assertIn("base", merged[0].get("rails") or [])
         self.assertIn("solana", merged[0].get("rails") or [])
+
+    def test_overlapping_refresh_and_get_index_one_walk(self):
+        started = threading.Event()
+        release = threading.Event()
+        rails = []
+
+        def fake_fetch_rail(rail, base):
+            rails.append(rail)
+            started.set()
+            self.assertTrue(release.wait(5))
+            return {"items": [], "error": None, "total": 0, "truncated": False}
+
+        with patch.object(catalog, "fetch_rail", side_effect=fake_fetch_rail):
+            t1 = threading.Thread(target=catalog.refresh)
+            t1.start()
+            self.assertTrue(started.wait(2))
+            peeked = catalog.peek_index()
+            self.assertIsNotNone(peeked)
+            self.assertTrue(peeked.get("in_progress"))
+            self.assertFalse(peeked.get("complete"))
+            self.assertTrue(catalog.refresh_in_progress())
+
+            out = {}
+
+            def call_get():
+                out["idx"] = catalog.get_index()
+
+            t2 = threading.Thread(target=call_get)
+            t2.start()
+            time.sleep(0.05)
+            release.set()
+            t1.join(5)
+            t2.join(5)
+            self.assertFalse(t1.is_alive())
+            self.assertFalse(t2.is_alive())
+
+        self.assertEqual(rails, ["base", "solana", "algorand"])
+        self.assertIsNotNone(out.get("idx"))
+        self.assertFalse(out["idx"].get("in_progress"))
+        self.assertFalse(catalog.refresh_in_progress())
+
+    def test_peek_during_crawl_is_in_progress_not_empty_complete(self):
+        started = threading.Event()
+        release = threading.Event()
+
+        def fake_fetch_rail(rail, base):
+            started.set()
+            self.assertTrue(release.wait(5))
+            return {"items": [], "error": None, "total": 0, "truncated": False}
+
+        with patch.object(catalog, "fetch_rail", side_effect=fake_fetch_rail):
+            t = threading.Thread(target=catalog.refresh)
+            t.start()
+            self.assertTrue(started.wait(2))
+            peeked = catalog.peek_index()
+            release.set()
+            t.join(5)
+
+        self.assertTrue(peeked.get("in_progress"))
+        self.assertFalse(peeked.get("complete"))
+        self.assertNotEqual(peeked.get("complete"), True)
+
+    def test_reset_index_clears_in_progress(self):
+        started = threading.Event()
+        release = threading.Event()
+
+        def fake_fetch_rail(rail, base):
+            started.set()
+            self.assertTrue(release.wait(5))
+            return {"items": [], "error": None, "total": 0, "truncated": False}
+
+        with patch.object(catalog, "fetch_rail", side_effect=fake_fetch_rail):
+            t = threading.Thread(target=catalog.refresh)
+            t.start()
+            self.assertTrue(started.wait(2))
+            self.assertTrue(catalog.refresh_in_progress())
+            catalog.reset_index()
+            self.assertFalse(catalog.refresh_in_progress())
+            self.assertIsNone(catalog.peek_index())
+            release.set()
+            t.join(5)
+        catalog.reset_index()
+        self.assertIsNone(catalog.peek_index())
+        self.assertFalse(catalog.refresh_in_progress())
 
 
 if __name__ == "__main__":

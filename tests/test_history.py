@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import sqlite3
 import tempfile
+import threading
 import time
 import unittest
 from unittest.mock import patch
@@ -418,6 +419,202 @@ class PulsePeekTests(unittest.TestCase):
             self.assertIn("chains", payload)
             for chain in ("base", "solana", "algorand"):
                 self.assertIn(chain, payload["chains"])
+
+    def _blocked_refresh(self):
+        started = threading.Event()
+        release = threading.Event()
+
+        def fake_fetch_rail(rail, base):
+            started.set()
+            self.assertTrue(release.wait(10))
+            return {"items": [], "error": None, "total": 0, "truncated": False}
+
+        patcher = patch.object(catalog, "fetch_rail", side_effect=fake_fetch_rail)
+        patcher.start()
+        thread = threading.Thread(target=catalog.refresh)
+        thread.start()
+        self.assertTrue(started.wait(2))
+        return thread, release, patcher
+
+    def test_pulse_during_crawl_does_not_call_get_index_or_refresh(self):
+        thread, release, patcher = self._blocked_refresh()
+        try:
+            with patch("live402.pulse.fixtures.fixture_mode", return_value=False), patch(
+                "live402.catalog.get_index"
+            ) as get_idx, patch("live402.catalog.refresh") as refresh:
+                collected = pulse._collect()
+                payload = pulse.get_pulse()
+                get_idx.assert_not_called()
+                refresh.assert_not_called()
+        finally:
+            release.set()
+            thread.join(5)
+            patcher.stop()
+
+        self.assertEqual(collected.get("index_status"), "refreshing")
+        self.assertEqual(payload.get("index_status"), "refreshing")
+        for chain in ("base", "solana", "algorand"):
+            src = collected["chains"][chain]["source"]
+            self.assertEqual(src.get("error"), "index_refreshing")
+            self.assertFalse(src.get("ok"))
+
+    def test_get_pulse_fast_during_slow_refresh(self):
+        thread, release, patcher = self._blocked_refresh()
+        try:
+            with patch("live402.pulse.fixtures.fixture_mode", return_value=False), patch(
+                "live402.catalog.get_index"
+            ) as get_idx, patch("live402.catalog.refresh") as refresh:
+                t0 = time.monotonic()
+                payload = pulse.get_pulse()
+                elapsed = time.monotonic() - t0
+                get_idx.assert_not_called()
+                refresh.assert_not_called()
+        finally:
+            release.set()
+            thread.join(5)
+            patcher.stop()
+
+        self.assertLess(elapsed, 0.5)
+        self.assertEqual(payload.get("index_status"), "refreshing")
+        for chain in ("base", "solana", "algorand"):
+            self.assertEqual(payload["chains"][chain]["source"].get("error"), "index_refreshing")
+
+    def test_concurrent_get_pulse_one_collect(self):
+        started = threading.Event()
+        release = threading.Event()
+        calls = []
+
+        def slow_collect():
+            calls.append(1)
+            started.set()
+            self.assertTrue(release.wait(5))
+            return {
+                "ok": True,
+                "updated_at": "2026-08-30T00:00:00Z",
+                "cached_s": 15,
+                "index_status": "ready",
+                "chains": {},
+                "samples": [],
+                "observed": {"n_7d": 0, "reliability": "unknown", "source": "402signal_observed"},
+            }
+
+        with patch("live402.pulse._collect", side_effect=slow_collect):
+            t1 = threading.Thread(target=pulse.get_pulse)
+            t1.start()
+            self.assertTrue(started.wait(2))
+            t0 = time.monotonic()
+            second = pulse.get_pulse()
+            elapsed = time.monotonic() - t0
+            self.assertLess(elapsed, 0.5)
+            self.assertEqual(len(calls), 1)
+            self.assertIn(second.get("index_status"), ("pending", "refreshing"))
+            release.set()
+            t1.join(5)
+        self.assertEqual(len(calls), 1)
+
+    def test_pulse_finished_empty_index_is_ready_not_refreshing(self):
+        empty = {
+            "items": [],
+            "by_rail": {"base": [], "solana": [], "algorand": []},
+            "fetched_at": 1,
+            "totals": {},
+            "truncated": {},
+            "complete": True,
+            "errors": {},
+        }
+        with patch("live402.pulse.fixtures.fixture_mode", return_value=False), patch(
+            "live402.catalog.peek_index", return_value=empty
+        ), patch("live402.catalog.refresh_in_progress", return_value=False), patch(
+            "live402.catalog.get_index"
+        ) as get_idx, patch("live402.catalog.refresh") as refresh:
+            payload = pulse._collect()
+            get_idx.assert_not_called()
+            refresh.assert_not_called()
+        self.assertEqual(payload.get("index_status"), "ready")
+        for chain in ("base", "solana", "algorand"):
+            src = payload["chains"][chain]["source"]
+            self.assertTrue(src.get("ok"))
+            self.assertNotEqual(src.get("error"), "index_refreshing")
+            self.assertNotEqual(src.get("error"), "index_pending")
+            self.assertEqual(payload["chains"][chain]["count"], 0)
+
+
+class RailsSingleFlightTests(unittest.TestCase):
+    def setUp(self):
+        from live402 import rails
+
+        rails.reset_cache()
+        catalog.reset_index()
+
+    def tearDown(self):
+        from live402 import rails
+
+        rails.reset_cache()
+        catalog.reset_index()
+
+    def test_concurrent_get_rails_one_collect(self):
+        from live402 import rails
+
+        started = threading.Event()
+        release = threading.Event()
+        calls = []
+
+        def slow_collect():
+            calls.append(1)
+            started.set()
+            self.assertTrue(release.wait(5))
+            return {"ok": True, "rails": [], "updated_at": "t"}
+
+        with patch("live402.rails.collect", side_effect=slow_collect):
+            t1 = threading.Thread(target=rails.get_rails)
+            t1.start()
+            self.assertTrue(started.wait(2))
+            out = {}
+
+            def waiter():
+                out["p"] = rails.get_rails()
+
+            t2 = threading.Thread(target=waiter)
+            t2.start()
+            time.sleep(0.1)
+            self.assertEqual(len(calls), 1)
+            self.assertTrue(t2.is_alive())
+            release.set()
+            t1.join(5)
+            t2.join(5)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(out.get("p"), {"ok": True, "rails": [], "updated_at": "t"})
+
+    def test_get_rails_last_good_fast_during_catalog_crawl(self):
+        from live402 import rails
+
+        primed = {"ok": True, "rails": [{"network": "base", "up": True}], "updated_at": "t0"}
+        with patch("live402.rails.collect", return_value=primed):
+            first = rails.get_rails()
+        self.assertEqual(first["updated_at"], "t0")
+
+        started = threading.Event()
+        release = threading.Event()
+
+        def fake_fetch_rail(rail, base):
+            started.set()
+            self.assertTrue(release.wait(5))
+            return {"items": [], "error": None, "total": 0, "truncated": False}
+
+        with patch.object(catalog, "fetch_rail", side_effect=fake_fetch_rail), patch.object(
+            rails, "CACHE_TTL", 0
+        ), patch("live402.rails.collect") as collect_mock:
+            t = threading.Thread(target=catalog.refresh)
+            t.start()
+            self.assertTrue(started.wait(2))
+            t0 = time.monotonic()
+            again = rails.get_rails()
+            elapsed = time.monotonic() - t0
+            collect_mock.assert_not_called()
+            release.set()
+            t.join(5)
+        self.assertLess(elapsed, 0.5)
+        self.assertEqual(again["updated_at"], "t0")
 
 
 class RankPayToChangedTests(unittest.TestCase):

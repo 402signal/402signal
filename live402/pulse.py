@@ -112,12 +112,15 @@ _cache: dict = {"at": 0.0, "payload": None}
 # Last good per-chain snapshot so a failed fetch shows stale, not a blank freeze.
 _last_good: dict[str, dict] = {}
 _last_good_at: dict[str, float] = {}
+_collecting = False
 
 
 def reset_cache() -> None:
+    global _collecting
     with _lock:
         _cache["at"] = 0.0
         _cache["payload"] = None
+        _collecting = False
         _last_good.clear()
         _last_good_at.clear()
 
@@ -745,8 +748,70 @@ def _chain_payload(chain: str, items: list[dict], source: dict) -> dict:
     return payload
 
 
+def _pending_chains(error: str) -> dict[str, dict]:
+    """Last-good / pending rows. No catalog walk. No theme rebuild."""
+    chains: dict[str, dict] = {}
+    for rail, url in probe.pulse_catalogs():
+        if rail not in CHAINS:
+            continue
+        if not probe.catalog_url_allowed(url):
+            chains[rail] = _stale_chain(rail, "not_allowlisted")
+            continue
+        chains[rail] = _stale_chain(rail, error)
+    for chain in CHAINS:
+        if chain not in chains:
+            chains[chain] = _stale_chain(chain, "missing")
+    return chains
+
+
+def _observed_for_pulse() -> dict:
+    observed = {"n_7d": 0, "reliability": "unknown", "source": "402signal_observed"}
+    try:
+        from live402 import history as history_mod
+        observed = history_mod.pulse_observed()
+    except Exception:
+        observed = {"n_7d": 0, "reliability": "unknown", "source": "402signal_observed"}
+    if not isinstance(observed, dict):
+        observed = {"n_7d": 0, "reliability": "unknown", "source": "402signal_observed"}
+    n_7d = 0
+    try:
+        n_7d = int(observed.get("n_7d") or 0)
+    except (TypeError, ValueError):
+        n_7d = 0
+    if n_7d < 10:
+        observed.pop("healthy", None)
+        observed.pop("success_7d", None)
+        observed.pop("executable_now_rate", None)
+        observed["reliability"] = "unknown"
+    return observed
+
+
+def _placeholder_payload(error: str) -> dict:
+    """Explicit in-progress / pending snapshot. Never calls get_index or refresh."""
+    status = "refreshing" if error == "index_refreshing" else "pending"
+    chains = _pending_chains(error)
+    return {
+        "ok": True,
+        "updated_at": probe.now_iso(),
+        "cached_s": CACHE_TTL,
+        "index_status": status,
+        "chains": chains,
+        "samples": _mixed_samples(chains),
+        "observed": _observed_for_pulse(),
+    }
+
+
+def _index_status_for(idx, refreshing: bool) -> str:
+    if refreshing or (isinstance(idx, dict) and idx.get("in_progress")):
+        return "refreshing"
+    if idx is None:
+        return "pending"
+    return "ready"
+
+
 def _collect() -> dict:
     chains: dict[str, dict] = {}
+    index_status = "ready"
     if fixtures.fixture_mode():
         by_chain: dict[str, list[dict]] = {c: [] for c in CHAINS}
         for item in fixtures.load_resources():
@@ -763,20 +828,17 @@ def _collect() -> dict:
             chains[chain] = payload
             _remember(chain, payload)
     else:
+        # Never get_index()/refresh() — those block the ThreadingHTTPServer thread.
+        refreshing = False
+        try:
+            refreshing = catalog.refresh_in_progress()
+        except Exception:
+            refreshing = False
         idx = catalog.peek_index()
-        if idx is None:
-            # Do not call get_index() — that blocks ~1 min on PayAI cold start.
-            # Daemon start_refresher still fills. Serve last-good / empty counts.
-            for rail, url in probe.pulse_catalogs():
-                if rail not in CHAINS:
-                    continue
-                if not probe.catalog_url_allowed(url):
-                    chains[rail] = _stale_chain(rail, "not_allowlisted")
-                    continue
-                chains[rail] = _stale_chain(rail, "index_pending")
-            for chain in CHAINS:
-                if chain not in chains:
-                    chains[chain] = _stale_chain(chain, "missing")
+        index_status = _index_status_for(idx, refreshing)
+        if index_status != "ready":
+            error = "index_refreshing" if index_status == "refreshing" else "index_pending"
+            chains = _pending_chains(error)
         else:
             by_rail = idx.get("by_rail") or {}
             errors = idx.get("errors") or {}
@@ -804,47 +866,82 @@ def _collect() -> dict:
                     chains[chain] = _stale_chain(chain, "missing")
 
     samples = _mixed_samples(chains)
-
-    observed = {"n_7d": 0, "reliability": "unknown", "source": "402signal_observed"}
-    try:
-        from live402 import history as history_mod
-        observed = history_mod.pulse_observed()
-    except Exception:
-        observed = {"n_7d": 0, "reliability": "unknown", "source": "402signal_observed"}
-    if not isinstance(observed, dict):
-        observed = {"n_7d": 0, "reliability": "unknown", "source": "402signal_observed"}
-    n_7d = 0
-    try:
-        n_7d = int(observed.get("n_7d") or 0)
-    except (TypeError, ValueError):
-        n_7d = 0
-    if n_7d < 10:
-        observed.pop("healthy", None)
-        observed.pop("success_7d", None)
-        observed.pop("executable_now_rate", None)
-        observed["reliability"] = "unknown"
-
     return {
         "ok": True,
         "updated_at": probe.now_iso(),
         "cached_s": CACHE_TTL,
+        "index_status": index_status,
         "chains": chains,
         "samples": samples,
-        "observed": observed,
+        "observed": _observed_for_pulse(),
     }
 
 
+def _is_placeholder(payload) -> bool:
+    return isinstance(payload, dict) and payload.get("index_status") in ("pending", "refreshing")
+
+
 def get_pulse() -> dict:
-    """In-memory cache ~15s. Query strings are never read here."""
+    """In-memory cache ~15s. Query strings are never read here.
+
+    Single-flight: one in-flight _collect. Waiters return last-good immediately
+    (or a cheap in-progress/pending payload). During a catalog crawl, never
+    rebuild themes from the full index and never call refresh()/get_index().
+    """
+    global _collecting
     now = time.monotonic()
     with _lock:
         payload = _cache.get("payload")
-        if payload is not None and (now - _cache["at"]) < CACHE_TTL:
+        if (
+            payload is not None
+            and (now - _cache["at"]) < CACHE_TTL
+            and not _is_placeholder(payload)
+        ):
             return payload
-    built = _collect()
+
+    refreshing = False
+    try:
+        refreshing = catalog.refresh_in_progress()
+    except Exception:
+        refreshing = False
+
+    cheap_error = None
     with _lock:
-        _cache["at"] = time.monotonic()
-        _cache["payload"] = built
+        payload = _cache.get("payload")
+        now = time.monotonic()
+        if (
+            payload is not None
+            and (now - _cache["at"]) < CACHE_TTL
+            and not _is_placeholder(payload)
+        ):
+            return payload
+        if payload is not None and not _is_placeholder(payload) and (refreshing or _collecting):
+            return payload
+        if _collecting:
+            # Another thread is in the expensive collect. Do not start a second
+            # theme rebuild and do not wait on it.
+            cheap_error = "index_refreshing" if refreshing else "index_pending"
+        elif refreshing:
+            # Crawl in flight: cheap pending only. Do not mark _collecting —
+            # placeholders are cheap and must not block a later real collect.
+            cheap_error = "index_refreshing"
+        else:
+            _collecting = True
+
+    if cheap_error is not None:
+        return _placeholder_payload(cheap_error)
+
+    try:
+        built = _collect()
+    except Exception:
+        with _lock:
+            _collecting = False
+        raise
+    with _lock:
+        if not _is_placeholder(built):
+            _cache["at"] = time.monotonic()
+            _cache["payload"] = built
+        _collecting = False
     return built
 
 
