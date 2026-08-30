@@ -257,6 +257,9 @@ class PaywallTests(unittest.TestCase):
         self.assertIn("https://glama.ai/mcp/servers/402signal/402signal", html)
         self.assertIn("https://smithery.ai/servers/live402/signal", html)
         self.assertIn("https://agentic.market/services/402signal-com", html)
+        self.assertIn("https://facilitator.goplausible.xyz/dashboard/resources/UE9TVDpodHRwczovLzQwMnNpZ25hbC5jb20vcm91dGU", html)
+        self.assertIn("x402 Global Challenge", html)
+        self.assertIn("src=x402-global-challenge", html)
         self.assertNotIn("24klabs.ai/listing/402signal", html)
         self.assertNotIn("api.cdp.coinbase.com", html)
         self.assertIn("$0.01", html)
@@ -646,6 +649,8 @@ class PaywallTests(unittest.TestCase):
         self.assertIn("https://smithery.ai/servers/live402/signal", llms)
         self.assertIn("api.cdp.coinbase.com/platform/v2/x402/discovery/search?query=402signal", llms)
         self.assertIn("facilitator.goplausible.xyz/discovery/resources", llms)
+        self.assertIn("facilitator.goplausible.xyz/dashboard/resources/UE9TVDpodHRwczovLzQwMnNpZ25hbC5jb20vcm91dGU", llms)
+        self.assertIn("src=x402-global-challenge", llms)
         self.assertNotIn("24klabs.ai/listing/402signal", llms)
 
 
