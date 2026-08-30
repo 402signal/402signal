@@ -26,3 +26,9 @@ primary_region = "iad"
   size = "shared-cpu-1x"
   memory = "256mb"
   cpus = 1
+
+# 1GB persistent volume for probe history (Ross approved ~$0.15/mo).
+# Scheduled snapshots off.
+[[mounts]]
+  source = "data"
+  destination = "/data"
