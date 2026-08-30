@@ -6,6 +6,7 @@ import unittest
 from http.client import HTTPConnection
 from http.server import ThreadingHTTPServer
 from unittest.mock import patch
+import urllib.error
 
 # Fixture mode for probe tests. Paywall tests still 402 unless LOCAL_FREE=1.
 os.environ.setdefault("LIVE402_FIXTURE", "1")
@@ -1330,6 +1331,33 @@ class FixtureTargetTests(unittest.TestCase):
         self.assertTrue(str(fac.get("url") or "").startswith("https://"))
         self.assertNotIn("x402.org", str(fac.get("url") or "").lower())
         self.assertEqual(str(target.get("amountAtomic")), "10000")
+
+
+class RailsPingTests(unittest.TestCase):
+    def test_http_error_401_is_up(self):
+        from io import BytesIO
+        from live402 import rails as rails_mod
+        from live402 import payment
+        url = rails_mod._supported_url(payment.CDP_FACILITATOR)
+        self.assertTrue(probe.catalog_url_allowed(url))
+        err = urllib.error.HTTPError(url, 401, "Unauthorized", hdrs=None, fp=BytesIO(b""))
+        with patch("urllib.request.urlopen", side_effect=err) as mock_open:
+            up, latency = rails_mod._ping(url)
+        mock_open.assert_called_once()
+        self.assertTrue(up)
+        self.assertIsInstance(latency, int)
+        self.assertGreaterEqual(latency, 0)
+
+    def test_http_error_503_is_down(self):
+        from io import BytesIO
+        from live402 import rails as rails_mod
+        from live402 import payment
+        url = rails_mod._supported_url(payment.CDP_FACILITATOR)
+        err = urllib.error.HTTPError(url, 503, "Service Unavailable", hdrs=None, fp=BytesIO(b""))
+        with patch("urllib.request.urlopen", side_effect=err):
+            up, latency = rails_mod._ping(url)
+        self.assertFalse(up)
+        self.assertIsInstance(latency, int)
 
 
 if __name__ == "__main__":

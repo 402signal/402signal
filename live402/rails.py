@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import threading
 import time
+import urllib.error
 import urllib.request
 
 from live402 import fixtures, payment, probe
@@ -23,7 +24,7 @@ def reset_cache() -> None:
 
 
 def _ping(url: str) -> tuple[bool, int | None]:
-    """GET facilitator /supported. up = HTTP response, not an invented x402.org default."""
+    """GET facilitator /supported. up = reachable HTTP, not a CDP-secret health check."""
     raw = (url or "").strip()
     if not raw.startswith("https://"):
         return False, None
@@ -45,6 +46,20 @@ def _ping(url: str) -> tuple[bool, int | None]:
         latency = int((time.perf_counter() - start) * 1000)
         up = isinstance(status, int) and 200 <= status < 500
         return up, latency
+    except urllib.error.HTTPError as err:
+        latency = int((time.perf_counter() - start) * 1000)
+        try:
+            # Drain only. Never return or parse error bodies.
+            err.read(2048)
+        except Exception:
+            pass
+        status = getattr(err, "code", None)
+        # 4xx = reachable (e.g. unauthenticated 401). 5xx = down.
+        up = isinstance(status, int) and 400 <= status < 500
+        return up, latency
+    except (urllib.error.URLError, TimeoutError):
+        latency = int((time.perf_counter() - start) * 1000)
+        return False, latency
     except Exception:
         latency = int((time.perf_counter() - start) * 1000)
         return False, latency
