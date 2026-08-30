@@ -20,6 +20,7 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 MAX_BODY = 64_000
 DEFAULT_ROUTE_RPM = 60
 DEFAULT_PREVIEW_RPM = 180
+DEFAULT_PUBLIC_RPM = 180
 FACILITATOR_ROUTE_RPM = 180
 HSTS = "max-age=31536000"
 CSP = (
@@ -68,6 +69,7 @@ class _RateLimiter:
 
 _ROUTE_LIMITER = _RateLimiter()
 _PREVIEW_LIMITER = _RateLimiter()
+_PUBLIC_LIMITER = _RateLimiter()
 
 
 def route_rpm() -> int:
@@ -99,6 +101,17 @@ def preview_rpm() -> int:
             pass
     # Crawlers and unpaid MCP preview must stay looser than paid POST /route.
     return max(DEFAULT_PREVIEW_RPM, route_rpm() * 2)
+
+
+def public_rpm() -> int:
+    raw = (os.environ.get("LIVE402_PUBLIC_RPM") or "").strip()
+    if raw:
+        try:
+            return max(1, int(raw))
+        except ValueError:
+            pass
+    # GET /pulse and GET /rails: looser than paid /route so crawlers do not look dead.
+    return max(DEFAULT_PUBLIC_RPM, route_rpm() * 2)
 
 
 def _is_facilitator_ua(ua: str) -> bool:
@@ -218,6 +231,10 @@ class Handler(SimpleHTTPRequestHandler):
         ip = client_ip(self)
         return _PREVIEW_LIMITER.allow(ip, preview_rpm())
 
+    def _public_allowed(self, which: str) -> bool:
+        ip = client_ip(self)
+        return _PUBLIC_LIMITER.allow("%s:%s" % (ip, which), public_rpm())
+
     def do_OPTIONS(self) -> None:
         self.send_response(204)
         self._cors()
@@ -251,12 +268,16 @@ class Handler(SimpleHTTPRequestHandler):
                 extra_headers={"Cache-Control": "no-store"},
             )
         if parsed.path == "/rails":
+            if not self._public_allowed("rails"):
+                return self._json(429, {"error": "rate limit"})
             return self._json(
                 200,
                 rails.get_rails(),
                 extra_headers={"Cache-Control": "public, max-age=15"},
             )
         if parsed.path == "/pulse":
+            if not self._public_allowed("pulse"):
+                return self._json(429, {"error": "rate limit"})
             # Query string is ignored on purpose — never fetch caller URLs.
             return self._json(
                 200,

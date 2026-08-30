@@ -8,6 +8,7 @@ from http.client import HTTPConnection
 from http.server import ThreadingHTTPServer
 from unittest.mock import patch
 import urllib.error
+import urllib.request
 
 # Fixture mode for probe tests. Paywall tests still 402 unless LOCAL_FREE=1.
 os.environ.setdefault("LIVE402_FIXTURE", "1")
@@ -1466,6 +1467,12 @@ class FixtureTargetTests(unittest.TestCase):
         self.assertEqual(str(target.get("amountAtomic")), "10000")
 
 
+def _patch_ping_open(side_effect):
+    opener = unittest.mock.Mock()
+    opener.open.side_effect = side_effect
+    return patch("live402.rails._ping_opener", return_value=opener), opener
+
+
 class RailsPingTests(unittest.TestCase):
     def test_http_error_401_is_up(self):
         from io import BytesIO
@@ -1474,9 +1481,10 @@ class RailsPingTests(unittest.TestCase):
         url = rails_mod._supported_url(payment.CDP_FACILITATOR)
         self.assertTrue(probe.catalog_url_allowed(url))
         err = urllib.error.HTTPError(url, 401, "Unauthorized", hdrs=None, fp=BytesIO(b""))
-        with patch("urllib.request.urlopen", side_effect=err) as mock_open:
+        ctx, opener = _patch_ping_open(err)
+        with ctx:
             up, latency = rails_mod._ping(url)
-        mock_open.assert_called_once()
+        opener.open.assert_called_once()
         self.assertTrue(up)
         self.assertIsInstance(latency, int)
         self.assertGreaterEqual(latency, 0)
@@ -1487,10 +1495,119 @@ class RailsPingTests(unittest.TestCase):
         from live402 import payment
         url = rails_mod._supported_url(payment.CDP_FACILITATOR)
         err = urllib.error.HTTPError(url, 503, "Service Unavailable", hdrs=None, fp=BytesIO(b""))
-        with patch("urllib.request.urlopen", side_effect=err):
+        ctx, _opener = _patch_ping_open(err)
+        with ctx:
             up, latency = rails_mod._ping(url)
         self.assertFalse(up)
         self.assertIsInstance(latency, int)
+
+    def test_ping_does_not_follow_redirect(self):
+        from io import BytesIO
+        from live402 import rails as rails_mod
+        from live402 import payment
+        url = rails_mod._supported_url(payment.CDP_FACILITATOR)
+        dest = "https://127.0.0.1/secret"
+        opened = []
+
+        def fake_open(req, timeout=None):
+            full = req.get_full_url()
+            opened.append(full)
+            raise urllib.error.HTTPError(
+                full, 302, "Found", hdrs={"Location": dest}, fp=BytesIO(b"do-not-parse")
+            )
+
+        ctx, _opener = _patch_ping_open(fake_open)
+        with ctx:
+            up, latency = rails_mod._ping(url)
+        self.assertFalse(up)
+        self.assertIsInstance(latency, int)
+        self.assertEqual(opened, [url])
+        self.assertFalse(any("127.0.0.1" in u for u in opened))
+        handler = rails_mod._NoRedirectHandler()
+        req = urllib.request.Request(url)
+        self.assertIsNone(handler.redirect_request(req, None, 302, "Found", {}, dest))
+        opener = rails_mod._ping_opener()
+        self.assertTrue(any(isinstance(h, rails_mod._NoRedirectHandler) for h in opener.handlers))
+
+    def test_urlerror_timeout_is_down(self):
+        from live402 import rails as rails_mod
+        from live402 import payment
+        url = rails_mod._supported_url(payment.CDP_FACILITATOR)
+        ctx, _opener = _patch_ping_open(urllib.error.URLError("timed out"))
+        with ctx:
+            up, latency = rails_mod._ping(url)
+        self.assertFalse(up)
+        self.assertIsInstance(latency, int)
+
+    def test_http_and_non_allowlisted_never_open(self):
+        from live402 import rails as rails_mod
+        ctx, opener = _patch_ping_open(AssertionError("must not open"))
+        with ctx:
+            up, latency = rails_mod._ping("http://api.cdp.coinbase.com/platform/v2/x402/supported")
+            self.assertFalse(up)
+            self.assertIsNone(latency)
+            opener.open.assert_not_called()
+            up, latency = rails_mod._ping("https://evil.example/supported")
+            self.assertFalse(up)
+            self.assertIsNone(latency)
+            opener.open.assert_not_called()
+
+
+class PublicRateLimitTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        os.environ.pop("LOCAL_FREE", None)
+        os.environ["LIVE402_PUBLIC_RPM"] = "2"
+        cls.httpd, cls.host, cls.port = _serve()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.httpd.shutdown()
+        cls.httpd.server_close()
+        os.environ.pop("LIVE402_PUBLIC_RPM", None)
+
+    def test_pulse_rate_limit_429(self):
+        ip_headers = {"Fly-Client-IP": "203.0.113.70"}
+        statuses = []
+        for _ in range(3):
+            status, _raw, _hdrs = _get_full(
+                self.port, "/pulse", extra_headers=ip_headers
+            )
+            statuses.append(status)
+        self.assertEqual(statuses[0], 200)
+        self.assertEqual(statuses[1], 200)
+        self.assertEqual(statuses[2], 429)
+
+    def test_rails_rate_limit_429(self):
+        ip_headers = {"Fly-Client-IP": "203.0.113.71"}
+        statuses = []
+        for _ in range(3):
+            status, _raw, _hdrs = _get_full(
+                self.port, "/rails", extra_headers=ip_headers
+            )
+            statuses.append(status)
+        self.assertEqual(statuses[0], 200)
+        self.assertEqual(statuses[1], 200)
+        self.assertEqual(statuses[2], 429)
+
+    def test_health_unlimited_after_pulse_burst(self):
+        ip_headers = {"Fly-Client-IP": "203.0.113.72"}
+        for _ in range(3):
+            _get_full(self.port, "/pulse", extra_headers=ip_headers)
+        status, raw, _hdrs = _get_full(
+            self.port, "/health", extra_headers=ip_headers
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(raw), {"ok": True})
+        status, raw, _hdrs = _get_full(
+            self.port, "/rails", extra_headers=ip_headers
+        )
+        self.assertEqual(status, 200)
+        status, raw, _hdrs = _get_full(
+            self.port, "/preview?need=weather", extra_headers=ip_headers
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(json.loads(raw).get("not_probed"))
 
 
 if __name__ == "__main__":

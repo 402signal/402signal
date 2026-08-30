@@ -17,6 +17,17 @@ _lock = threading.Lock()
 _cache: dict = {"at": 0.0, "payload": None}
 
 
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Ping must not follow Location (open redirect / SSRF). 3xx = down."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def _ping_opener():
+    return urllib.request.build_opener(_NoRedirectHandler)
+
+
 def reset_cache() -> None:
     with _lock:
         _cache["at"] = 0.0
@@ -24,7 +35,11 @@ def reset_cache() -> None:
 
 
 def _ping(url: str) -> tuple[bool, int | None]:
-    """GET facilitator /supported. up = reachable HTTP, not a CDP-secret health check."""
+    """GET facilitator /supported. up = reachable HTTP, not a CDP-secret health check.
+
+    Does not follow redirects. 4xx = up, 5xx = down, timeout/URLError = down.
+    HTTPS + catalog_url_allowed only. Never returns error bodies.
+    """
     raw = (url or "").strip()
     if not raw.startswith("https://"):
         return False, None
@@ -37,7 +52,7 @@ def _ping(url: str) -> tuple[bool, int | None]:
         headers={"User-Agent": USER_AGENT, "Accept": "application/json"},
     )
     try:
-        with urllib.request.urlopen(req, timeout=PING_TIMEOUT) as resp:
+        with _ping_opener().open(req, timeout=PING_TIMEOUT) as resp:
             status = getattr(resp, "status", None) or resp.getcode()
             try:
                 resp.read(2048)
@@ -54,7 +69,7 @@ def _ping(url: str) -> tuple[bool, int | None]:
         except Exception:
             pass
         status = getattr(err, "code", None)
-        # 4xx = reachable (e.g. unauthenticated 401). 5xx = down.
+        # 4xx = reachable (e.g. unauthenticated 401). 5xx / 3xx = down.
         up = isinstance(status, int) and 400 <= status < 500
         return up, latency
     except (urllib.error.URLError, TimeoutError):
