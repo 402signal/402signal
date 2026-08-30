@@ -162,6 +162,35 @@
     setOutCaption("");
   }
 
+  function ensureOpenPera(link) {
+    var href = link || (algoSession.pera && algoSession.pera.lastDeeplink) || "perawallet-wc://";
+    var a = document.getElementById("open-pera");
+    if (!a) {
+      a = document.createElement("a");
+      a.id = "open-pera";
+      a.rel = "noopener";
+      a.target = "_self";
+      a.textContent = "Open Pera";
+      if (payAlgoBtn && payAlgoBtn.parentNode) {
+        payAlgoBtn.parentNode.insertBefore(a, payAlgoBtn.nextSibling);
+      } else if (payAlgoHint && payAlgoHint.parentNode) {
+        payAlgoHint.parentNode.insertBefore(a, payAlgoHint);
+      }
+    }
+    a.href = href;
+    a.hidden = false;
+    return a;
+  }
+
+  function showPeraWake(link) {
+    ensureOpenPera(link);
+    if (human && humanTitle && humanBody) {
+      human.hidden = false;
+      humanTitle.textContent = "Opening Pera…";
+      humanBody.textContent = "Approve $0.01 USDC then return to Safari.";
+    }
+  }
+
   async function run() {
     if (!hasContent()) {
       status.textContent = "HTTP 400";
@@ -309,7 +338,7 @@
         return accounts[0];
       }
     }
-    if (window.LuteConnect && (window.lute || !isLikelyIphone())) {
+    if (window.LuteConnect && !isLikelyIphone()) {
       try {
         const lute = new window.LuteConnect("402Signal");
         const addrs = await lute.connect("mainnet-v1.0");
@@ -321,12 +350,14 @@
         if (window.lute) throw err;
       }
     }
-    if (!window.PeraWalletConnect) {
+    if (!window.PeraWalletConnect && !algoSession.pera) {
       throw new Error("Algorand wallet libraries failed to load.");
     }
-    const pera = new window.PeraWalletConnect({ chainId: 416001, shouldShowSignTxnToast: false });
+    const pera = algoSession.pera || new window.PeraWalletConnect({ chainId: 416001, shouldShowSignTxnToast: false });
     let accounts = [];
-    try { accounts = await pera.reconnectSession(); } catch (e) { accounts = []; }
+    if (!pera._launched) {
+      try { accounts = await pera.reconnectSession(); } catch (e) { accounts = []; }
+    }
     if (!accounts || !accounts.length) {
       accounts = await pera.connect();
     }
@@ -434,12 +465,18 @@
       return [unsignedFee, normalizeSigned(signed && signed[1])];
     }
     if (algoSession.kind === "pera") {
+      if (algoSession.pera && algoSession.pera.lastDeeplink) {
+        ensureOpenPera(algoSession.pera.lastDeeplink);
+      }
       const signed = await algoSession.pera.signTransaction([
         [
           { txn: grouped[0], signers: [] },
           { txn: grouped[1], message: "Pay $0.01 USDC on Algorand" },
         ],
       ]);
+      if (algoSession.pera && algoSession.pera.lastDeeplink) {
+        ensureOpenPera(algoSession.pera.lastDeeplink);
+      }
       const paySigned = signed && (signed.length > 1 ? signed[1] : signed[0]);
       return [unsignedFee, normalizeSigned(paySigned)];
     }
@@ -469,7 +506,11 @@
     status.textContent = "connecting Pera or Lute…";
     status.className = "muted";
     if (out) out.hidden = true;
-    if (human) human.hidden = true;
+    if (algoSession.pera && algoSession.pera.lastDeeplink) {
+      showPeraWake(algoSession.pera.lastDeeplink);
+    } else if (human) {
+      human.hidden = true;
+    }
     setOutCaption("");
     const body = requestBody();
     try {
@@ -777,6 +818,28 @@
   if (payAlgoBtn) {
     payAlgoBtn.addEventListener("click", function (ev) {
       ev.preventDefault();
+      if (!paying && !algoSession.address && window.PeraWalletConnect) {
+        var injected = window.algorand && typeof window.algorand.enable === "function";
+        var useLute = window.LuteConnect && !isLikelyIphone();
+        if (!injected && !useLute) {
+          if (!(algoSession.kind === "pera" && algoSession.pera)) {
+            algoSession = {
+              kind: "pera",
+              address: null,
+              pera: new window.PeraWalletConnect({ chainId: 416001, shouldShowSignTxnToast: false }),
+              lute: null,
+            };
+          }
+          var restored = false;
+          try { restored = typeof algoSession.pera._restore === "function" && algoSession.pera._restore(); } catch (e) {}
+          if (!restored) {
+            var link = algoSession.pera.beginConnect();
+            showPeraWake(link);
+          }
+        }
+      } else if (algoSession.kind === "pera" && algoSession.pera) {
+        ensureOpenPera(algoSession.pera.lastDeeplink);
+      }
       payAlgo();
     });
   }

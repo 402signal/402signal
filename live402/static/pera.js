@@ -122,6 +122,8 @@
     this._handshakeTopic = "";
     this._handshakeId = 0;
     this._openPromise = null;
+    this.lastDeeplink = "";
+    this._launched = false;
     var self = this;
     document.addEventListener("visibilitychange", function () {
       if (document.visibilityState === "visible") self._ensureSocket();
@@ -232,10 +234,21 @@
 
   PeraWalletConnect.prototype._openPera = function (uri) {
     var link = "perawallet-wc://wc?uri=" + encodeURIComponent(uri);
+    this.lastDeeplink = link;
     if (isIOS() || isMobile()) {
       try { window.location.href = link; } catch (e) {}
     }
     return link;
+  };
+
+  PeraWalletConnect.prototype.beginConnect = function () {
+    this._key = randomHex(32);
+    this._clientId = uuid();
+    this._handshakeTopic = uuid();
+    this._peerId = "";
+    this.connected = false;
+    this._launched = true;
+    return this._openPera(this._uri());
   };
 
   PeraWalletConnect.prototype._persist = function () {
@@ -284,8 +297,10 @@
 
   PeraWalletConnect.prototype.connect = async function () {
     if (this.connected && this.accounts.length) return this.accounts;
-    var restored = await this.reconnectSession();
-    if (restored && restored.length) return restored;
+    if (!this._launched) {
+      var restored = await this.reconnectSession();
+      if (restored && restored.length) return restored;
+    }
     var lastErr = null;
     for (var i = 0; i < BRIDGES.length; i++) {
       this.bridge = BRIDGES[i];
@@ -301,11 +316,15 @@
   };
 
   PeraWalletConnect.prototype._connectOnce = async function () {
-    this._key = randomHex(32);
-    this._clientId = uuid();
-    this._handshakeTopic = uuid();
-    this._peerId = "";
-    this.connected = false;
+    if (!this._key || !this._handshakeTopic) {
+      this._key = randomHex(32);
+      this._clientId = uuid();
+      this._handshakeTopic = uuid();
+      this._peerId = "";
+      this.connected = false;
+      this._launched = true;
+    }
+    this._openPera(this._uri());
     await this._ensureSocket();
     var request = {
       id: payloadId(),
@@ -325,7 +344,6 @@
     this._handshakeId = request.id;
     var wait = this._wait(request.id, 180000);
     await this._pub(this._handshakeTopic, request, false);
-    this._openPera(this._uri());
     var result = await wait;
     if (!result || result.approved === false) {
       throw new Error("Pera connection rejected.");
@@ -354,6 +372,7 @@
     } catch (e) {}
     this.connected = false;
     this.accounts = [];
+    this._launched = false;
     try { sessionStorage.removeItem(STORE_KEY); } catch (e) {}
     try { if (this._ws) this._ws.close(); } catch (e) {}
     this._ws = null;
@@ -392,6 +411,11 @@
     var wait = this._wait(request.id, 180000);
     await this._pub(this._peerId, request, false);
     if (isIOS() || isMobile()) {
+      this.lastDeeplink = "perawallet-wc://";
+      try {
+        var el = document.getElementById("open-pera");
+        if (el) el.href = this.lastDeeplink;
+      } catch (e) {}
       try { window.location.href = "perawallet-wc://"; } catch (e) {}
     }
     var result = await wait;
