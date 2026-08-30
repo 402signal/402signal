@@ -9,7 +9,7 @@
         "status": 402,
         "latency_ms": 41,
         "has_402_challenge": true,
-        "payTo": null
+        "payTo": "0xabc"
       },
       "accepts": [
         {
@@ -27,7 +27,7 @@
         "status": 402,
         "latency_ms": 44,
         "has_402_challenge": true,
-        "payTo": null
+        "payTo": "0xabc"
       },
       "accepts": [
         {
@@ -45,7 +45,7 @@
         "status": 402,
         "latency_ms": 36,
         "has_402_challenge": true,
-        "payTo": null
+        "payTo": "0xabc"
       },
       "accepts": [
         {
@@ -75,7 +75,7 @@
         "status": 402,
         "latency_ms": 28,
         "has_402_challenge": true,
-        "payTo": null
+        "payTo": "0xabc"
       },
       "accepts": [
         {
@@ -178,7 +178,7 @@
         "status": 402,
         "latency_ms": 55,
         "has_402_challenge": true,
-        "payTo": null,
+        "payTo": "0xabc",
         "probes": [
           {
             "method": "GET",

@@ -26,6 +26,30 @@ INPUT_SCHEMA = {
             "enum": ["base", "solana", "algorand"],
             "description": "Prefer this pay-in rail when ranking catalog hits.",
         },
+        "objective": {
+            "type": "string",
+            "enum": ["best", "cheapest", "fastest", "most_reliable"],
+            "description": "Best-of-N ranking among live probes. Unknown values fall back to best.",
+        },
+        "max_amount_atomic": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Drop live hits whose known atomic amount exceeds this bound.",
+        },
+        "max_latency_ms": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Drop live hits whose known latency exceeds this bound.",
+        },
+        "require_invocable": {
+            "type": "boolean",
+            "description": "If true, drop live hits without an input schema.",
+        },
+        "networks": {
+            "type": "array",
+            "items": {"type": "string", "enum": ["base", "solana", "algorand"]},
+            "description": "Restrict selectable hits to these pay-in rails.",
+        },
     },
     "required": ["need"],
 }
@@ -62,11 +86,14 @@ OUTPUT_SCHEMA = {
                 "upstream_5xx",
                 "ssrf",
                 "no_input_schema",
+                "constraints_unmet",
             ],
         },
         "tried": {"type": "integer"},
         "latency_ms": {"type": ["integer", "null"]},
         "schema_source": {"type": ["string", "null"], "enum": ["envelope", "catalog", "bazaar", None]},
+        "objective": {"type": "string", "enum": ["best", "cheapest", "fastest", "most_reliable"]},
+        "compared": {"type": "array"},
     },
 }
 

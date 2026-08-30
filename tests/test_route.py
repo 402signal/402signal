@@ -1711,6 +1711,7 @@ class ProductBriefTests(unittest.TestCase):
             "upstream_5xx",
             "ssrf",
             "no_input_schema",
+            "constraints_unmet",
         }
         self.assertEqual(set(MISS_REASONS), expected)
         self.assertEqual(public_miss_reason("empty_402"), "no_402_envelope")

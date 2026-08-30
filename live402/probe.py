@@ -14,7 +14,7 @@ import urllib.request
 from datetime import datetime, timezone
 from urllib.parse import urljoin, urlparse
 
-from live402 import fixtures
+from live402 import fixtures, select
 
 USER_AGENT = "402Signal/0.1 (fail-closed probe; no payment)"
 DISCOVERY_URL = "https://api.cdp.coinbase.com/platform/v2/x402/discovery/resources"
@@ -45,6 +45,7 @@ MISS_REASONS = (
     "upstream_5xx",
     "ssrf",
     "no_input_schema",
+    "constraints_unmet",
 )
 _MISS_MAP = {
     "empty_402": "no_402_envelope",
@@ -69,6 +70,7 @@ _MISS_MAP = {
     "reachable_200": "reachable_200",
     "probe_timeout": "probe_timeout",
     "upstream_5xx": "upstream_5xx",
+    "constraints_unmet": "constraints_unmet",
 }
 BLOCKED_HOSTS = {
     "localhost",
@@ -1289,55 +1291,82 @@ def fetch_discovery(limit: int = 20) -> list[dict]:
     return list(catalog_mod.get_index().get("items") or [])
 
 
-def route_need(need: str, deadline: float | None = None, prefer_network: str | None = None) -> dict:
-    """Fuzzy-match discovery, probe up to 5, first payable 402 wins. Else fail-closed."""
+def _discovery_unavailable_miss(objective: str) -> dict:
+    probed_at = now_iso()
+    return {
+        "live": False,
+        "invocable": False,
+        "url": None,
+        "tried": 0,
+        "error": "discovery_unavailable",
+        "payTo": None,
+        "traction": "unknown",
+        "miss_reason": "no_candidates",
+        "target": None,
+        "probes": [],
+        "probed_at": probed_at,
+        "objective": objective,
+        "compared": [],
+        "health": {
+            "live": False,
+            "last_probe": probed_at,
+            "latency_ms": None,
+            "has_402_challenge": False,
+            "status": None,
+        },
+    }
+
+
+def _attach_selection(body: dict, probed: list, winner, objective: str) -> dict:
+    body["objective"] = objective
+    body["compared"] = select.comparison(probed, winner)
+    body["tried"] = len(probed)
+    return body
+
+
+def _selection_set(probed: list) -> list:
+    """Live hits. Drop payTo_changed when a stable live hit exists in the window."""
+    live_hits = [r for r in probed if isinstance(r, dict) and r.get("live")]
+    if any(not r.get("payTo_changed") for r in live_hits):
+        return [r for r in live_hits if not r.get("payTo_changed")]
+    return live_hits
+
+
+def route_need(
+    need: str,
+    deadline: float | None = None,
+    prefer_network: str | None = None,
+    objective: str | None = None,
+    constraints: dict | None = None,
+) -> dict:
+    """Fuzzy-match discovery, probe up to 5, pick best-of-N. Else fail-closed."""
     if deadline is None:
         deadline = time.monotonic() + PROBE_BUDGET_SECONDS
     prefer = normalize_prefer_network(prefer_network)
+    obj = select.parse_objective(objective)
+    cons = constraints if isinstance(constraints, dict) else {}
     try:
         items = fetch_discovery()
     except Exception:
-        return {
-            "live": False,
-            "invocable": False,
-            "url": None,
-            "tried": 0,
-            "error": "discovery_unavailable",
-            "payTo": None,
-            "traction": "unknown",
-            "miss_reason": "no_candidates",
-            "target": None,
-            "probes": [],
-            "probed_at": now_iso(),
-            "health": {
-                "live": False,
-                "last_probe": now_iso(),
-                "latency_ms": None,
-                "has_402_challenge": False,
-                "status": None,
-            },
-        }
+        return _discovery_unavailable_miss(obj)
     ranked = rank_resources(need, items, prefer_network=prefer)
-    tried = 0
+    probed: list[dict] = []
     last = None
-    best_changed = None
     for item in ranked[:MAX_PROBE]:
         if remaining_timeout(deadline) is not None and remaining_timeout(deadline) <= 0:
-            if best_changed is not None:
-                best_changed["tried"] = tried
-                return best_changed
-            last = {
-                "live": False,
-                "invocable": False,
-                "url": _resource_url(item),
-                "status": None,
-                "latency_ms": 0,
-                "has_402_challenge": False,
-                "payTo": None,
-                "miss_reason": "probe_timeout",
-                "probes": [],
-                "probed_at": now_iso(),
-            }
+            if not probed:
+                last = {
+                    "live": False,
+                    "invocable": False,
+                    "url": _resource_url(item),
+                    "status": None,
+                    "latency_ms": 0,
+                    "has_402_challenge": False,
+                    "payTo": None,
+                    "miss_reason": "probe_timeout",
+                    "probes": [],
+                    "probed_at": now_iso(),
+                }
             break
         url = _resource_url(item)
         last = probe_url(url, catalog_item=item, deadline=deadline)
@@ -1348,27 +1377,20 @@ def route_need(need: str, deadline: float | None = None, prefer_network: str | N
         except Exception:
             if last.get("payTo_changed"):
                 last["risk"] = ["payTo_changed"]
-        tried += 1
-        last["tried"] = tried
         last["need"] = need
         last["rail"] = _item_rail(item)
         last["source"] = "fixture" if fixtures.fixture_mode() else "discovery"
-        # Crash-402 / 5xx / empty envelope are not live; try the next candidate.
-        # payTo_changed is not a silent live winner if a stable live hit exists in window.
-        if last.get("live"):
-            if last.get("payTo_changed"):
-                if best_changed is None:
-                    best_changed = last
-                continue
-            return last
-    if best_changed is not None:
-        best_changed["tried"] = tried
-        return best_changed
+        probed.append(last)
+    selection_set = _selection_set(probed)
+    winner = select.pick_winner(selection_set, obj, cons)
+    if winner:
+        return _attach_selection(winner, probed, winner, obj)
+    some_live = any(isinstance(r, dict) and r.get("live") for r in probed)
     body = {
         "live": False,
         "invocable": False,
         "url": None,
-        "tried": tried,
+        "tried": len(probed),
         "need": need,
         "source": "fixture" if fixtures.fixture_mode() else "discovery",
         "payTo": None,
@@ -1387,9 +1409,11 @@ def route_need(need: str, deadline: float | None = None, prefer_network: str | N
             "status": (last or {}).get("status"),
         },
     }
-    if last and last.get("miss_reason"):
+    if some_live:
+        body["miss_reason"] = "constraints_unmet"
+    elif last and last.get("miss_reason"):
         body["miss_reason"] = public_miss_reason(last.get("miss_reason")) or last.get("miss_reason")
-    elif tried == 0:
+    elif not probed:
         body["miss_reason"] = "no_candidates"
     if last:
         body["last"] = {
@@ -1400,4 +1424,4 @@ def route_need(need: str, deadline: float | None = None, prefer_network: str | N
         }
         if last.get("rail"):
             body["rail"] = last.get("rail")
-    return body
+    return _attach_selection(body, probed, None, obj)

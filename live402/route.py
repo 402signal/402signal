@@ -5,7 +5,7 @@ from __future__ import annotations
 import sys
 import time
 
-from live402 import facilitator, fixtures, payment, probe
+from live402 import facilitator, fixtures, payment, probe, select
 
 
 def gate_open(headers) -> bool:
@@ -55,7 +55,15 @@ def run_probe(body: dict) -> tuple[int, dict]:
         return 503, result
 
     prefer = probe.normalize_prefer_network(body.get("prefer_network"))
-    result = probe.route_need(need, deadline=deadline, prefer_network=prefer)
+    objective = select.parse_objective(body.get("objective"))
+    constraints = select.parse_constraints(body)
+    result = probe.route_need(
+        need,
+        deadline=deadline,
+        prefer_network=prefer,
+        objective=objective,
+        constraints=constraints,
+    )
     result.setdefault("payTo", None)
     result.setdefault("traction", "unknown")
     if result.get("live"):

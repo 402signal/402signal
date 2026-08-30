@@ -166,6 +166,28 @@ def openapi_spec(resource_url: str = ROUTE) -> dict:
                     "status": {"type": ["integer", "null"]},
                 },
             },
+            "objective": {
+                "type": "string",
+                "enum": ["best", "cheapest", "fastest", "most_reliable"],
+            },
+            "compared": {
+                "type": "array",
+                "description": "Slim probe rows (cap 5). Unknown rates are null, never 0.0.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "url": {"type": ["string", "null"]},
+                        "rail": {"type": ["string", "null"]},
+                        "amount_atomic": {"type": ["integer", "null"]},
+                        "latency_ms": {"type": ["integer", "null"]},
+                        "reliability": {"type": ["number", "null"]},
+                        "readiness": {"type": ["string", "null"]},
+                        "live": {"type": "boolean"},
+                        "invocable": {"type": "boolean"},
+                        "selected": {"type": "boolean"},
+                    },
+                },
+            },
         },
     }
     route_body = {
@@ -185,6 +207,30 @@ def openapi_spec(resource_url: str = ROUTE) -> dict:
                 "type": "string",
                 "enum": ["base", "solana", "algorand"],
                 "description": "Prefer this pay-in rail when ranking catalog hits.",
+            },
+            "objective": {
+                "type": "string",
+                "enum": ["best", "cheapest", "fastest", "most_reliable"],
+                "description": "Best-of-N ranking among live probes. Unknown values fall back to best.",
+            },
+            "max_amount_atomic": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Drop live hits whose known atomic amount exceeds this bound. Unknown amount fails closed.",
+            },
+            "max_latency_ms": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Drop live hits whose known latency exceeds this bound. Unknown latency fails closed.",
+            },
+            "require_invocable": {
+                "type": "boolean",
+                "description": "If true, drop live hits without an input schema.",
+            },
+            "networks": {
+                "type": "array",
+                "items": {"type": "string", "enum": ["base", "solana", "algorand"]},
+                "description": "Restrict selectable hits to these pay-in rails.",
             },
         },
         "required": ["need"],
@@ -638,14 +684,14 @@ HTTP 200 = live URL plus target contract. HTTP 503 = typed miss_reason.
 
 - POST /route  $0.01 USDC on Base, Solana, or Algorand
 - x402scan skips Algorand/GoPlausible; POST /route returns a currently-alive Algo 402 plus the target contract when that's what is live.
-- Body: {"need": "what you want", "url": "https://optional", "prefer_network": "base|solana|algorand"}
+- Body: {"need": "what you want", "url": "https://optional", "prefer_network": "base|solana|algorand", "objective": "best|cheapest|fastest|most_reliable", "max_amount_atomic": 0, "max_latency_ms": 0, "require_invocable": false, "networks": ["base"]}
 - Agents that intend to pay should POST /route, not GET.
 - GET /route with Accept: application/json (or no Accept) returns HTTP 402 so crawlers can index payment. Browsers that send Accept: text/html get a human page.
 - Unpaid → HTTP 402 (amount 10000 atomic = $0.01, 6 decimals)
 - Paid live hit → HTTP 200 + URL that 402s with a payment envelope + target {method,inputSchema,outputSchema,accepts,facilitator,amountAtomic,displayAmount,timeoutSeconds}
 - If inputSchema is missing: live may be true, invocable false, miss_reason no_input_schema
 - Paid miss → HTTP 503 {live:false, miss_reason}
-- miss_reason enum: no_candidates, no_402_envelope, no_payto, reachable_200, probe_timeout, quote_expired, invalid_need, upstream_5xx, ssrf, no_input_schema
+- miss_reason enum: no_candidates, no_402_envelope, no_payto, reachable_200, probe_timeout, quote_expired, invalid_need, upstream_5xx, ssrf, no_input_schema, constraints_unmet
 - POST /mcp tools/call name=route is the same paid probe (unpaid tools/call also 402s)
 - MCP bazaar type is mcp, toolName is route. Live MCP: https://402signal.com/mcp and /mcp.json
 
