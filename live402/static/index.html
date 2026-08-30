@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>402Signal</title>
+  <meta name="description" content="Paid APIs go dark. We check before you pay them." />
+  <link rel="canonical" href="https://402signal.com" />
+  <meta property="og:title" content="402Signal" />
+  <meta property="og:description" content="Paid APIs go dark. We check before you pay them." />
+  <meta property="og:url" content="https://402signal.com" />
+  <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="402Signal" />
+  <meta name="twitter:card" content="summary" />
+  <meta name="twitter:title" content="402Signal" />
+  <meta name="twitter:description" content="Paid APIs go dark. We check before you pay them." />
+  <meta name="twitter:site" content="@402Signal" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="page">
+    <header class="mast">
+      <div class="brand-row">
+        <div class="mark">402</div>
+        <h1>402Signal</h1>
+      </div>
+      <p class="sub">Paid APIs go dark. We check before you pay them.</p>
+      <nav class="nav"><a href="/">Home</a> · <a href="/dashboard">Examples</a></nav>
+    </header>
+
+    <main>
+      <section class="panel">
+        <h2>What you get</h2>
+        <p>You pay $0.01 USDC. We look for a live paid API that matches what you asked for. If it answers with a real payment challenge, you get the URL. If nothing is up, we say so. Same price either way.</p>
+      </section>
+
+      <section class="panel">
+        <h2>How to use it</h2>
+        <ol class="steps">
+          <li>Type what you need, or paste a URL you already have.</li>
+          <li>Pay $0.01 USDC on Base in this browser, or pay Base / Solana / Algorand from an agent.</li>
+          <li>We probe. You get a live URL or an honest miss.</li>
+        </ol>
+      </section>
+
+      <section class="panel">
+        <h2>Find a live URL</h2>
+        <p class="muted">Optional URL: if you already have one, we will check that it is actually up.</p>
+        <form id="route-form" action="/route" method="post">
+          <label class="label" for="need">What do you need?</label>
+          <input id="need" class="editable" type="text" value="erc20 token balance" placeholder="weather, token balance, screenshots…" autocomplete="off" spellcheck="false" />
+          <div class="chips" id="need-chips" role="group" aria-label="Example needs">
+            <button type="button" class="chip" data-need="erc20 token balance">erc20 token balance</button>
+            <button type="button" class="chip" data-need="weather">weather</button>
+            <button type="button" class="chip" data-need="nft floor">nft floor</button>
+            <button type="button" class="chip" data-need="gas price">gas price</button>
+          </div>
+          <label class="label" for="url">Optional URL</label>
+          <input id="url" type="text" placeholder="https://…" autocomplete="off" spellcheck="false" />
+          <div class="row">
+            <button type="submit" id="go" class="btn">Find a live URL</button>
+            <button type="button" id="pay-base" class="btn pay-base" hidden>Pay $0.01 on Base</button>
+            <span id="status" class="muted"></span>
+          </div>
+          <p id="pay-base-hint" class="muted" hidden>Uses an injected wallet on Base (8453): MetaMask, Coinbase Wallet, or Base App. One $0.01 USDC signature per click. No auto-pay.</p>
+          <div id="human-result" class="result-card" hidden>
+            <h3 id="human-title"></h3>
+            <p id="human-body"></p>
+          </div>
+          <details class="tech" id="tech">
+            <summary>Show technical details</summary>
+            <p class="muted">POST /route body. <code>url</code> stays optional. Protocol amount is 10000 (USDC, 6 decimals). That is one cent.</p>
+            <p class="label">request preview, actual POST body</p>
+            <pre class="code preview" id="preview" aria-live="polite"></pre>
+            <p class="muted" id="out-caption" hidden></p>
+            <pre class="code" id="out" hidden></pre>
+          </details>
+        </form>
+      </section>
+
+      <section class="panel" id="route-samples-panel" hidden>
+        <h2>Try one of these</h2>
+        <p class="muted">Sample lookups from public catalogs. We still probe before you pay.</p>
+        <div id="route-samples" class="chips samples"></div>
+      </section>
+
+      <section class="panel agents">
+        <h2>For agents</h2>
+        <p>POST https://402signal.com/route with a need, then pay the 402.</p>
+        <pre class="code" id="agent-example">POST https://402signal.com/route
+{"need":"erc20 token balance"}</pre>
+        <p class="muted"><a href="/openapi.json">openapi.json</a> · <a href="/.well-known/x402.json">.well-known/x402.json</a> · <a href="/mcp.json">mcp.json</a></p>
+      </section>
+    </main>
+
+    <footer class="foot">
+      <p><a href="https://402signal.com" rel="noopener noreferrer">402signal.com</a> · <a href="https://x.com/402Signal" rel="noopener noreferrer">@402Signal</a></p>
+    </footer>
+  </div>
+  <script src="/app.js"></script>
+</body>
+</html>

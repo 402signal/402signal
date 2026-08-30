@@ -1,0 +1,129 @@
+{
+  "resources": [
+    {
+      "url": "https://fixture.402signal.local/weather",
+      "description": "Local weather forecast fixture. Returns a 402 challenge when live.",
+      "type": "http",
+      "probe": {
+        "live": true,
+        "status": 402,
+        "latency_ms": 41,
+        "has_402_challenge": true,
+        "payTo": null
+      },
+      "accepts": [
+        {
+          "network": "base",
+          "amount": "10000"
+        }
+      ]
+    },
+    {
+      "url": "https://fixture.402signal.local/weather-stale",
+      "description": "Stale weather listing that no longer answers.",
+      "type": "http",
+      "probe": {
+        "live": false,
+        "status": null,
+        "latency_ms": 4000,
+        "has_402_challenge": false,
+        "miss_reason": "timeout"
+      }
+    },
+    {
+      "url": "https://fixture.402signal.local/erc20-balance",
+      "description": "ERC20 token balance probe fixture with a 402 challenge.",
+      "type": "http",
+      "probe": {
+        "live": true,
+        "status": 402,
+        "latency_ms": 28,
+        "has_402_challenge": true,
+        "payTo": null
+      },
+      "accepts": [
+        {
+          "network": "base",
+          "amount": "10000"
+        }
+      ]
+    },
+    {
+      "url": "https://fixture.402signal.local/echo",
+      "description": "Open echo ping. HTTP 200, no payment challenge \u2014 not payable.",
+      "type": "http",
+      "probe": {
+        "live": false,
+        "status": 200,
+        "latency_ms": 12,
+        "has_402_challenge": false,
+        "miss_reason": "http_200_no_challenge"
+      }
+    },
+    {
+      "url": "https://fixture.402signal.local/empty-402",
+      "description": "Crash 402 with empty JSON body.",
+      "type": "http",
+      "probe": {
+        "live": false,
+        "status": 402,
+        "latency_ms": 19,
+        "has_402_challenge": true,
+        "miss_reason": "empty_402",
+        "probes": [
+          {
+            "method": "GET",
+            "status": 402,
+            "miss_reason": "empty_402"
+          }
+        ]
+      }
+    },
+    {
+      "url": "https://fixture.402signal.local/post-only-402",
+      "description": "POST-only payable x402 fixture. GET is 405.",
+      "type": "http",
+      "probe": {
+        "live": true,
+        "status": 402,
+        "latency_ms": 55,
+        "has_402_challenge": true,
+        "payTo": null,
+        "probes": [
+          {
+            "method": "GET",
+            "status": 405
+          },
+          {
+            "method": "POST",
+            "status": 402
+          }
+        ]
+      }
+    },
+    {
+      "url": "https://fixture.402signal.local/nft-metadata",
+      "description": "NFT metadata lookup fixture. Dead catalog entry.",
+      "type": "http",
+      "probe": {
+        "live": false,
+        "status": null,
+        "latency_ms": 4000,
+        "has_402_challenge": false,
+        "miss_reason": "timeout"
+      }
+    },
+    {
+      "url": "https://fixture.402signal.local/gas-estimate",
+      "description": "Transaction gas estimate fixture. Times out.",
+      "type": "http",
+      "probe": {
+        "live": false,
+        "status": null,
+        "latency_ms": 4000,
+        "has_402_challenge": false,
+        "miss_reason": "timeout"
+      }
+    }
+  ]
+}

@@ -1,0 +1,53 @@
+# Secrets and credentials — never commit
+*.env
+.base.env
+.algo.env
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa
+id_rsa.*
+id_ed25519
+id_ed25519.*
+credentials.json
+**/credentials*
+**/secrets/
+*.secret
+fly.toml.local
+
+# Wallets / payer material (publish never includes these)
+*wallet*.json
+*payer*.json
+*mnemonic*
+*private*key*
+
+# Sibling projects — not this repo
+analogpair/
+grantcomps/
+402signal-pay/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+.env/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~
+
+# Fly local
+.fly/

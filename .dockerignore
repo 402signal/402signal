@@ -1,0 +1,14 @@
+*.env
+.base.env
+.algo.env
+**/__pycache__
+**/*.pyc
+.git
+.venv
+.env
+.env.*
+*.pem
+*.key
+credentials.json
+*wallet*.json
+*payer*.json
