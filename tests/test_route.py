@@ -572,9 +572,18 @@ class PaywallTests(unittest.TestCase):
     def test_pulse_json_and_ignores_caller_url(self):
         from live402 import pulse as pulse_mod
         pulse_mod.reset_cache()
+        empty_idx = {
+            "items": [],
+            "by_rail": {"base": [], "solana": [], "algorand": []},
+            "fetched_at": 0,
+            "totals": {},
+            "truncated": {},
+            "complete": True,
+            "errors": {},
+        }
         with patch("live402.pulse.fixtures.fixture_mode", return_value=False), patch(
-            "live402.pulse._fetch_catalog", return_value=[]
-        ) as mock_fetch:
+            "live402.catalog.get_index", return_value=empty_idx
+        ), patch("urllib.request.urlopen") as urlopen:
             pulse_mod.reset_cache()
             status, raw = _get(
                 self.port, "/pulse?url=http://127.0.0.1/latest/meta-data&src=https://evil.example"
@@ -590,21 +599,7 @@ class PaywallTests(unittest.TestCase):
                 self.assertIn(chain, body["chains"])
                 self.assertIn("themes", body["chains"][chain])
                 self.assertIn("insight", body["chains"][chain])
-            called = [c.args[1] for c in mock_fetch.call_args_list]
-            self.assertTrue(called)
-            for url in called:
-                self.assertTrue(url.startswith("https://"))
-                host = url.split("/")[2]
-                self.assertIn(
-                    host,
-                    {
-                        "api.cdp.coinbase.com",
-                        "facilitator.payai.network",
-                        "facilitator.goplausible.xyz",
-                    },
-                )
-            self.assertFalse(any("127.0.0.1" in u or "evil.example" in u for u in called))
-            mock_fetch.assert_called()
+            urlopen.assert_not_called()
 
     def test_pulse_fixture_samples(self):
         from live402 import pulse as pulse_mod

@@ -6,7 +6,6 @@ import base64
 import ipaddress
 import json
 import os
-import re
 import socket
 import threading
 import time
@@ -18,19 +17,16 @@ from urllib.parse import urljoin, urlparse
 from live402 import fixtures
 
 USER_AGENT = "402Signal/0.1 (fail-closed probe; no payment)"
-DISCOVERY_URL = (
-    "https://api.cdp.coinbase.com/platform/v2/x402/discovery/resources?limit=20"
-)
+DISCOVERY_URL = "https://api.cdp.coinbase.com/platform/v2/x402/discovery/resources"
 CATALOGS = (
-    ("base", "https://api.cdp.coinbase.com/platform/v2/x402/discovery/resources?limit=20"),
-    ("solana", "https://facilitator.payai.network/discovery/resources?limit=20"),
-    ("algorand", "https://facilitator.goplausible.xyz/discovery/resources?limit=20"),
+    ("base", "https://api.cdp.coinbase.com/platform/v2/x402/discovery/resources"),
+    ("solana", "https://facilitator.payai.network/discovery/resources"),
+    ("algorand", "https://facilitator.goplausible.xyz/discovery/resources"),
 )
 CATALOG_HOSTS = frozenset(
     (urlparse(url).hostname or "").lower() for _, url in CATALOGS
 )
-PULSE_LIMIT = 100
-CATALOG_READ_LIMIT = 524_288
+CATALOG_READ_LIMIT = 1_048_576
 DEFAULT_TIMEOUT = 4.0
 MAX_SINGLE_TIMEOUT = 10.0
 DNS_TIMEOUT = 2.0
@@ -476,15 +472,8 @@ def catalog_url_allowed(url: str) -> bool:
 
 
 def pulse_catalogs() -> tuple[tuple[str, str], ...]:
-    """Same allowlisted hosts as CATALOGS, higher limit for the dashboard only."""
-    out = []
-    for rail, url in CATALOGS:
-        if re.search(r"limit=\d+", url):
-            out.append((rail, re.sub(r"limit=\d+", f"limit={PULSE_LIMIT}", url)))
-        else:
-            sep = "&" if "?" in url else "?"
-            out.append((rail, f"{url}{sep}limit={PULSE_LIMIT}"))
-    return tuple(out)
+    """Same allowlisted hosts as CATALOGS. Pagination lives in catalog.py."""
+    return CATALOGS
 
 
 def safe_target(url: str) -> str | None:
@@ -755,14 +744,24 @@ def _traction(item: dict | None) -> str:
         "requests",
         "qualityCalls",
         "calls",
+        "settleCount",
     )
     blobs = [item]
+    quality = item.get("quality")
+    if isinstance(quality, dict):
+        blobs.append(quality)
+        val = quality.get("l30DaysTotalCalls")
+        if not isinstance(val, bool) and isinstance(val, (int, float)) and val >= 0:
+            return str(int(val))
     meta = item.get("metadata")
     if isinstance(meta, dict):
         blobs.append(meta)
         disc = meta.get("discovery")
         if isinstance(disc, dict):
             blobs.append(disc)
+    info = item.get("discoveryInfo")
+    if isinstance(info, dict):
+        blobs.append(info)
     for blob in blobs:
         for key in keys:
             val = blob.get(key)
@@ -1129,14 +1128,32 @@ def score_need(need: str, item: dict) -> int:
     q = _tokens(need)
     if not q:
         return 0
+    score = 0
+    try:
+        from live402 import catalog as catalog_mod
+        need_cap = catalog_mod.capability_for_need(need)
+        item_cap = item.get("capability")
+        if not item_cap or item_cap == "unknown":
+            item_cap, _src = catalog_mod.classify_capability(item)
+    except Exception:
+        need_cap = "unknown"
+        item_cap = item.get("capability") or "unknown"
+    if need_cap and need_cap != "unknown" and item_cap == need_cap:
+        score += 100
     blob = _resource_blob(item)
     hay = _tokens(blob)
     hit = q & hay
-    score = len(hit) * 10
+    score += len(hit) * 10
     low = blob.lower()
     for tok in q:
         if tok in low:
             score += 2
+    if score <= 0:
+        return 0
+    if item.get("_input_schema_present"):
+        score += 8
+    if item.get("_output_schema_present"):
+        score += 4
     return score
 
 
@@ -1182,9 +1199,13 @@ def _catalog_opener():
     return urllib.request.build_opener(_CatalogRedirectHandler)
 
 
-def _fetch_one_catalog(rail: str, url: str, timeout: float) -> list[dict]:
+def _fetch_catalog_payload(url: str, timeout: float, read_limit: int | None = None):
+    """Fetch allowlisted catalog JSON. Empty dict if blocked or oversize."""
     if not catalog_url_allowed(url):
-        return []
+        return {}
+    cap = CATALOG_READ_LIMIT if read_limit is None else int(read_limit)
+    if cap < 1:
+        return {}
     req = urllib.request.Request(
         url,
         headers={"User-Agent": USER_AGENT, "Accept": "application/json"},
@@ -1197,15 +1218,22 @@ def _fetch_one_catalog(rail: str, url: str, timeout: float) -> list[dict]:
         if callable(getter):
             final = getter() or ""
         if final and not catalog_url_allowed(final):
-            return []
-        raw = resp.read(CATALOG_READ_LIMIT + 1)
-    if len(raw) > CATALOG_READ_LIMIT:
-        return []
+            return {}
+        raw = resp.read(cap + 1)
+    if len(raw) > cap:
+        return {}
     payload = json.loads(raw.decode("utf-8"))
+    return payload
+
+
+def _fetch_one_catalog(rail: str, url: str, timeout: float) -> list[dict]:
+    payload = _fetch_catalog_payload(url, timeout)
     if isinstance(payload, list):
         items = payload
-    else:
+    elif isinstance(payload, dict):
         items = list(payload.get("items") or payload.get("resources") or [])
+    else:
+        items = []
     out = []
     for item in items:
         if not isinstance(item, dict):
@@ -1222,21 +1250,9 @@ def fetch_discovery(limit: int = 20) -> list[dict]:
         for row in rows:
             row.setdefault("_rail", "fixture")
         return rows
-    timeout = max(probe_timeout(), 8.0)
-    merged: list[dict] = []
-    seen: set[str] = set()
-    for rail, url in CATALOGS:
-        try:
-            items = _fetch_one_catalog(rail, url, timeout)
-        except Exception:
-            continue
-        for item in items:
-            key = _resource_url(item) or json.dumps(item, sort_keys=True)[:200]
-            if key in seen:
-                continue
-            seen.add(key)
-            merged.append(item)
-    return merged
+    from live402 import catalog as catalog_mod
+    # limit kept for compat; do not truncate the paginated index.
+    return list(catalog_mod.get_index().get("items") or [])
 
 
 def route_need(need: str, deadline: float | None = None, prefer_network: str | None = None) -> dict:

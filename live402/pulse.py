@@ -10,7 +10,7 @@ import threading
 import time
 from urllib.parse import urlparse, urlencode
 
-from live402 import fixtures, payment, probe
+from live402 import catalog, fixtures, payment, probe
 
 CACHE_TTL = 15.0
 OURS_URL = "https://402signal.com/route"
@@ -763,18 +763,19 @@ def _collect() -> dict:
             chains[chain] = payload
             _remember(chain, payload)
     else:
+        idx = catalog.get_index()
+        by_rail = idx.get("by_rail") or {}
+        errors = idx.get("errors") or {}
         for rail, url in probe.pulse_catalogs():
             if rail not in CHAINS:
                 continue
             if not probe.catalog_url_allowed(url):
                 chains[rail] = _stale_chain(rail, "not_allowlisted")
                 continue
-            try:
-                items = _fetch_catalog(rail, url)
-            except Exception:
-                items = None
             host = (urlparse(url).hostname or "").lower()
-            if items is None:
+            items = list(by_rail.get(rail) or [])
+            err = errors.get(rail)
+            if not items and err:
                 chains[rail] = _stale_chain(rail, "fetch_failed")
                 continue
             payload = _chain_payload(

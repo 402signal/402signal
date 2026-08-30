@@ -50,7 +50,7 @@ Body:
 - No valid payment and `LOCAL_FREE` unset → **HTTP 402**. One 402 lists three accepts (Base, Solana, Algorand) plus the bazaar extension. We do not probe.
 - Valid payment: verify with the matching facilitator, then probe, then settle. An unverified header never opens the gate.
 - If `url` is set: must be `https`. GET (HEAD fallback), ~4s timeout. Response includes `live`, `status`, `latency_ms`, `has_402_challenge`, and a `health` snapshot.
-- If only `need`: Coinbase discovery `https://api.cdp.coinbase.com/platform/v2/x402/discovery/resources?limit=20` (also merges PayAI + GoPlausible catalogs when reachable), fuzzy-match, probe up to 5, return the first live URL. If none live → **HTTP 503** `{ "live": false, "tried": n }` after settle (they paid for an honest miss).
+- If only `need`: Coinbase / PayAI / GoPlausible discovery catalogs are fully paginated (`offset`/`limit`, not the first 20), fuzzy-match, probe up to 5, return the first live URL. If none live → **HTTP 503** `{ "live": false, "tried": n }` after settle (they paid for an honest miss).
 - Dead upstream is **503** with the snapshot, never a fake live URL.
 - `LIVE402_FIXTURE=1` uses `live402/data/fixtures.json`. No network.
 - Paid **HTTP 200** includes `target: { method, inputSchema, outputSchema, accepts, facilitator, amountAtomic, displayAmount, timeoutSeconds }` so the next request body is invocable. If schema is missing, `live` may still be true with `invocable: false` and `miss_reason: "no_input_schema"`. `accepts[].extra.facilitator` is copied as `{url, feePayer, caip2, scheme}` — do not default to x402.org.
