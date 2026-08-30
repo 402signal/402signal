@@ -647,8 +647,8 @@ HTTP 200 = live URL plus target contract. HTTP 503 = typed miss_reason.
 - Smithery: https://smithery.ai/servers/live402/signal
 - Agentic Market: https://agentic.market/services/402signal-com
 - x402-dev: https://github.com/michielpost/x402-dev/blob/master/Projects.md
-- GoPlausible: https://facilitator.goplausible.xyz/dashboard/resources/UE9TVDpodHRwczovLzQwMnNpZ25hbC5jb20vcm91dGU
-- x402 Global Challenge: https://facilitator.goplausible.xyz/dashboard/leaderboards?cat=merchants&src=x402-global-challenge&env=mainnet
+- GoPlausible: https://facilitator.goplausible.xyz/dashboard/merchants/56466a9400d70f08
+- x402scan: https://www.x402scan.com/recipient/0xb18fc2275f36dae99eb215caeff03b431f887d16
 
 ## Discovery (machine)
 
