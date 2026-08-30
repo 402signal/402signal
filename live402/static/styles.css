@@ -56,7 +56,9 @@ h1 {
   letter-spacing: 0;
   margin: 0;
 }
-.sub { color: var(--muted); margin: 12px 0 0; max-width: 52ch; }
+.sub { color: var(--ink); margin: 12px 0 0; max-width: 52ch; font-size: 22px; }
+.lede { color: var(--muted); margin: 8px 0 0; max-width: 60ch; }
+.trust { color: var(--accent); margin: 8px 0 0; max-width: 60ch; }
 .panel {
   background: var(--panel);
   border: 1px solid var(--line);
@@ -278,4 +280,13 @@ main > .muted a:hover, main > .muted a:focus { color: var(--teal); }
   color: #1c1c22;
 }
 .btn.pay-base:disabled { opacity: 0.45; }
+.btn.secondary {
+  background: var(--input);
+  color: var(--accent);
+  border: 1px solid var(--line);
+}
+.btn.secondary:disabled { opacity: 0.45; }
+.rail-chip { cursor: default; }
+.rail-chip.down { color: var(--dead); border-color: var(--dead); }
+#recommend-body, #observed-body { white-space: pre-line; }
 

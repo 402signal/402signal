@@ -29,7 +29,7 @@
 
   function revealPayControl() {
     const ok = Boolean(injectedWallet());
-    if (form) form.hidden = !ok;
+    if (form) form.hidden = false;
     if (payBaseBtn) {
       payBaseBtn.hidden = !ok;
       if (!paying) payBaseBtn.disabled = !ok || !hasContent();
@@ -39,11 +39,15 @@
 
   function syncPreview() {
     const ok = Boolean(injectedWallet());
-    if (form && !paying) form.hidden = !ok;
+    if (form && !paying) form.hidden = false;
     if (payBaseBtn && !paying) {
       payBaseBtn.hidden = !ok;
       payBaseBtn.disabled = !ok || !hasContent();
     }
+    const previewBtn = document.getElementById("preview-btn");
+    const probeBtn = document.getElementById("probe-btn");
+    if (previewBtn) previewBtn.disabled = !hasContent();
+    if (probeBtn) probeBtn.disabled = !hasContent();
   }
 
   function showHuman(code, parsed) {
@@ -57,7 +61,8 @@
         return;
       }
       humanTitle.textContent = "This call costs $0.01 USDC";
-      humanBody.textContent = "Pay one penny. We then look for a live paid API and return its URL, or tell you if nothing is up.";
+      const q = ((need && need.value) || "").trim() || "weather";
+      humanBody.textContent = "Unpaid POST /route. Sign PAYMENT-SIGNATURE and retry, or Pay $0.01 on Base if an injected wallet is present. curl -sS -D - https://402signal.com/route -H 'Content-Type: application/json' -d " + JSON.stringify({need: q});
       return;
     }
     if (code === 200 && parsed && parsed.live && parsed.url) {
@@ -90,6 +95,15 @@
     if (code === 402) status.className = "http-402";
     else if (code === 200) status.className = "http-ok";
     else status.className = "http-dead";
+    if (code === 200 && parsed && typeof parsed === "object") {
+      if (parsed.url) renderRecommend(parsed, { probed: true });
+      renderObserved(parsed);
+    } else if (code === 503 && parsed && typeof parsed === "object") {
+      renderObserved(parsed);
+    } else if (code === 402) {
+      const obs = document.getElementById("observed-card");
+      if (obs) obs.hidden = true;
+    }
   }
 
   function showClientError(message) {
@@ -350,9 +364,259 @@
   applyHomeTab();
   window.addEventListener("hashchange", applyHomeTab);
 
+  const EMPTY_STATE = "Index is filling. Preview has no hits yet. Pulse counts are 0. Probe live still 402s /route.";
+
+  function unknown(v) {
+    if (v === null || v === undefined || v === "") return "unknown";
+    return String(v);
+  }
+
+  function hostOf(url) {
+    try {
+      return new URL(url).hostname || url;
+    } catch (e) {
+      return url || "";
+    }
+  }
+
+  function yn(ok) {
+    return ok ? "yes" : "no";
+  }
+
+  function showEmpty(text) {
+    const el = document.getElementById("empty-state");
+    if (el) {
+      el.hidden = false;
+      el.textContent = text || EMPTY_STATE;
+    }
+    renderRecommend(null);
+    const obs = document.getElementById("observed-card");
+    if (obs) obs.hidden = true;
+  }
+
+  function hideEmpty() {
+    const el = document.getElementById("empty-state");
+    if (el) el.hidden = true;
+  }
+
+  function firstHit(parsed) {
+    if (!parsed || typeof parsed !== "object") return null;
+    const hits = parsed.hits;
+    if (Array.isArray(hits) && hits.length) return hits[0];
+    return null;
+  }
+
+  function railOf(hit) {
+    if (!hit || typeof hit !== "object") return "unknown";
+    const target = hit.target || {};
+    const accepts = target.accepts || hit.accepts || [];
+    let net = hit.chain || hit.rail || hit.network || target.network;
+    if (!net && accepts.length && accepts[0]) net = accepts[0].network;
+    return unknown(net);
+  }
+
+  function priceOf(hit) {
+    if (!hit || typeof hit !== "object") return "unknown";
+    const target = hit.target || {};
+    const claimed = hit.claimed || {};
+    return unknown(hit.price || target.displayAmount || claimed.amount || hit.amount);
+  }
+
+  function invocableOf(hit) {
+    if (!hit || typeof hit !== "object") return "unknown";
+    if (typeof hit.invocable === "boolean") return yn(hit.invocable);
+    if (typeof hit.inputSchema_present === "boolean") return yn(hit.inputSchema_present);
+    const target = hit.target || {};
+    if (target.inputSchema) return "yes";
+    return "unknown";
+  }
+
+  function verifiedOf(hit, opts) {
+    opts = opts || {};
+    if (!hit) return "not_probed";
+    if (opts.probed || hit.verified_seconds_ago === 0 || hit.verified_seconds_ago) {
+      const n = hit.verified_seconds_ago;
+      if (n === 0 || n) return "verified " + n + "s ago";
+    }
+    if (hit.not_probed || opts.not_probed) return "not_probed";
+    return "not_probed";
+  }
+
+  function renderRecommend(hit, opts) {
+    const card = document.getElementById("recommend-card");
+    const title = document.getElementById("recommend-title");
+    const body = document.getElementById("recommend-body");
+    const why = document.getElementById("recommend-why");
+    if (!card || !title || !body || !why) return;
+    if (!hit) {
+      card.hidden = true;
+      return;
+    }
+    opts = opts || {};
+    card.hidden = false;
+    const url = hit.url || "";
+    const name = hit.label || hit.need || hit.serviceName || hit.name || hostOf(url) || "Recommended";
+    title.textContent = name;
+    const lines = [
+      url || "unknown",
+      "Price " + priceOf(hit),
+      "Rail " + railOf(hit),
+      "Invocable " + invocableOf(hit),
+      verifiedOf(hit, opts)
+    ];
+    const also = hit.also_on;
+    if (Array.isArray(also) && also.length) {
+      lines.push("Also on " + also.join(", "));
+    }
+    body.textContent = lines.join("\n");
+    why.textContent = "Best capability match in the current index.";
+  }
+
+  function renderObserved(parsed) {
+    const card = document.getElementById("observed-card");
+    const body = document.getElementById("observed-body");
+    if (!card || !body) return;
+    if (!parsed || typeof parsed !== "object") {
+      card.hidden = true;
+      return;
+    }
+    if (parsed.accepts && !parsed.claimed && !parsed.observed && parsed.live == null) {
+      card.hidden = true;
+      return;
+    }
+    const claimed = parsed.claimed || {};
+    const observed = parsed.observed || {};
+    const catPrice = unknown(claimed.amount);
+    const catPay = unknown(claimed.payTo);
+    const obsStatus = observed.http_status != null ? observed.http_status : parsed.status;
+    const http402 = obsStatus === 402 || parsed.has_402_challenge === true;
+    const obsPay = observed.payTo || parsed.payTo || "";
+    const payMatch = catPay !== "unknown" && obsPay && String(catPay).toLowerCase() === String(obsPay).toLowerCase();
+    const schema = observed.schema_present === 1 || observed.schema_present === true || parsed.invocable === true || !!(parsed.target && parsed.target.inputSchema);
+    const latency = observed.latency_ms != null ? observed.latency_ms : parsed.latency_ms;
+    const verified = parsed.verified_seconds_ago;
+    const flags = [];
+    if (parsed.payTo_changed || (parsed.risk && parsed.risk.indexOf("payTo_changed") >= 0)) flags.push("payTo_changed");
+    if (!schema) flags.push("missing schema");
+    if (http402 && !obsPay) flags.push("402 without payTo");
+    body.textContent = [
+      "Catalog says: price " + catPrice + " / payTo " + catPay,
+      "402Signal observed: HTTP 402 " + yn(http402) + " · payTo match " + yn(payMatch) + " · schema " + yn(schema) + " · latency " + unknown(latency) + "ms · verified " + unknown(verified) + "s ago"
+    ].join("\n") + (flags.length ? "\nFlags: " + flags.join(", ") : "");
+    card.hidden = false;
+  }
+
+  async function runPreview() {
+    if (!hasContent()) {
+      showEmpty(EMPTY_STATE);
+      return;
+    }
+    status.textContent = "preview…";
+    status.className = "muted";
+    try {
+      const res = await fetch("/preview?need=" + encodeURIComponent(((need && need.value) || "").trim()), { cache: "no-store" });
+      const text = await res.text();
+      let parsed;
+      try { parsed = JSON.parse(text); } catch (e) { parsed = null; }
+      if (res.status === 502) {
+        showEmpty("Preview fetch 502. " + EMPTY_STATE);
+        return;
+      }
+      if (!res.ok) {
+        showEmpty("Preview fetch " + res.status + ". " + EMPTY_STATE);
+        return;
+      }
+      const hit = firstHit(parsed);
+      if (!hit) {
+        showEmpty(EMPTY_STATE);
+        return;
+      }
+      hideEmpty();
+      if (parsed && parsed.not_probed) hit.not_probed = true;
+      renderRecommend(hit, { not_probed: true });
+      const obs = document.getElementById("observed-card");
+      if (obs) obs.hidden = true;
+      status.textContent = "preview";
+    } catch (err) {
+      showEmpty("Preview fetch failed. " + EMPTY_STATE);
+    }
+  }
+
+  async function runProbe() {
+    if (!hasContent()) {
+      showClientError("need is required");
+      return;
+    }
+    status.textContent = "reading 402…";
+    status.className = "muted";
+    if (human) human.hidden = true;
+    try {
+      const res = await fetch("/route", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(requestBody()),
+      });
+      const text = await res.text();
+      let parsed;
+      try { parsed = JSON.parse(text); } catch (e) { parsed = text; }
+      showResult(res.status, parsed);
+    } catch (err) {
+      showClientError(err && err.message ? String(err.message) : String(err));
+    }
+  }
+
+  async function loadRails() {
+    const box = document.getElementById("rail-chips");
+    if (!box) return;
+    box.textContent = "";
+    try {
+      const res = await fetch("/rails", { cache: "no-store" });
+      if (!res.ok) return;
+      const parsed = await res.json();
+      const rails = parsed && parsed.rails;
+      if (!Array.isArray(rails)) return;
+      rails.forEach(function (row) {
+        if (!row || typeof row !== "object") return;
+        const name = row.network || row.rail || row.name;
+        if (!name) return;
+        const span = document.createElement("span");
+        span.className = "chip rail-chip" + (row.up === false ? " down" : "");
+        const bits = [String(name)];
+        if (row.up === true) bits.push("up");
+        else if (row.up === false) bits.push("down");
+        if (row.latency_ms != null && row.latency_ms !== "") bits.push(String(row.latency_ms) + "ms");
+        span.textContent = bits.join(" ");
+        box.appendChild(span);
+      });
+    } catch (e) {}
+  }
+
+  const chips = document.getElementById("need-chips");
+  if (chips) {
+    chips.addEventListener("click", function (ev) {
+      const btn = ev.target.closest("[data-need]");
+      if (!btn || !need) return;
+      need.value = btn.getAttribute("data-need") || "";
+      chips.querySelectorAll(".chip").forEach(function (c) { c.classList.remove("active"); });
+      btn.classList.add("active");
+      syncPreview();
+    });
+  }
+  const previewBtn = document.getElementById("preview-btn");
+  if (previewBtn) previewBtn.addEventListener("click", function (ev) {
+    ev.preventDefault();
+    runPreview();
+  });
+  const probeBtn = document.getElementById("probe-btn");
+  if (probeBtn) probeBtn.addEventListener("click", function (ev) {
+    ev.preventDefault();
+    runProbe();
+  });
+
   revealPayControl();
   window.addEventListener("ethereum#initialized", revealPayControl, { once: true });
   setTimeout(revealPayControl, 500);
   setTimeout(revealPayControl, 2000);
   syncPreview();
+  loadRails();
 })();
