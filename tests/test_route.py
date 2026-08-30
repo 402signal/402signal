@@ -92,16 +92,38 @@ class PaywallTests(unittest.TestCase):
         self.assertEqual(algo["payTo"], payment.DEFAULT_PAYTO_ALGORAND)
         self.assertEqual(algo["asset"], payment.USDC_ALGORAND_ASA)
         self.assertEqual(algo["extra"]["feePayer"], payment.ALGORAND_FEE_PAYER)
+        self.assertEqual(algo["extra"]["tag"], "x402-global-challenge")
+        self.assertNotIn("tag", base.get("extra") or {})
         sol = next(a for a in body["accepts"] if str(a.get("network","")).startswith("solana:"))
         self.assertEqual(sol["payTo"], payment.DEFAULT_PAYTO_SOLANA)
         self.assertEqual(sol["asset"], payment.USDC_SOLANA_MINT)
         self.assertEqual(sol["extra"]["feePayer"], payment.SOLANA_FEE_PAYER)
+        self.assertNotIn("tag", sol.get("extra") or {})
         bazaar = (body.get("extensions") or {}).get("bazaar") or {}
         self.assertIn("info", bazaar)
         self.assertEqual(bazaar["info"]["input"]["method"], "POST")
         self.assertEqual(bazaar["info"]["input"]["type"], "http")
 
+    def test_official_requirements_tag_algo_only(self):
+        tagged = {"tag": "x402-global-challenge", "name": "USD Coin"}
+        algo = payment.official_requirements({
+            "network": payment.ALGORAND_MAINNET,
+            "extra": {},
+        })
+        self.assertEqual(algo["extra"]["tag"], "x402-global-challenge")
+        base = payment.official_requirements({
+            "network": payment.BASE_CAIP2,
+            "extra": dict(tagged),
+        })
+        self.assertNotIn("tag", base["extra"])
+        sol = payment.official_requirements({
+            "network": payment.SOLANA_MAINNET,
+            "extra": dict(tagged),
+        })
+        self.assertNotIn("tag", sol["extra"])
+
     def test_payto_from_env(self):
+
         os.environ["PAYTO_ADDRESS"] = "0x1111111111111111111111111111111111111111"
         try:
             status, body = _json_post(self.port, "/route", {"need": "weather"})

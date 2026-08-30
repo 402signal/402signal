@@ -275,6 +275,7 @@ def payment_required(resource_url: str, bazaar: dict | None = None) -> dict:
                     "facilitator": ALGORAND_FACILITATOR,
                     "feePayer": ALGORAND_FEE_PAYER,
                     "displayAmount": AMOUNT_USD,
+                    "tag": "x402-global-challenge",
                 },
             },
         ],
@@ -437,6 +438,7 @@ def official_requirements(accept: dict) -> dict:
     if rail == "solana":
         extra.setdefault("facilitator", SOLANA_FACILITATOR)
         extra.setdefault("feePayer", SOLANA_FEE_PAYER)
+        extra.pop("tag", None)
         return {
             "scheme": accept.get("scheme") or "exact",
             "network": SOLANA_MAINNET,
@@ -449,6 +451,7 @@ def official_requirements(accept: dict) -> dict:
     if rail == "algorand":
         extra.setdefault("facilitator", ALGORAND_FACILITATOR)
         extra.setdefault("feePayer", ALGORAND_FEE_PAYER)
+        extra.setdefault("tag", "x402-global-challenge")
         return {
             "scheme": accept.get("scheme") or "exact",
             "network": ALGORAND_MAINNET,
@@ -461,6 +464,7 @@ def official_requirements(accept: dict) -> dict:
     extra.setdefault("version", "2")
     extra.setdefault("facilitator", CDP_FACILITATOR)
     extra["caip2"] = BASE_CAIP2
+    extra.pop("tag", None)
     return {
         "scheme": accept.get("scheme") or "exact",
         "network": BASE_CAIP2,
