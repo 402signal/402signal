@@ -6,6 +6,7 @@ import time
 import unittest
 from http.client import HTTPConnection
 from http.server import ThreadingHTTPServer
+from pathlib import Path
 from unittest.mock import patch
 import urllib.error
 import urllib.request
@@ -57,6 +58,17 @@ def _get_full(port, path, extra_headers=None):
     hdrs = {k.lower(): v for k, v in res.getheaders()}
     conn.close()
     return res.status, raw.decode("utf-8"), hdrs
+
+
+def _head(port, path, extra_headers=None):
+    conn = HTTPConnection("127.0.0.1", port, timeout=5)
+    headers = dict(extra_headers or {})
+    conn.request("HEAD", path, headers=headers)
+    res = conn.getresponse()
+    raw = res.read()
+    hdrs = {k.lower(): v for k, v in res.getheaders()}
+    conn.close()
+    return res.status, raw, hdrs
 
 
 class PaywallTests(unittest.TestCase):
@@ -245,13 +257,24 @@ class PaywallTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn("402Signal", html)
         self.assertIn("Paid APIs go dark. We check before you pay them.", html)
-        self.assertIn("What you get", html)
+        self.assertIn("What it is", html)
+        self.assertIn("Fail-closed x402 router", html)
+        self.assertIn("<h2>Now</h2>", html)
+        self.assertIn("prefer_network", html)
+        self.assertIn("miss_reason", html)
+        self.assertIn("HEAD 200", html)
+        self.assertIn("How it works", html)
         self.assertIn("How to use it", html)
-        self.assertIn("Try one of these", html)
-        self.assertIn('id="route-samples"', html)
+        self.assertNotIn("What /route is", html)
+        self.assertNotIn("For agents", html)
+        self.assertNotIn(">Pay on Base<", html)
+        self.assertNotIn("<h2>Next</h2>", html)
+        self.assertNotIn("Try one of these", html)
+        self.assertNotIn('id="route-samples"', html)
         self.assertNotIn("Listed right now", html)
         self.assertNotIn("What's listed", html)
-        self.assertIn("Examples", html)
+        self.assertIn("Pulse", html)
+        self.assertNotIn("href=\"/dashboard\"", html)
         self.assertIn("@402Signal", html)
         self.assertIn("Listed on", html)
         self.assertIn("https://glama.ai/mcp/servers/402signal/402signal", html)
@@ -264,11 +287,16 @@ class PaywallTests(unittest.TestCase):
         self.assertNotIn("24klabs.ai/listing/402signal", html)
         self.assertNotIn("api.cdp.coinbase.com", html)
         self.assertIn("$0.01", html)
-        self.assertIn("Find a live URL", html)
+        self.assertNotIn("Find a live URL", html)
+        self.assertIn("GET /preview", html)
         self.assertIn("POST /route", html)
-        self.assertIn("honest miss", html.lower())
+        self.assertIn("typed miss_reason", html)
+        self.assertIn("penny probe", html)
         self.assertIn("What do you need?", html)
-        self.assertIn("Show technical details", html)
+        self.assertIn("402signal@gmail.com", html)
+        self.assertIn("https://github.com/402signal/402signal", html)
+        self.assertIn("PAYMENT-SIGNATURE", html)
+        self.assertNotIn("Show technical details", html)
         self.assertNotIn("Fail-closed x402 routing", html)
         self.assertNotIn("Catalogs go stale", html)
         self.assertNotIn("We are a router.", html)
@@ -280,19 +308,17 @@ class PaywallTests(unittest.TestCase):
         with open(js_path, encoding="utf-8") as fh:
             js = fh.read()
         self.assertIn("This call costs $0.01 USDC", js)
-        self.assertIn('fetch("/pulse")', js)
-        self.assertIn("need-chips", js)
-        self.assertIn("route-samples", js)
+        self.assertNotIn('fetch("/pulse")', js)
+        self.assertNotIn("need-chips", js)
+        self.assertNotIn("route-samples", js)
         self.assertIn('q.get("need")', js)
-        self.assertIn('q.get("url")', js)
+        self.assertNotIn('q.get("url")', js)
         self.assertIn("window.ethereum", js)
         self.assertIn("payBase", js)
-        self.assertIn("payAlgo", js)
-        self.assertIn("paymentGroup", js)
-        self.assertIn("paymentIndex", js)
-        self.assertIn("31566704", js)
-        self.assertIn("PeraWalletConnect", js)
-        self.assertIn("LuteConnect", js)
+        self.assertNotIn("payAlgo", js)
+        self.assertNotIn("PeraWalletConnect", js)
+        self.assertNotIn("LuteConnect", js)
+        self.assertNotIn("algosdk", js)
         self.assertIn("PAYMENT-SIGNATURE", js)
         self.assertIn("eth_signTypedData_v4", js)
         self.assertIn("wallet_switchEthereumChain", js)
@@ -300,20 +326,8 @@ class PaywallTests(unittest.TestCase):
         self.assertIn("10000", js)
         self.assertIn("eip155:8453", js)
         self.assertNotIn("wrapFetchWithPayment", js)
-        sample_idx = js.find('samplesBox.addEventListener("click"')
-        self.assertGreater(sample_idx, 0)
-        sample_chunk = js[sample_idx:sample_idx + 600]
-        self.assertIn("need.focus()", sample_chunk)
-        self.assertNotIn("payBase", sample_chunk)
-        self.assertNotIn("payAlgo", sample_chunk)
-        self.assertNotIn("eth_signTypedData", sample_chunk)
-        self.assertNotIn("PAYMENT-SIGNATURE", sample_chunk)
-        chip_idx = js.find('chips.addEventListener("click"')
-        self.assertGreater(chip_idx, 0)
-        chip_chunk = js[chip_idx:chip_idx + 400]
-        self.assertNotIn("payBase", chip_chunk)
-        self.assertNotIn("payAlgo", chip_chunk)
-        self.assertNotIn("eth_signTypedData", chip_chunk)
+        self.assertNotIn('samplesBox.addEventListener("click"', js)
+        self.assertNotIn('chips.addEventListener("click"', js)
         css_path = os.path.join(os.path.dirname(__file__), "..", "live402", "static", "styles.css")
         with open(css_path, encoding="utf-8") as fh:
             css = fh.read()
@@ -339,18 +353,21 @@ class PaywallTests(unittest.TestCase):
         self.assertNotIn("unpkg", html)
         self.assertNotIn("jsdelivr", html)
         self.assertIn("hidden", html)
-        self.assertIn('id="preview"', html)
-        self.assertIn("/dashboard", html)
-        self.assertIn("For agents", html)
+        self.assertNotIn('id="preview"', html)
+        self.assertIn("/preview", html)
+        self.assertIn("/llms.txt", html)
+        self.assertIn("/rails", html)
+        self.assertIn("/pulse", html)
+        self.assertNotIn("For agents", html)
         self.assertIn("POST https://402signal.com/route", html)
-        self.assertIn('{"need":"erc20 token balance"}', html)
+        self.assertIn('{"need":"weather"}', html)
         self.assertIn("/openapi.json", html)
-        self.assertIn("/mcp.json", html)
+        self.assertIn("https://402signal.com/mcp", html)
         self.assertIn("/.well-known/x402.json", html)
-        self.assertIn('data-need="erc20 token balance"', html)
-        self.assertIn('data-need="weather"', html)
-        self.assertIn('data-need="nft floor"', html)
-        self.assertIn('data-need="gas price"', html)
+        self.assertNotIn('data-need="erc20 token balance"', html)
+        self.assertNotIn('id="need-chips"', html)
+        self.assertNotIn('id="url"', html)
+        self.assertNotIn("Pay $0.01 USDC on Base or Algorand in this browser", html)
         self.assertIn("twitter:site", html)
         self.assertIn('og:title" content="402Signal"', html)
         self.assertIn('og:url" content="https://402signal.com"', html)
@@ -388,7 +405,7 @@ class PaywallTests(unittest.TestCase):
         self.assertIn("OPTIONS", headers.get("allow", ""))
         self.assertIn("$0.01", html)
         self.assertIn('href="/"', html)
-        self.assertIn("/dashboard", html)
+        self.assertIn("/pulse", html)
         self.assertIn("POST /route", html)
         self.assertIn("paid API", html)
         self.assertNotIn('{"error": "not found"}', html)
@@ -453,10 +470,11 @@ class PaywallTests(unittest.TestCase):
         self.assertEqual(
             csp,
             "default-src 'none'; script-src 'self'; "
-            "connect-src 'self' https://wallet-connect-a.perawallet.app https://wallet-connect-b.perawallet.app https://wallet-connect-c.perawallet.app https://wallet-connect-d.perawallet.app https://wallet-connect-e.perawallet.app https://wallet-connect-f.perawallet.app https://wallet-connect-g.perawallet.app https://wallet-connect-h.perawallet.app wss://wallet-connect-a.perawallet.app wss://wallet-connect-b.perawallet.app wss://wallet-connect-c.perawallet.app wss://wallet-connect-d.perawallet.app wss://wallet-connect-e.perawallet.app wss://wallet-connect-f.perawallet.app wss://wallet-connect-g.perawallet.app wss://wallet-connect-h.perawallet.app; "
+            "connect-src 'self'; "
             "style-src 'self'; img-src 'self' data:; base-uri 'self'; "
             "frame-ancestors 'none'",
         )
+        self.assertNotIn("perawallet", csp)
         prev_status, prev_raw = _get(self.port, "/preview?need=weather")
         self.assertEqual(prev_status, 200)
         self.assertTrue(json.loads(prev_raw).get("not_probed"))
@@ -471,7 +489,7 @@ class PaywallTests(unittest.TestCase):
         self.assertNotIn('id="pay-algo"', html)
         self.assertNotIn("mnemonic", html.lower())
         static_dir = os.path.join(os.path.dirname(__file__), "..", "live402", "static")
-        for name in ("app.js", "pera.js", "lute.js", "index.html"):
+        for name in ("app.js", "index.html"):
             with open(os.path.join(static_dir, name), encoding="utf-8") as fh:
                 text = fh.read()
             self.assertNotIn("mnemonic", text.lower(), msg=name)
@@ -483,26 +501,20 @@ class PaywallTests(unittest.TestCase):
                 text = fh.read()
             self.assertNotIn("mnemonic", text.lower(), msg=name)
             self.assertNotIn("secretkey", text.lower().replace(" ", ""), msg=name)
-        for path in ("/algosdk.min.js", "/pera.js", "/lute.js", "/app.js"):
-            st, body, headers = _get_full(self.port, path)
-            self.assertEqual(st, 200, msg=path)
-            self.assertNotIn("text/html", headers.get("content-type", ""))
-            self.assertGreater(len(body), 100)
+        for gone in ("pera.js", "lute.js", "algosdk.min.js"):
+            self.assertFalse((Path(static_dir) / gone).exists(), gone)
+        st, body, headers = _get_full(self.port, "/app.js")
+        self.assertEqual(st, 200)
+        self.assertNotIn("text/html", headers.get("content-type", ""))
+        self.assertGreater(len(body), 100)
         js_path = os.path.join(static_dir, "app.js")
         with open(js_path, encoding="utf-8") as fh:
             js = fh.read()
-        self.assertIn("payAlgoBtn.hidden = false", js)
-        self.assertIn("extra.feePayer", js)
-        self.assertIn("extra.facilitator", js)
+        self.assertNotIn("payAlgoBtn", js)
         self.assertIn('fetch("/route"', js)
-        self.assertIn("Algorand-Sender", js)
-        self.assertIn("unsignedGroup", js)
-        self.assertIn("paymentGroup", js)
-        self.assertIn('scheme: accept.scheme || "exact"', js)
-        with open(os.path.join(static_dir, "pera.js"), encoding="utf-8") as fh:
-            pera = fh.read()
-        self.assertIn("perawallet-wc://wc?uri=", pera)
-        self.assertIn("wallet-connect-a.perawallet.app", pera)
+        self.assertNotIn("Algorand-Sender", js)
+        self.assertNotIn("PeraWalletConnect", js)
+        self.assertNotIn("perawallet-wc://", js)
 
     def test_csp_script_src_self_only(self):
         _st, _raw, headers = _get_full(self.port, "/")
@@ -514,6 +526,9 @@ class PaywallTests(unittest.TestCase):
         self.assertNotIn("https://fonts.googleapis.com", csp)
         self.assertNotIn("https://unpkg.com", csp)
         self.assertNotIn("https://cdn.", csp)
+        self.assertNotIn("perawallet", csp)
+        connect = csp.split("connect-src")[1].split(";")[0].strip()
+        self.assertEqual(connect, "'self'")
 
     def test_dashboard_page(self):
         status, html = _get(self.port, "/dashboard")
@@ -1151,6 +1166,54 @@ class UnitHelpers(unittest.TestCase):
         env, miss = probe.parse_envelope(402, {}, b'{"x402Version":2,"accepts":[]}')
         self.assertIsNone(env)
         self.assertEqual(miss, "no_402_envelope")
+        env, miss = probe.parse_envelope(
+            402, {}, b'{"x402Version":2,"accepts":[{"network":"base"}]}'
+        )
+        self.assertIsNone(env)
+        self.assertEqual(miss, "no_payto")
+
+
+    def test_rank_prefer_network_and_settlements(self):
+        ranked = probe.rank_resources(
+            "weather forecast", fixtures.load_resources(), prefer_network="algorand"
+        )
+        urls = [probe._resource_url(r) for r in ranked]
+        self.assertTrue(urls)
+        self.assertIn("/algorand/weather", urls[0])
+        high = {
+            "url": "https://hi.example/weather",
+            "description": "weather forecast",
+            "x402Requests": 9000,
+            "accepts": [{"network": "eip155:8453", "payTo": "0xabc", "amount": "10000"}],
+        }
+        low = {
+            "url": "https://lo.example/weather",
+            "description": "weather forecast",
+            "x402Requests": 1,
+            "accepts": [{"network": "eip155:8453", "payTo": "0xabc", "amount": "10000"}],
+        }
+        ranked = probe.rank_resources("weather", [low, high])
+        self.assertEqual(probe._resource_url(ranked[0]), high["url"])
+
+    def test_skip_localhost_and_param_templates(self):
+        self.assertTrue(probe.skip_candidate_url("https://localhost/weather"))
+        self.assertTrue(probe.skip_candidate_url("https://127.0.0.1/weather"))
+        self.assertTrue(probe.skip_candidate_url("https://api.example/v0/inboxes/:inbox_id/messages"))
+        self.assertTrue(probe.skip_candidate_url("https://api.example/users/{id}"))
+        self.assertFalse(probe.skip_candidate_url("https://api.example/weather"))
+        from live402 import pulse as pulse_mod
+        samples = pulse_mod._samples_for_items(
+            "base",
+            [
+                {"url": "https://localhost/weather", "description": "weather", "accepts": [{"amount": "10000"}]},
+                {"url": "https://api.paysponge.com/v0/inboxes/:inbox_id/messages", "accepts": [{"amount": "10000"}]},
+                {"url": "https://w.example/weather", "description": "weather", "accepts": [{"amount": "10000"}]},
+            ],
+        )
+        urls = [s["url"] for s in samples]
+        self.assertTrue(all("localhost" not in u for u in urls))
+        self.assertTrue(all(":inbox_id" not in u for u in urls))
+        self.assertTrue(any(u.endswith("/weather") for u in urls))
 
     def test_rank_weather(self):
         ranked = probe.rank_resources("weather forecast", fixtures.load_resources())
@@ -1566,6 +1629,38 @@ class ProductBriefTests(unittest.TestCase):
             mock_url.assert_not_called()
             mock_need.assert_not_called()
 
+    def test_head_discovery_paths_are_200(self):
+        for path in (
+            "/llms.txt",
+            "/openapi.json",
+            "/mcp.json",
+            "/preview?need=weather",
+            "/rails",
+            "/pulse",
+        ):
+            status, body, headers = _head(self.port, path)
+            self.assertEqual(status, 200, path)
+            self.assertEqual(body, b"", path)
+            self.assertTrue(headers.get("content-length"), path)
+            self.assertNotEqual(headers.get("content-length"), "0", path)
+
+    def test_preview_prefer_network_and_hit_fields(self):
+        from live402 import pulse as pulse_mod
+        pulse_mod.reset_cache()
+        status, raw = _get(self.port, "/preview?need=weather&prefer_network=algorand")
+        self.assertEqual(status, 200)
+        body = json.loads(raw)
+        self.assertTrue(body.get("not_probed"))
+        self.assertIn("hits", body)
+        if body["hits"]:
+            hit = body["hits"][0]
+            self.assertEqual(hit.get("chain"), "algorand")
+            for key in ("facilitator", "method", "inputSchema_present", "rails_up"):
+                self.assertIn(key, hit)
+            self.assertNotIn("live", hit)
+            if hit.get("facilitator"):
+                self.assertNotIn("x402.org", str(hit.get("facilitator")).lower())
+
     def test_rails_200(self):
         status, raw = _get(self.port, "/rails")
         self.assertEqual(status, 200)
@@ -1597,6 +1692,7 @@ class ProductBriefTests(unittest.TestCase):
         expected = {
             "no_candidates",
             "no_402_envelope",
+            "no_payto",
             "reachable_200",
             "probe_timeout",
             "quote_expired",
@@ -1619,14 +1715,14 @@ class ProductBriefTests(unittest.TestCase):
         from live402 import mcp as mcp_mod
         tools = mcp_mod.manifest()["tools"]
         route = next(t for t in tools if t.get("name") == "route")
-        self.assertIn(
-            "x402scan skips Algorand/GoPlausible; POST /route returns a currently-alive Algo 402 plus the target contract when that's what is live.",
-            route["description"],
-        )
+        self.assertLessEqual(len(route["description"]), 200)
+        self.assertIn("HTTP 402", route["description"])
+        self.assertIn("honest miss", route["description"])
         self.assertNotIn("Signal402", route["description"])
         self.assertEqual(route["inputSchema"].get("required"), ["need"])
+        self.assertIn("prefer_network", (route["inputSchema"].get("properties") or {}))
         props = (route.get("outputSchema") or {}).get("properties") or {}
-        for key in ("live", "url", "invocable", "target", "miss_reason", "tried", "latency_ms"):
+        for key in ("live", "url", "invocable", "target", "miss_reason", "tried", "latency_ms", "schema_source"):
             self.assertIn(key, props)
         bazaar = (mcp_mod.handle_mcp(
             {"jsonrpc": "2.0", "id": 2, "method": "tools/call",
@@ -1753,6 +1849,7 @@ class FixtureTargetTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertTrue(body["live"])
         self.assertTrue(body.get("invocable"))
+        self.assertEqual(body.get("schema_source"), "bazaar")
         target = body.get("target")
         self.assertIsInstance(target, dict)
         self.assertIsInstance(target.get("inputSchema"), dict)
@@ -1907,6 +2004,8 @@ class PublicRateLimitTests(unittest.TestCase):
         )
         self.assertEqual(status, 200)
         self.assertTrue(json.loads(raw).get("not_probed"))
+
+
 
 
 if __name__ == "__main__":

@@ -48,7 +48,8 @@ def run_probe(body: dict) -> tuple[int, dict]:
             result["miss_reason"] = probe.public_miss_reason(result.get("miss_reason")) or result.get("miss_reason")
         return 503, result
 
-    result = probe.route_need(need, deadline=deadline)
+    prefer = probe.normalize_prefer_network(body.get("prefer_network"))
+    result = probe.route_need(need, deadline=deadline, prefer_network=prefer)
     result.setdefault("payTo", None)
     result.setdefault("traction", "unknown")
     if result.get("live"):

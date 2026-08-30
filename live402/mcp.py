@@ -6,16 +6,8 @@ from live402 import payment, pulse
 from live402.route import handle_route
 
 ROUTE_DESCRIPTION = (
-    "402Signal route: pay $0.01 USDC (10000 atomic, 6 decimals) for a live payable "
-    "URL or an honest miss. Unpaid tools/call returns HTTP 402. Retry with "
-    "PAYMENT-SIGNATURE. HTTP 200 = live unpaid 402 envelope plus target contract "
-    "(method, inputSchema, outputSchema, accepts, facilitator, amountAtomic, "
-    "displayAmount, timeoutSeconds). HTTP 503 = miss (typed miss_reason). "
-    "POST, not GET, to pay. Solana/Algorand accepts include extra.feePayer. "
-    "x402scan skips Algorand/GoPlausible; POST /route returns a currently-alive "
-    "Algo 402 plus the target contract when that's what is live. "
-    "Do not default facilitator to x402.org. Live MCP: https://402signal.com/mcp "
-    "and https://402signal.com/mcp.json."
+    "Pay $0.01 USDC for a live payable URL or an honest miss. Unpaid tools/call "
+    "returns HTTP 402. Retry with PAYMENT-SIGNATURE."
 )
 
 PREVIEW_DESCRIPTION = (
@@ -29,6 +21,11 @@ INPUT_SCHEMA = {
     "properties": {
         "need": {"type": "string", "description": "What to route (plain English)."},
         "url": {"type": "string", "description": "Optional https URL to probe."},
+        "prefer_network": {
+            "type": "string",
+            "enum": ["base", "solana", "algorand"],
+            "description": "Prefer this pay-in rail when ranking catalog hits.",
+        },
     },
     "required": ["need"],
 }
@@ -57,6 +54,7 @@ OUTPUT_SCHEMA = {
             "enum": [
                 "no_candidates",
                 "no_402_envelope",
+                "no_payto",
                 "reachable_200",
                 "probe_timeout",
                 "quote_expired",
@@ -68,6 +66,7 @@ OUTPUT_SCHEMA = {
         },
         "tried": {"type": "integer"},
         "latency_ms": {"type": ["integer", "null"]},
+        "schema_source": {"type": ["string", "null"], "enum": ["envelope", "catalog", "bazaar", None]},
     },
 }
 
@@ -75,6 +74,11 @@ PREVIEW_INPUT_SCHEMA = {
     "type": "object",
     "properties": {
         "need": {"type": "string", "description": "What to look up in the cache."},
+        "prefer_network": {
+            "type": "string",
+            "enum": ["base", "solana", "algorand"],
+            "description": "Prefer this pay-in rail when ranking cached hits.",
+        },
     },
     "required": ["need"],
 }
@@ -158,7 +162,8 @@ def _preview_result(args: dict) -> dict:
     need = ""
     if isinstance(args, dict) and isinstance(args.get("need"), str):
         need = args.get("need") or ""
-    return pulse.preview_need(need)
+    prefer = args.get("prefer_network") if isinstance(args, dict) else None
+    return pulse.preview_need(need, prefer_network=prefer)
 
 
 def handle_mcp(payload: dict, headers, resource_url: str) -> tuple[int, dict, dict | None]:

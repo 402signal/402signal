@@ -414,6 +414,39 @@ def _mixed_samples(chains: dict) -> list[dict]:
     return out
 
 
+def _item_facilitator(item: dict) -> str | None:
+    """Echo facilitator URL from accepts extra. Never invent x402.org."""
+    for acc in _accepts(item):
+        extra = acc.get("extra") if isinstance(acc.get("extra"), dict) else {}
+        raw = extra.get("facilitator")
+        url = None
+        if isinstance(raw, str) and raw.strip().startswith("https://"):
+            url = raw.strip()
+        elif isinstance(raw, dict):
+            cand = str(raw.get("url") or "").strip()
+            if cand.startswith("https://"):
+                url = cand
+        if url:
+            return url
+    return None
+
+
+def _rails_up_map() -> dict[str, bool]:
+    try:
+        from live402 import rails as rails_mod
+        data = rails_mod.get_rails()
+    except Exception:
+        return {}
+    out: dict[str, bool] = {}
+    for row in data.get("rails") or []:
+        if not isinstance(row, dict):
+            continue
+        name = str(row.get("network") or "")
+        if name:
+            out[name] = bool(row.get("up"))
+    return out
+
+
 def _item_price_label(item: dict) -> str:
     accepts = _accepts(item)
     if accepts:
@@ -450,6 +483,8 @@ def _samples_for_items(chain: str, items: list[dict]) -> list[dict]:
         href = _sample_href(url)
         if not href:
             continue
+        if probe.skip_candidate_url(url):
+            continue
         if _is_ours(url):
             continue
         need = sample_need_for(item, url)
@@ -462,6 +497,9 @@ def _samples_for_items(chain: str, items: list[dict]) -> list[dict]:
             "url": href,
             "price": _item_price_label(item),
             "chain": chain,
+            "facilitator": _item_facilitator(item),
+            "method": probe.extract_method(item),
+            "inputSchema_present": bool(probe.extract_input_schema(item)),
         }
         if tid in PREFERRED_SAMPLE_THEMES:
             preferred_by_theme[tid].append(sample)
@@ -775,7 +813,7 @@ def get_pulse() -> dict:
     return built
 
 
-def preview_need(need: str) -> dict:
+def preview_need(need: str, prefer_network: str | None = None) -> dict:
     """Cached catalog preflight. Never probes. Never charges."""
     raw = (need or "").strip()
     pulse = get_pulse()
@@ -791,22 +829,30 @@ def preview_need(need: str) -> dict:
             "miss_reason": "invalid_need",
         }
     q = probe._tokens(raw)
-    named = named_chain(raw)
+    prefer = probe.normalize_prefer_network(prefer_network)
+    named = prefer or named_chain(raw)
     hits: list[dict] = []
     seen: set[tuple[str, str]] = set()
     samples = list(pulse.get("samples") or [])
     chains = pulse.get("chains") or {}
     for chain in CHAINS:
         samples.extend(list((chains.get(chain) or {}).get("samples") or []))
+    rails_up = _rails_up_map()
+    by_need_chains: dict[str, set[str]] = {}
     scored: list[tuple[int, int, dict]] = []
     for sample in samples:
         if not isinstance(sample, dict):
             continue
         url = str(sample.get("url") or "").strip()
+        if probe.skip_candidate_url(url):
+            continue
         chain = str(sample.get("chain") or "")
+        need_key = str(sample.get("need") or sample.get("label") or "").strip().lower()
+        if need_key and chain:
+            by_need_chains.setdefault(need_key, set()).add(chain)
         if named and chain != named:
             continue
-        key = (str(sample.get("need") or "").lower(), url)
+        key = (need_key, url)
         if key in seen:
             continue
         seen.add(key)
@@ -824,21 +870,30 @@ def preview_need(need: str) -> dict:
             continue
         # Ranking/selection only. Do not mark live — preview is unpaid cache, not a probe.
         algo_lead = 0 if (named is None and chain == "algorand") else 1
-        scored.append(
-            (
-                algo_lead,
-                -score,
-                {
-                    "need": sample.get("need") or sample.get("label"),
-                    "label": sample.get("label") or sample.get("need"),
-                    "url": url,
-                    "price": sample.get("price"),
-                    "chain": chain or None,
-                },
-            )
-        )
+        fac = sample.get("facilitator")
+        if isinstance(fac, str) and fac.strip().startswith("https://"):
+            fac_url = fac.strip()
+        else:
+            fac_url = None
+        row = {
+            "need": sample.get("need") or sample.get("label"),
+            "label": sample.get("label") or sample.get("need"),
+            "url": url,
+            "price": sample.get("price"),
+            "chain": chain or None,
+            "facilitator": fac_url,
+            "method": sample.get("method") or "POST",
+            "inputSchema_present": bool(sample.get("inputSchema_present")),
+            "rails_up": rails_up.get(chain) if chain else None,
+        }
+        scored.append((algo_lead, -score, row))
     scored.sort()
     for _lead, _neg, row in scored[:8]:
+        need_key = str(row.get("need") or "").strip().lower()
+        chain = str(row.get("chain") or "")
+        others = sorted((by_need_chains.get(need_key) or set()) - ({chain} if chain else set()))
+        if others:
+            row["also_on"] = others
         hits.append(row)
     return {
         "need": raw,

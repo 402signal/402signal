@@ -23,13 +23,11 @@ DEFAULT_PREVIEW_RPM = 180
 DEFAULT_PUBLIC_RPM = 180
 FACILITATOR_ROUTE_RPM = 180
 HSTS = "max-age=31536000"
-# script-src 'self' only (vendor /algosdk.min.js /pera.js /lute.js; no CDN).
-# connect-src prefers 'self'. Pinned extras are Pera WalletConnect v1 bridges
-# wallet-connect-[a-h].perawallet.app (https + wss) for iPhone Pera. Browser
-# does not call algod or the facilitator. Lute popup is postMessage to lute.app.
+# script-src 'self' only (no vendor wallet scripts, no CDN).
+# connect-src is 'self' only. Homepage Base pay POSTs /route; no WalletConnect.
 CSP = (
     "default-src 'none'; script-src 'self'; "
-    "connect-src 'self' https://wallet-connect-a.perawallet.app https://wallet-connect-b.perawallet.app https://wallet-connect-c.perawallet.app https://wallet-connect-d.perawallet.app https://wallet-connect-e.perawallet.app https://wallet-connect-f.perawallet.app https://wallet-connect-g.perawallet.app https://wallet-connect-h.perawallet.app wss://wallet-connect-a.perawallet.app wss://wallet-connect-b.perawallet.app wss://wallet-connect-c.perawallet.app wss://wallet-connect-d.perawallet.app wss://wallet-connect-e.perawallet.app wss://wallet-connect-f.perawallet.app wss://wallet-connect-g.perawallet.app wss://wallet-connect-h.perawallet.app; "
+    "connect-src 'self'; "
     "style-src 'self'; img-src 'self' data:; base-uri 'self'; "
     "frame-ancestors 'none'"
 )
@@ -157,7 +155,7 @@ class Handler(SimpleHTTPRequestHandler):
 
     def _cors(self) -> None:
         self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Methods", "GET, HEAD, POST, OPTIONS")
         self.send_header(
             "Access-Control-Allow-Headers",
             "Content-Type, PAYMENT-SIGNATURE, PAYMENT-PAYLOAD, X-PAYMENT, PAYMENT-RESPONSE, Algorand-Sender, X-Algorand-Sender",
@@ -178,7 +176,8 @@ class Handler(SimpleHTTPRequestHandler):
         for key, val in headers.items():
             self.send_header(key, val)
         self.end_headers()
-        self.wfile.write(body)
+        if not getattr(self, "_omit_body", False):
+            self.wfile.write(body)
 
     def _text(self, code: int, body: str, content_type: str = "text/plain; charset=utf-8") -> None:
         data = body.encode("utf-8")
@@ -188,7 +187,8 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_header("Content-Length", str(len(data)))
         self._cors()
         self.end_headers()
-        self.wfile.write(data)
+        if not getattr(self, "_omit_body", False):
+            self.wfile.write(data)
 
     def _html(self, code: int, body: str, extra_headers: dict | None = None) -> None:
         data = body.encode("utf-8")
@@ -201,7 +201,8 @@ class Handler(SimpleHTTPRequestHandler):
         for key, val in headers.items():
             self.send_header(key, val)
         self.end_headers()
-        self.wfile.write(data)
+        if not getattr(self, "_omit_body", False):
+            self.wfile.write(data)
 
     def _wants_html(self) -> bool:
         """Browsers send text/html. Agents, curl, and crawlers get JSON 402."""
@@ -245,11 +246,37 @@ class Handler(SimpleHTTPRequestHandler):
         self._cors()
         self.end_headers()
 
+
+    def do_HEAD(self) -> None:
+        parsed = urlparse(self.path)
+        head_ok = {
+            "/llms.txt",
+            "/openapi.json",
+            "/mcp.json",
+            "/preview",
+            "/rails",
+            "/pulse",
+        }
+        static_ok = {"/", "/index.html", "/styles.css", "/app.js", "/dashboard.js"}
+        if parsed.path in static_ok:
+            return SimpleHTTPRequestHandler.do_HEAD(self)
+        if parsed.path in head_ok:
+            self._omit_body = True
+            try:
+                return self.do_GET()
+            finally:
+                self._omit_body = False
+        self.send_response(404)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", "0")
+        self._cors()
+        self.end_headers()
+
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         if parsed.path in {"/", "/index.html"}:
             return SimpleHTTPRequestHandler.do_GET(self)
-        if parsed.path in {"/styles.css", "/app.js", "/dashboard.js", "/algosdk.min.js", "/pera.js", "/lute.js"}:
+        if parsed.path in {"/styles.css", "/app.js", "/dashboard.js"}:
             return SimpleHTTPRequestHandler.do_GET(self)
         if parsed.path == "/route":
             allow = {"Allow": "GET, POST, OPTIONS"}
@@ -268,9 +295,10 @@ class Handler(SimpleHTTPRequestHandler):
                 return self._json(429, {"error": "rate limit"})
             qs = parse_qs(parsed.query)
             need = (qs.get("need") or [""])[0]
+            prefer = (qs.get("prefer_network") or [""])[0]
             return self._json(
                 200,
-                pulse.preview_need(need),
+                pulse.preview_need(need, prefer_network=prefer),
                 extra_headers={"Cache-Control": "no-store"},
             )
         if parsed.path == "/rails":

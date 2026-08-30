@@ -41,6 +41,7 @@ MAX_REDIRECTS = 2
 MISS_REASONS = (
     "no_candidates",
     "no_402_envelope",
+    "no_payto",
     "reachable_200",
     "probe_timeout",
     "quote_expired",
@@ -52,6 +53,8 @@ MISS_REASONS = (
 _MISS_MAP = {
     "empty_402": "no_402_envelope",
     "no_accepts": "no_402_envelope",
+    "no_payto": "no_payto",
+    "missing_payto": "no_payto",
     "http_200_no_challenge": "reachable_200",
     "timeout": "probe_timeout",
     "no_match": "no_candidates",
@@ -173,17 +176,21 @@ def _bazaar_blobs(item: dict | None, envelope: dict | None) -> list[dict]:
     return out
 
 
-def extract_input_schema(item: dict | None, envelope: dict | None = None) -> dict | None:
-    for blob in (envelope, item):
-        if isinstance(blob, dict) and isinstance(blob.get("inputSchema"), dict) and blob["inputSchema"]:
-            schema = blob["inputSchema"]
-            if schema.get("properties") or schema.get("required") or schema.get("type"):
-                return schema
+def extract_input_schema_source(item: dict | None, envelope: dict | None = None) -> tuple[dict | None, str | None]:
+    """Return (schema, source). source is envelope, catalog, or bazaar."""
+    if isinstance(envelope, dict) and isinstance(envelope.get("inputSchema"), dict) and envelope["inputSchema"]:
+        schema = envelope["inputSchema"]
+        if schema.get("properties") or schema.get("required") or schema.get("type"):
+            return schema, "envelope"
+    if isinstance(item, dict) and isinstance(item.get("inputSchema"), dict) and item["inputSchema"]:
+        schema = item["inputSchema"]
+        if schema.get("properties") or schema.get("required") or schema.get("type"):
+            return schema, "catalog"
     for bazaar in _bazaar_blobs(item, envelope):
         info = bazaar.get("info") or {}
         inp = info.get("input") or {}
         if isinstance(inp, dict) and isinstance(inp.get("inputSchema"), dict) and inp["inputSchema"]:
-            return inp["inputSchema"]
+            return inp["inputSchema"], "bazaar"
         schema = bazaar.get("schema") or {}
         props = (schema.get("properties") or {}).get("input") if isinstance(schema, dict) else None
         if not isinstance(props, dict):
@@ -192,14 +199,19 @@ def extract_input_schema(item: dict | None, envelope: dict | None = None) -> dic
         for key in ("body", "queryParams", "inputSchema"):
             cand = inner.get(key) if inner else props.get(key)
             if isinstance(cand, dict) and (cand.get("properties") or cand.get("required")):
-                return cand
+                return cand, "bazaar"
         if props.get("properties") or props.get("required"):
             if props.get("type") == "object" or props.get("properties"):
                 # Avoid returning the whole input descriptor (type/method) as a body schema.
                 if "body" in inner or "queryParams" in inner or "method" in inner:
                     continue
-                return props
-    return None
+                return props, "bazaar"
+    return None, None
+
+
+def extract_input_schema(item: dict | None, envelope: dict | None = None) -> dict | None:
+    schema, _source = extract_input_schema_source(item, envelope)
+    return schema
 
 
 def extract_output_schema(item: dict | None, envelope: dict | None = None) -> dict | None:
@@ -320,10 +332,13 @@ def attach_invocable_target(result: dict, item: dict | None = None, envelope: di
     env = envelope if isinstance(envelope, dict) else result.get("envelope")
     target = build_target(item, env)
     result["target"] = target
-    schema = target.get("inputSchema")
+    schema, source = extract_input_schema_source(item, env)
     has_schema = isinstance(schema, dict) and bool(schema.get("properties") or schema.get("required"))
     live = bool(result.get("live"))
     result["invocable"] = bool(live and has_schema)
+    if result["invocable"] and source:
+        result["schema_source"] = source
+        target["schema_source"] = source
     if live and not result["invocable"]:
         result["miss_reason"] = "no_input_schema"
     elif not live:
@@ -505,6 +520,50 @@ def _https_url(url: str) -> str | None:
     return raw
 
 
+def skip_candidate_url(url: str) -> bool:
+    """Drop localhost and :param / {param} path templates from samples and probe candidates."""
+    raw = (url or "").strip()
+    if not raw:
+        return True
+    parsed = urlparse(raw)
+    host = _hostname(parsed)
+    if host in {"localhost", "localhost.localdomain", "ip6-localhost", "ip6-loopback"}:
+        return True
+    if host in {"127.0.0.1", "::1", "0.0.0.0"} or host.startswith("127."):
+        return True
+    for part in (parsed.path or "").split("/"):
+        if not part:
+            continue
+        if part.startswith(":") or part.startswith("{") or part.startswith("<"):
+            return True
+        if "{" in part or "}" in part:
+            return True
+    return False
+
+
+PREFER_NETWORKS = ("base", "solana", "algorand")
+
+
+def normalize_prefer_network(raw) -> str | None:
+    if not isinstance(raw, str):
+        return None
+    val = raw.strip().lower()
+    if val in PREFER_NETWORKS:
+        return val
+    return None
+
+
+def _settlement_score(item: dict | None) -> int:
+    """Numeric catalog traction used to rank live hits. Unknown -> 0."""
+    raw = _traction(item)
+    if not raw or raw == "unknown":
+        return 0
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return 0
+
+
 class _SSRFRedirectHandler(urllib.request.HTTPRedirectHandler):
     max_redirections = MAX_REDIRECTS
 
@@ -575,15 +634,21 @@ def _envelope_is_parseable(env: dict | None) -> bool:
 
 
 def _payto_from_envelope(env: dict | None) -> str | None:
+    """First non-empty accepts[].payTo. Empty 402s have no usable payTo."""
     if not env or not isinstance(env, dict):
         return None
     accepts = env.get("accepts") or []
-    if isinstance(accepts, list) and accepts:
-        first = accepts[0]
-        if isinstance(first, dict):
-            val = first.get("payTo")
-            if val and str(val).strip():
-                return str(val).strip()
+    if not isinstance(accepts, list):
+        return None
+    for acc in accepts:
+        if not isinstance(acc, dict):
+            continue
+        val = acc.get("payTo")
+        if val is None:
+            continue
+        text = str(val).strip()
+        if text:
+            return text
     return None
 
 
@@ -623,6 +688,8 @@ def parse_envelope(status: int | None, headers: dict[str, str], body: bytes) -> 
             envelope = body_env
 
     if envelope is not None:
+        if not _payto_from_envelope(envelope):
+            return None, "no_payto"
         return envelope, None
 
     return None, "no_402_envelope"
@@ -1073,10 +1140,13 @@ def score_need(need: str, item: dict) -> int:
     return score
 
 
-def rank_resources(need: str, items: list[dict]) -> list[dict]:
+def rank_resources(need: str, items: list[dict], prefer_network: str | None = None) -> list[dict]:
+    prefer = normalize_prefer_network(prefer_network)
     ranked = []
     for item in items:
         url = _resource_url(item)
+        if skip_candidate_url(url):
+            continue
         if not _https_url(url) and not fixtures.fixture_mode():
             continue
         if fixtures.fixture_mode() and not url:
@@ -1084,9 +1154,11 @@ def rank_resources(need: str, items: list[dict]) -> list[dict]:
         s = score_need(need, item)
         if s <= 0:
             continue
-        ranked.append((s, item))
-    ranked.sort(key=lambda pair: pair[0], reverse=True)
-    return [item for _, item in ranked]
+        rail = _item_rail(item)
+        prefer_hit = 1 if prefer and rail == prefer else 0
+        ranked.append((prefer_hit, s, _settlement_score(item), item))
+    ranked.sort(key=lambda pair: (pair[0], pair[1], pair[2]), reverse=True)
+    return [item for _, _, _, item in ranked]
 
 
 class _CatalogRedirectHandler(urllib.request.HTTPRedirectHandler):
@@ -1167,10 +1239,11 @@ def fetch_discovery(limit: int = 20) -> list[dict]:
     return merged
 
 
-def route_need(need: str, deadline: float | None = None) -> dict:
+def route_need(need: str, deadline: float | None = None, prefer_network: str | None = None) -> dict:
     """Fuzzy-match discovery, probe up to 5, first payable 402 wins. Else fail-closed."""
     if deadline is None:
         deadline = time.monotonic() + PROBE_BUDGET_SECONDS
+    prefer = normalize_prefer_network(prefer_network)
     try:
         items = fetch_discovery()
     except Exception:
@@ -1194,7 +1267,7 @@ def route_need(need: str, deadline: float | None = None) -> dict:
                 "status": None,
             },
         }
-    ranked = rank_resources(need, items)
+    ranked = rank_resources(need, items, prefer_network=prefer)
     tried = 0
     last = None
     for item in ranked[:MAX_PROBE]:

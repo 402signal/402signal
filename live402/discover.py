@@ -30,7 +30,7 @@ GUIDANCE = (
     "If inputSchema is missing, live may still be true with invocable:false and miss_reason no_input_schema. "
     "GET /mcp.json lists the MCP route tool (type mcp, toolName route); "
     "POST /mcp initialize and tools/list need no payment; tools/call route is the paid probe. "
-    "GET /preview?need= is a cached preflight (not_probed:true). GET /rails lists pay-in rails. "
+    "GET /preview?need= is a cached preflight (not_probed:true). Optional prefer_network=base|solana|algorand. GET /rails lists pay-in rails. "
     "GET /pulse and GET /dashboard are sample lookups. GET /health is {ok:true} only. "
     "Probe budget is under 60s; a hang returns 503 JSON with miss_reason probe_timeout."
 )
@@ -138,6 +138,7 @@ def openapi_spec(resource_url: str = ROUTE) -> dict:
             "payTo_changed": {"type": "boolean"},
             "traction": {"type": "string"},
             "miss_reason": {"type": "string", "enum": miss_enum},
+            "schema_source": {"type": ["string", "null"], "enum": ["envelope", "catalog", "bazaar"]},
             "target": target_schema,
             "probes": {"type": "array", "items": probe_item},
             "health": {
@@ -164,6 +165,11 @@ def openapi_spec(resource_url: str = ROUTE) -> dict:
                 "type": "string",
                 "description": "Optional https URL to probe instead of discovery.",
                 "example": "https://example.com/x402/balance",
+            },
+            "prefer_network": {
+                "type": "string",
+                "enum": ["base", "solana", "algorand"],
+                "description": "Prefer this pay-in rail when ranking catalog hits.",
             },
         },
         "required": ["need"],
@@ -385,7 +391,14 @@ def openapi_spec(resource_url: str = ROUTE) -> dict:
                             "required": True,
                             "schema": {"type": "string", "example": "weather"},
                             "description": "Plain-English lookup to match against cached samples.",
-                        }
+                        },
+                        {
+                            "in": "query",
+                            "name": "prefer_network",
+                            "required": False,
+                            "schema": {"type": "string", "enum": ["base", "solana", "algorand"]},
+                            "description": "Prefer this pay-in rail when ranking cached hits.",
+                        },
                     ],
                     "responses": {
                         "200": {
@@ -610,14 +623,14 @@ HTTP 200 = live URL plus target contract. HTTP 503 = typed miss_reason.
 
 - POST /route  $0.01 USDC on Base, Solana, or Algorand
 - x402scan skips Algorand/GoPlausible; POST /route returns a currently-alive Algo 402 plus the target contract when that's what is live.
-- Body: {"need": "what you want", "url": "https://optional"}
+- Body: {"need": "what you want", "url": "https://optional", "prefer_network": "base|solana|algorand"}
 - Agents that intend to pay should POST /route, not GET.
 - GET /route with Accept: application/json (or no Accept) returns HTTP 402 so crawlers can index payment. Browsers that send Accept: text/html get a human page.
 - Unpaid → HTTP 402 (amount 10000 atomic = $0.01, 6 decimals)
 - Paid live hit → HTTP 200 + URL that 402s with a payment envelope + target {method,inputSchema,outputSchema,accepts,facilitator,amountAtomic,displayAmount,timeoutSeconds}
 - If inputSchema is missing: live may be true, invocable false, miss_reason no_input_schema
 - Paid miss → HTTP 503 {live:false, miss_reason}
-- miss_reason enum: no_candidates, no_402_envelope, reachable_200, probe_timeout, quote_expired, invalid_need, upstream_5xx, ssrf, no_input_schema
+- miss_reason enum: no_candidates, no_402_envelope, no_payto, reachable_200, probe_timeout, quote_expired, invalid_need, upstream_5xx, ssrf, no_input_schema
 - POST /mcp tools/call name=route is the same paid probe (unpaid tools/call also 402s)
 - MCP bazaar type is mcp, toolName is route. Live MCP: https://402signal.com/mcp and /mcp.json
 
@@ -626,7 +639,7 @@ HTTP 200 = live URL plus target contract. HTTP 503 = typed miss_reason.
 - GET /  human homepage
 - GET /dashboard  sample lookups per chain (Base / Solana / Algorand)
 - GET /pulse  same snapshot as JSON, including samples[]
-- GET /preview?need=weather  cached hits + prices + freshness + not_probed:true (does not probe, does not charge)
+- GET /preview?need=weather  cached hits + prices + freshness + not_probed:true (does not probe, does not charge). Optional prefer_network=base|solana|algorand. HEAD 200 on /llms.txt /openapi.json /mcp.json /preview /rails /pulse.
 - GET /rails  three pay-in networks, asset, amountAtomic, facilitators, feePayers, maxTimeoutSeconds, per-rail up+latency
 - GET /health  {"ok":true}
 - GET /openapi.json

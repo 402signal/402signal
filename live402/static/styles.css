@@ -228,8 +228,8 @@ input:focus { outline: 2px solid var(--accent); background: var(--input); }
 .chip:hover, .chip:focus { border-color: var(--accent); color: var(--accent); outline: none; }
 .chip.active { border-color: var(--fox); color: var(--accent); background: var(--input); }
 .chip.sample { border-radius: 4px; text-align: left; }
-.teaser a, .agents a { color: var(--accent); }
-.teaser a:hover, .agents a:hover { color: var(--teal); }
+.teaser a, .agents a, .panel a, main > .muted a { color: var(--accent); }
+.teaser a:hover, .agents a:hover, .panel a:hover, main > .muted a:hover { color: var(--teal); }
 .agents .code { user-select: all; }
 
 .steps {
@@ -253,9 +253,3 @@ input:focus { outline: 2px solid var(--accent); background: var(--input); }
 }
 .btn.pay-base:disabled { opacity: 0.45; }
 
-
-.btn.pay-algo {
-  background: var(--fox);
-  color: #1c1c22;
-}
-.btn.pay-algo:disabled { opacity: 0.45; }

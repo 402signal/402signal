@@ -139,10 +139,8 @@ BAZAAR_MCP = {
             "type": "mcp",
             "toolName": "route",
             "description": (
-                "Pay $0.01 USDC (10000 atomic, 6 decimals) for a live payable URL "
-                "or an honest miss. Unpaid tools/call returns HTTP 402. Retry with "
-                "PAYMENT-SIGNATURE. HTTP 200 = live unpaid 402 envelope plus target "
-                "contract. HTTP 503 = miss (miss_reason). POST, not GET."
+                "Pay $0.01 USDC for a live payable URL or an honest miss. "
+                "Unpaid tools/call returns HTTP 402. Retry with PAYMENT-SIGNATURE."
             ),
             "transport": "streamable-http",
             "inputSchema": {
@@ -155,6 +153,11 @@ BAZAAR_MCP = {
                     "url": {
                         "type": "string",
                         "description": "Optional https URL to probe.",
+                    },
+                    "prefer_network": {
+                        "type": "string",
+                        "enum": ["base", "solana", "algorand"],
+                        "description": "Prefer this pay-in rail when ranking catalog hits.",
                     },
                 },
                 "required": ["need"],

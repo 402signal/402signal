@@ -25,72 +25,45 @@
         <h1>402Signal</h1>
       </div>
       <p class="sub">Paid APIs go dark. We check before you pay them.</p>
-      <nav class="nav"><a href="/">Home</a> · <a href="/dashboard">Examples</a></nav>
+      <nav class="nav"><a href="/">Home</a> · <a href="/pulse">Pulse</a></nav>
     </header>
 
     <main>
       <section class="panel">
-        <h2>What you get</h2>
-        <p>You pay $0.01 USDC. We look for a live paid API that matches what you asked for. If it answers with a real payment challenge, you get the URL. If nothing is up, we say so. Same price either way.</p>
+        <h2>What it is</h2>
+        <p>Fail-closed x402 router. Paid APIs go dark. Catalogs still list them. We probe first. Live means an unpaid HTTP 402 with a parseable payment envelope, not merely reachable. $0.01 USDC on Base, Solana, or Algorand.</p>
+      </section>
+
+      <section class="panel">
+        <h2>Now</h2>
+        <p>POST /route → unpaid HTTP 402; paid hit → live URL plus target contract (method, inputSchema, facilitator); paid miss → typed miss_reason. Free <a href="/preview?need=weather">GET /preview</a> <a href="/rails">/rails</a> <a href="/pulse">/pulse</a> <a href="/llms.txt">/llms.txt</a>. MCP: route (paid), preview (free). <a href="/openapi.json">OpenAPI</a> and <a href="/.well-known/x402.json">/.well-known/x402.json</a>. Also in this ship: prefer_network; fail closed on a 402 with no payTo; drop localhost/:param samples; HEAD 200 on machine docs; rank live hits by settlements when we have them.</p>
+      </section>
+
+      <section class="panel">
+        <h2>How it works</h2>
+        <p>Send a need or a URL. We probe. If something answers with a real payable 402, you get that URL and how to call it. If nothing is up, we say why. /preview is free and does not probe. /route is the penny probe.</p>
       </section>
 
       <section class="panel">
         <h2>How to use it</h2>
-        <ol class="steps">
-          <li>Type what you need, or paste a URL you already have.</li>
-          <li>Pay $0.01 USDC on Base or Algorand in this browser, or pay Base / Solana / Algorand from an agent.</li>
-          <li>We probe. You get a live URL or an honest miss.</li>
-        </ol>
+        <p>Agents <a href="https://402signal.com/route">POST https://402signal.com/route</a> with <code>{"need":"weather"}</code>, pay the 402, retry with PAYMENT-SIGNATURE. MCP <a href="https://402signal.com/mcp">https://402signal.com/mcp</a>. Docs <a href="https://402signal.com/llms.txt">https://402signal.com/llms.txt</a>. Algorand and Solana are agent/CLI. Hidden Pay Base stays for injected wallets only.</p>
       </section>
 
-      <section class="panel">
-        <h2>Find a live URL</h2>
-        <p class="muted">Optional URL: if you already have one, we will check that it is actually up.</p>
-        <form id="route-form" action="/route" method="post">
-          <label class="label" for="need">What do you need?</label>
-          <input id="need" class="editable" type="text" value="erc20 token balance" placeholder="weather, token balance, screenshots…" autocomplete="off" spellcheck="false" />
-          <div class="chips" id="need-chips" role="group" aria-label="Example needs">
-            <button type="button" class="chip" data-need="erc20 token balance">erc20 token balance</button>
-            <button type="button" class="chip" data-need="weather">weather</button>
-            <button type="button" class="chip" data-need="nft floor">nft floor</button>
-            <button type="button" class="chip" data-need="gas price">gas price</button>
-          </div>
-          <label class="label" for="url">Optional URL</label>
-          <input id="url" type="text" placeholder="https://…" autocomplete="off" spellcheck="false" />
-          <div class="row">
-            <button type="submit" id="go" class="btn">Find a live URL</button>
-            <button type="button" id="pay-base" class="btn pay-base" hidden>Pay $0.01 on Base</button>
-            <span id="status" class="muted"></span>
-          </div>
-          <p id="pay-base-hint" class="muted" hidden>Uses an injected wallet on Base (8453): MetaMask, Coinbase Wallet, or Base App. One $0.01 USDC signature per click. No auto-pay.</p>
-          <div id="human-result" class="result-card" hidden>
-            <h3 id="human-title"></h3>
-            <p id="human-body"></p>
-          </div>
-          <details class="tech" id="tech">
-            <summary>Show technical details</summary>
-            <p class="muted">POST /route body. <code>url</code> stays optional. Protocol amount is 10000 (USDC, 6 decimals). That is one cent.</p>
-            <p class="label">request preview, actual POST body</p>
-            <pre class="code preview" id="preview" aria-live="polite"></pre>
-            <p class="muted" id="out-caption" hidden></p>
-            <pre class="code" id="out" hidden></pre>
-          </details>
-        </form>
-      </section>
+      <p class="muted">Feedback: <a href="https://x.com/402Signal" rel="noopener noreferrer">@402Signal</a> and <a href="mailto:402signal@gmail.com">402signal@gmail.com</a>. Source: <a href="https://github.com/402signal/402signal" rel="noopener noreferrer">https://github.com/402signal/402signal</a>.</p>
 
-      <section class="panel" id="route-samples-panel" hidden>
-        <h2>Try one of these</h2>
-        <p class="muted">Sample lookups from public catalogs. We still probe before you pay.</p>
-        <div id="route-samples" class="chips samples"></div>
-      </section>
-
-      <section class="panel agents">
-        <h2>For agents</h2>
-        <p>POST https://402signal.com/route with a need, then pay the 402. Base, Solana, or Algorand. Humans with an injected wallet can pay Base on this page. Algorand is agent/CLI, not a Pera button.</p>
-        <pre class="code" id="agent-example">POST https://402signal.com/route
-{"need":"erc20 token balance"}</pre>
-        <p class="muted"><a href="/openapi.json">openapi.json</a> · <a href="/.well-known/x402.json">.well-known/x402.json</a> · <a href="/mcp.json">mcp.json</a></p>
-      </section>
+      <form id="route-form" hidden>
+        <label class="label" for="need">What do you need?</label>
+        <input id="need" class="editable" type="text" value="erc20 token balance" placeholder="weather, token balance, screenshots…" autocomplete="off" spellcheck="false" />
+        <div class="row">
+          <button type="button" id="pay-base" class="btn pay-base" hidden>Pay $0.01 on Base</button>
+          <span id="status" class="muted"></span>
+        </div>
+        <p id="pay-base-hint" class="muted" hidden>Uses an injected wallet on Base (8453): MetaMask, Coinbase Wallet, or Base App. One $0.01 USDC signature per click. No auto-pay.</p>
+        <div id="human-result" class="result-card" hidden>
+          <h3 id="human-title"></h3>
+          <p id="human-body"></p>
+        </div>
+      </form>
     </main>
 
     <footer class="foot">
