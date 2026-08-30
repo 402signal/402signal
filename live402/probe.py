@@ -9,6 +9,7 @@ import os
 import socket
 import threading
 import time
+import uuid
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
@@ -850,12 +851,37 @@ def attach_catalog_fields(result: dict, item: dict | None = None) -> dict:
     return result
 
 
-def _finalize_probe(result: dict) -> dict:
-    """Record history and attach freshness/readiness. Never raises."""
+def _finalize_probe(result: dict, batch_id: str | None = None, record: bool = True) -> dict:
+    """Record history and attach freshness/readiness. Never raises.
+
+    record=False: unpaid validate. Do not write 402signal_observed.
+    """
     try:
         from live402 import history as history_mod
-        meta = history_mod.record_probe(result.get("url") or "", result)
-        return history_mod.attach_to_result(result, meta)
+        bid = batch_id or result.get("batch_id")
+        if not bid:
+            bid = uuid.uuid4().hex
+        result["batch_id"] = bid
+        if record:
+            meta = history_mod.record_probe(result.get("url") or "", result)
+            return history_mod.attach_to_result(result, meta)
+        url = result.get("url") or ""
+        summ = history_mod.summary(url) if url else history_mod._empty_summary()
+        result["verified_at"] = result.get("probed_at")
+        result["verified_seconds_ago"] = 0
+        n_7d = int(summ.get("n_7d") or 0)
+        result["readiness"] = history_mod.compute_readiness(result, n_7d)
+        result["readiness_healthy"] = None
+        result["history"] = summ
+        if "claimed" not in result or not isinstance(result.get("claimed"), dict):
+            result["claimed"] = history_mod._empty_claimed()
+        if "observed" not in result or not isinstance(result.get("observed"), dict):
+            obs = history_mod._empty_observed()
+            obs["http_status"] = result.get("status")
+            obs["payTo"] = result.get("payTo")
+            obs["latency_ms"] = result.get("latency_ms")
+            result["observed"] = obs
+        return result
     except Exception:
         result.setdefault("verified_at", result.get("probed_at"))
         result.setdefault("verified_seconds_ago", 0)
@@ -991,7 +1017,7 @@ def _infer_fixture_miss(canned: dict) -> str:
     return _miss_from_status(status)
 
 
-def _fixture_probe(url: str, catalog_item: dict | None = None) -> dict:
+def _fixture_probe(url: str, catalog_item: dict | None = None, batch_id: str | None = None, record: bool = True) -> dict:
     row = fixtures.lookup_url(url)
     probed_at = now_iso()
     if not row:
@@ -1008,7 +1034,9 @@ def _fixture_probe(url: str, catalog_item: dict | None = None) -> dict:
                     "probes": [],
                     "probed_at": probed_at,
                 },
-            )
+            ),
+            batch_id=batch_id,
+            record=record,
         )
     canned = dict(row.get("probe") or {})
     canned["probed_at"] = probed_at
@@ -1029,15 +1057,16 @@ def _fixture_probe(url: str, catalog_item: dict | None = None) -> dict:
     result = health_from_probe(row.get("url") or url, canned)
     result = attach_catalog_fields(result, catalog_item or row)
     result = attach_invocable_target(result, catalog_item or row)
-    return _finalize_probe(result)
+    return _finalize_probe(result, batch_id=batch_id, record=record)
 
 
-def probe_url(url: str, catalog_item: dict | None = None, deadline: float | None = None) -> dict:
+def probe_url(url: str, catalog_item: dict | None = None, deadline: float | None = None, batch_id: str | None = None, record: bool = True) -> dict:
     """Unpaid dual probe. Live = HTTP 402 with a parseable payment envelope."""
     if deadline is None:
         deadline = time.monotonic() + PROBE_BUDGET_SECONDS
+    bid = batch_id or uuid.uuid4().hex
     if fixtures.fixture_mode():
-        return _fixture_probe(url, catalog_item)
+        return _fixture_probe(url, catalog_item, batch_id=bid, record=record)
 
     if remaining_timeout(deadline) is not None and remaining_timeout(deadline) <= 0:
         result = health_from_probe(
@@ -1054,7 +1083,7 @@ def probe_url(url: str, catalog_item: dict | None = None, deadline: float | None
             },
         )
         result = attach_catalog_fields(result, catalog_item)
-        return _finalize_probe(attach_invocable_target(result, catalog_item))
+        return _finalize_probe(attach_invocable_target(result, catalog_item), batch_id=bid, record=record)
 
     safe = safe_target(url)
     if not safe:
@@ -1071,7 +1100,7 @@ def probe_url(url: str, catalog_item: dict | None = None, deadline: float | None
                 "probed_at": now_iso(),
             },
         )
-        return _finalize_probe(attach_invocable_target(result, catalog_item))
+        return _finalize_probe(attach_invocable_target(result, catalog_item), batch_id=bid, record=record)
 
     start = time.perf_counter()
     probes: list[dict] = []
@@ -1084,7 +1113,7 @@ def probe_url(url: str, catalog_item: dict | None = None, deadline: float | None
         get_snap["probes"] = probes
         get_snap["probed_at"] = now_iso()
         result = health_from_probe(safe, get_snap)
-        return _finalize_probe(attach_invocable_target(result, catalog_item))
+        return _finalize_probe(attach_invocable_target(result, catalog_item), batch_id=bid, record=record)
 
     post_snap = None
     if not get_snap.get("live"):
@@ -1153,7 +1182,7 @@ def probe_url(url: str, catalog_item: dict | None = None, deadline: float | None
         result["envelope"] = snap["envelope"]
     result = attach_catalog_fields(result, catalog_item)
     result = attach_invocable_target(result, catalog_item, snap.get("envelope"))
-    return _finalize_probe(result)
+    return _finalize_probe(result, batch_id=bid, record=record)
 
 
 def _tokens(text: str) -> set[str]:
@@ -1412,6 +1441,7 @@ def route_need(
     ranked = rank_resources(need, items, prefer_network=prefer)
     probed: list[dict] = []
     last = None
+    batch_id = uuid.uuid4().hex
     for item in ranked[:MAX_PROBE]:
         if remaining_timeout(deadline) is not None and remaining_timeout(deadline) <= 0:
             if not probed:
@@ -1429,7 +1459,7 @@ def route_need(
                 }
             break
         url = _resource_url(item)
-        last = probe_url(url, catalog_item=item, deadline=deadline)
+        last = probe_url(url, catalog_item=item, deadline=deadline, batch_id=batch_id)
         last = attach_catalog_fields(last, item)
         try:
             from live402 import history as history_mod

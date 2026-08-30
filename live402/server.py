@@ -13,7 +13,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from live402 import catalog, discover, mcp, payment, pulse, rails
+from live402 import catalog, discover, history, mcp, payment, pulse, rails, validate
 from live402.route import handle_route
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -21,6 +21,7 @@ MAX_BODY = 64_000
 DEFAULT_ROUTE_RPM = 60
 DEFAULT_PREVIEW_RPM = 180
 DEFAULT_PUBLIC_RPM = 180
+DEFAULT_VALIDATE_RPM = 60
 FACILITATOR_ROUTE_RPM = 180
 HSTS = "max-age=31536000"
 # script-src 'self' only (no vendor wallet scripts, no CDN).
@@ -73,6 +74,7 @@ class _RateLimiter:
 _ROUTE_LIMITER = _RateLimiter()
 _PREVIEW_LIMITER = _RateLimiter()
 _PUBLIC_LIMITER = _RateLimiter()
+_VALIDATE_LIMITER = _RateLimiter()
 
 
 def route_rpm() -> int:
@@ -115,6 +117,16 @@ def public_rpm() -> int:
             pass
     # GET /pulse and GET /rails: looser than paid /route so crawlers do not look dead.
     return max(DEFAULT_PUBLIC_RPM, route_rpm() * 2)
+
+
+def validate_rpm() -> int:
+    raw = (os.environ.get("LIVE402_VALIDATE_RPM") or "").strip()
+    if raw:
+        try:
+            return max(1, int(raw))
+        except ValueError:
+            pass
+    return DEFAULT_VALIDATE_RPM
 
 
 def _is_facilitator_ua(ua: str) -> bool:
@@ -241,6 +253,10 @@ class Handler(SimpleHTTPRequestHandler):
         ip = client_ip(self)
         return _PUBLIC_LIMITER.allow("%s:%s" % (ip, which), public_rpm())
 
+    def _validate_allowed(self) -> bool:
+        ip = client_ip(self)
+        return _VALIDATE_LIMITER.allow(ip, validate_rpm())
+
     def do_OPTIONS(self) -> None:
         self.send_response(204)
         self._cors()
@@ -256,6 +272,7 @@ class Handler(SimpleHTTPRequestHandler):
             "/preview",
             "/rails",
             "/pulse",
+            "/attestation",
         }
         static_ok = {"/", "/index.html", "/styles.css", "/app.js", "/dashboard.js"}
         if parsed.path in static_ok:
@@ -318,6 +335,26 @@ class Handler(SimpleHTTPRequestHandler):
                 pulse.get_pulse(),
                 extra_headers={"Cache-Control": "no-store"},
             )
+        if parsed.path == "/attestation":
+            if not self._public_allowed("attestation"):
+                return self._json(429, {"error": "rate limit"})
+            qs = parse_qs(parsed.query)
+            batch_id = (qs.get("batch_id") or [""])[0]
+            payload = history.attestation_for(batch_id or None)
+            if not payload:
+                return self._json(404, {"error": "no_batch"})
+            return self._json(
+                200,
+                payload,
+                extra_headers={"Cache-Control": "no-store"},
+            )
+        if parsed.path == "/validate":
+            if not self._validate_allowed():
+                return self._json(429, {"error": "rate limit"})
+            qs = parse_qs(parsed.query)
+            url = (qs.get("url") or [""])[0]
+            code, body = validate.validate_url(url)
+            return self._json(code, body, extra_headers={"Cache-Control": "no-store"})
         if parsed.path in {"/dashboard", "/dashboard.html"}:
             return self._html(
                 200,
@@ -352,6 +389,8 @@ class Handler(SimpleHTTPRequestHandler):
         parsed = urlparse(self.path)
         if parsed.path in {"/mcp", "/mcp.json"}:
             return self._post_mcp()
+        if parsed.path == "/validate":
+            return self._post_validate()
         if parsed.path != "/route":
             return self._json(404, {"error": "not found"})
         if not self._route_allowed():
@@ -387,10 +426,33 @@ class Handler(SimpleHTTPRequestHandler):
             return self._json(429, {"error": "rate limit"})
         if mcp.is_preview_call(payload) and not self._preview_allowed():
             return self._json(429, {"error": "rate limit"})
+        if mcp.is_validate_call(payload) and not self._validate_allowed():
+            return self._json(429, {"error": "rate limit"})
         code, body, extra = mcp.handle_mcp(payload, self.headers, self._mcp_resource_url())
         if extra is None and code == 402:
             extra = {"PAYMENT-REQUIRED": payment.payment_required_header(body)}
         return self._json(code, body, extra)
+
+
+    def _post_validate(self) -> None:
+        if not self._validate_allowed():
+            self._discard_body()
+            return self._json(429, {"error": "rate limit"})
+        length = int(self.headers.get("Content-Length") or 0)
+        if length > MAX_BODY:
+            return self._json(413, {"error": "body too large"})
+        raw = self.rfile.read(length) if length else b"{}"
+        try:
+            payload = json.loads(raw.decode("utf-8") or "{}")
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return self._json(400, {"error": "invalid JSON"})
+        if not isinstance(payload, dict):
+            return self._json(400, {"error": "JSON object required"})
+        url = payload.get("url")
+        if url is not None and not isinstance(url, str):
+            return self._json(400, {"error": "url must be a string", "miss_reason": "invalid_need"})
+        code, body = validate.validate_url(url if isinstance(url, str) else "")
+        return self._json(code, body, extra_headers={"Cache-Control": "no-store"})
 
 
 def default_host() -> str:

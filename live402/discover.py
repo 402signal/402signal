@@ -32,6 +32,8 @@ GUIDANCE = (
     "POST /mcp initialize and tools/list need no payment; tools/call route is the paid probe. "
     "GET /preview?need= is a cached preflight (not_probed:true). Optional prefer_network=base|solana|algorand. GET /rails lists pay-in rails. "
     "GET /pulse and GET /dashboard are sample lookups. GET /health is {ok:true} only. "
+    "POST /validate {url} (or GET /validate?url=) is an unpaid seller probe: agent-ready? Fail-closed SSRF, not a /route paywall bypass. "
+    "GET /attestation is a public sha256 of a recent 402signal_observed probe batch (not on-chain). "
     "Probe budget is under 60s; a hang returns 503 JSON with miss_reason probe_timeout."
 )
 
@@ -553,6 +555,114 @@ def openapi_spec(resource_url: str = ROUTE) -> dict:
                     "responses": {"200": {"description": "Public sample lookups snapshot"}},
                 }
             },
+            "/validate": {
+                "get": {
+                    "operationId": "validateSellerGet",
+                    "tags": ["Public"],
+                    "summary": "Ask if a seller URL is agent-ready",
+                    "description": "Unpaid dual-probe of the seller URL. Fail-closed SSRF. Not a /route payment bypass. Omit healthy unless n_7d >= 10 observed.",
+                    "parameters": [
+                        {
+                            "in": "query",
+                            "name": "url",
+                            "required": True,
+                            "schema": {"type": "string", "example": "https://example.com/x402"},
+                            "description": "https URL of the seller endpoint to probe.",
+                        }
+                    ],
+                    "responses": {
+                        "200": {
+                            "description": "Readiness, claimed vs observed, flags.",
+                            "content": {
+                                "application/json": {
+                                    "schema": {"$ref": "#/components/schemas/ValidateResult"},
+                                }
+                            },
+                        },
+                        "400": {"description": "url missing or not https"},
+                    },
+                },
+                "post": {
+                    "operationId": "validateSeller",
+                    "tags": ["Public"],
+                    "summary": "Ask if a seller URL is agent-ready",
+                    "description": "Unpaid dual-probe of the seller URL. Fail-closed SSRF. Not a /route payment bypass. Omit healthy unless n_7d >= 10 observed.",
+                    "requestBody": {
+                        "required": True,
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "url": {"type": "string", "example": "https://example.com/x402"},
+                                    },
+                                    "required": ["url"],
+                                    "additionalProperties": False,
+                                }
+                            }
+                        },
+                    },
+                    "responses": {
+                        "200": {
+                            "description": "Readiness, claimed vs observed, flags.",
+                            "content": {
+                                "application/json": {
+                                    "schema": {"$ref": "#/components/schemas/ValidateResult"},
+                                    "example": {
+                                        "url": "https://example.com/x402",
+                                        "readiness": "payable",
+                                        "live": True,
+                                        "payable": True,
+                                        "invocable": False,
+                                        "claimed": {"payTo": "0xabc", "amount": "10000", "schema_present": None},
+                                        "observed": {"payTo": "0xabc", "amount": "10000", "schema_present": None, "http_status": 402, "latency_ms": 41},
+                                        "flags": ["missing schema"],
+                                        "n_7d": 1,
+                                    },
+                                }
+                            },
+                        },
+                        "400": {"description": "url missing or not https"},
+                    },
+                },
+            },
+            "/attestation": {
+                "get": {
+                    "operationId": "attestationHash",
+                    "tags": ["Public"],
+                    "summary": "Hash a recent observed probe batch",
+                    "description": "sha256 of canonical JSON of 402signal_observed rows for a batch_id. Not on-chain. No signatures or keys.",
+                    "parameters": [
+                        {
+                            "in": "query",
+                            "name": "batch_id",
+                            "required": False,
+                            "schema": {"type": "string"},
+                            "description": "Optional batch id. Default is the most recent observed batch.",
+                        }
+                    ],
+                    "responses": {
+                        "200": {
+                            "description": "Public hash payload.",
+                            "content": {
+                                "application/json": {
+                                    "schema": {
+                                        "type": "object",
+                                        "properties": {
+                                            "batch_id": {"type": "string"},
+                                            "created_at": {"type": ["string", "null"]},
+                                            "n": {"type": "integer"},
+                                            "algo": {"type": "string"},
+                                            "hash": {"type": "string"},
+                                        },
+                                    }
+                                }
+                            },
+                        },
+                        "404": {"description": "No observed batch"},
+                    },
+                }
+            },
             "/dashboard": {
                 "get": {
                     "operationId": "dashboard",
@@ -578,6 +688,21 @@ def openapi_spec(resource_url: str = ROUTE) -> dict:
                 },
             },
             "schemas": {
+                "ValidateResult": {
+                    "type": "object",
+                    "properties": {
+                        "url": {"type": ["string", "null"]},
+                        "readiness": {"type": "string", "enum": ["discovered", "payable", "invocable", "recently_verified"]},
+                        "live": {"type": "boolean"},
+                        "payable": {"type": "boolean"},
+                        "invocable": {"type": "boolean"},
+                        "claimed": {"type": "object"},
+                        "observed": {"type": "object"},
+                        "flags": {"type": "array", "items": {"type": "string"}},
+                        "n_7d": {"type": "integer"},
+                        "miss_reason": {"type": "string"},
+                    },
+                },
                 "PaymentRequired": {
                     "type": "object",
                     "description": "x402 PaymentRequired. accepts[].amount is atomic USDC (10000 = $0.01).",
@@ -667,6 +792,8 @@ Allow: /mcp.json
 Allow: /.well-known/mcp.json
 Allow: /preview
 Allow: /rails
+Allow: /validate
+Allow: /attestation
 
 Sitemap: https://402signal.com/
 """
@@ -701,6 +828,8 @@ HTTP 200 = live URL plus target contract. HTTP 503 = typed miss_reason.
 - GET /dashboard  sample lookups per chain (Base / Solana / Algorand)
 - GET /pulse  same snapshot as JSON, including samples[]
 - GET /preview?need=weather  cached hits + prices + freshness + not_probed:true (does not probe, does not charge). Optional prefer_network=base|solana|algorand. HEAD 200 on /llms.txt /openapi.json /mcp.json /preview /rails /pulse.
+- POST /validate {"url":"https://seller.example/x402"}  unpaid dual-probe: is this seller agent-ready? Also GET /validate?url=. Fail-closed SSRF. Not a /route paywall bypass. Readiness + claimed vs observed + flags. healthy omitted unless n_7d >= 10 observed.
+- GET /attestation  public sha256 of a recent 402signal_observed probe batch (batch_id, created_at, n, algo, hash). Not on-chain. Optional ?batch_id=.
 - GET /rails  three pay-in networks, asset, amountAtomic, facilitators, feePayers, maxTimeoutSeconds, per-rail up+latency
 - GET /health  {"ok":true}
 - GET /openapi.json
@@ -711,7 +840,7 @@ HTTP 200 = live URL plus target contract. HTTP 503 = typed miss_reason.
 - GET /.well-known/mcp.json
 - GET /llms.txt
 - GET /robots.txt
-- POST /mcp initialize, tools/list, and tools/call preview (no payment)
+- POST /mcp initialize, tools/list, tools/call preview, and tools/call validate (no payment)
 
 ## Listed on
 

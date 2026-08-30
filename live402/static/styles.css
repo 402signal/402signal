@@ -288,5 +288,5 @@ main > .muted a:hover, main > .muted a:focus { color: var(--teal); }
 .btn.secondary:disabled { opacity: 0.45; }
 .rail-chip { cursor: default; }
 .rail-chip.down { color: var(--dead); border-color: var(--dead); }
-#recommend-body, #observed-body { white-space: pre-line; }
+#recommend-body, #observed-body, #compared-body { white-space: pre-line; }
 

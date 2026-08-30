@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 import os
 import sqlite3
 import threading
 import time
+from datetime import datetime, timezone
 
 DEFAULT_DB = "/tmp/live402-history.sqlite"
 VOLUME_DB = "/data/live402-history.sqlite"
@@ -15,6 +18,8 @@ GLOBAL_CAP = 50_000
 OBS_PER_URL_CAP = 4000
 DAY = 86400
 WEEK = 7 * DAY
+MIN_HEALTHY_N = 10
+ATTEST_ALGO = "sha256"
 
 SOURCE_OBSERVED = "402signal_observed"
 SOURCE_CLAIMED = "catalog_claimed"
@@ -82,6 +87,7 @@ CREATE TABLE IF NOT EXISTS observations (
 CREATE INDEX IF NOT EXISTS observations_url_field_ts ON observations(url, field, ts);
 CREATE INDEX IF NOT EXISTS observations_probe_id ON observations(probe_id);
 CREATE INDEX IF NOT EXISTS observations_source_type_ts ON observations(source_type, ts);
+CREATE INDEX IF NOT EXISTS observations_batch_id ON observations(batch_id);
 """
 
 
@@ -818,3 +824,178 @@ def attach_to_result(result: dict | None, meta: dict | None = None) -> dict:
             },
         )
         return result
+
+
+
+def _iso_ts(ts) -> str | None:
+    try:
+        n = int(ts)
+    except (TypeError, ValueError):
+        return None
+    return datetime.fromtimestamp(n, timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def pulse_observed() -> dict:
+    """7d snapshot from 402signal_observed only. Thin windows omit healthy / percents / ENR."""
+    out = {"n_7d": 0, "reliability": "unknown", "source": SOURCE_OBSERVED}
+    try:
+        now = int(time.time())
+        cutoff = now - WEEK
+        with _lock:
+            conn = _connect()
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT field, value, COUNT(*)
+                FROM observations
+                WHERE source_type = ? AND ts >= ? AND field IN ('live', 'payable', 'invocable')
+                GROUP BY field, value
+                """,
+                (SOURCE_OBSERVED, cutoff),
+            )
+            rows = cur.fetchall()
+        n_live = 0
+        ok_live = 0
+        n_pay = 0
+        ok_pay = 0
+        n_inv = 0
+        ok_inv = 0
+        for field, value, count in rows:
+            n = int(count or 0)
+            is_one = str(value) in {"1", "true", "True"}
+            if field == "live":
+                n_live += n
+                if is_one:
+                    ok_live += n
+            elif field == "payable":
+                n_pay += n
+                if is_one:
+                    ok_pay += n
+            elif field == "invocable":
+                n_inv += n
+                if is_one:
+                    ok_inv += n
+        n_7d = n_live
+        out["n_7d"] = n_7d
+        if n_7d < MIN_HEALTHY_N:
+            out["reliability"] = "unknown"
+            return out
+        out["success_7d"] = (ok_live / n_7d) if n_7d else None
+        out["healthy"] = bool(ok_live > 0)
+        if n_pay >= MIN_HEALTHY_N:
+            out["executable_now_rate"] = ok_pay / n_pay
+        elif n_inv >= MIN_HEALTHY_N:
+            out["executable_now_rate"] = ok_inv / n_inv
+        out.pop("reliability", None)
+        return out
+    except Exception:
+        return {"n_7d": 0, "reliability": "unknown", "source": SOURCE_OBSERVED}
+
+
+def _ok_batch_id(raw) -> str | None:
+    text = _text(raw)
+    if not text or len(text) > 128:
+        return None
+    for ch in text:
+        if not (ch.isalnum() or ch in "-_"):
+            return None
+    return text
+
+
+def canonical_observation_rows(rows: list[dict]) -> str:
+    """Stable JSON for hashing. Public fields only. No signatures/headers/envelopes/keys."""
+    slim: list[dict] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        url = _text(row.get("url"))
+        field = _text(row.get("field"))
+        if not url or not field:
+            continue
+        ts = _as_int(row.get("ts"), None)
+        if ts is None:
+            continue
+        value = row.get("value")
+        if value is None:
+            continue
+        slim.append(
+            {
+                "field": field,
+                "ts": int(ts),
+                "url": url,
+                "value": str(value),
+            }
+        )
+    slim.sort(key=lambda r: (r["url"], r["field"], r["ts"], r["value"]))
+    return json.dumps(slim, separators=(",", ":"), sort_keys=True, ensure_ascii=True)
+
+
+def hash_canonical(canonical: str) -> str:
+    return hashlib.sha256((canonical or "").encode("utf-8")).hexdigest()
+
+
+def _batch_rows(batch_id: str) -> list[dict]:
+    with _lock:
+        conn = _connect()
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT url, field, value, ts
+            FROM observations
+            WHERE batch_id = ? AND source_type = ?
+            ORDER BY url, field, ts, id
+            """,
+            (batch_id, SOURCE_OBSERVED),
+        )
+        fetched = cur.fetchall()
+    out = []
+    for url, field, value, ts in fetched:
+        out.append({"url": url, "field": field, "value": value, "ts": ts})
+    return out
+
+
+def latest_batch_id() -> str | None:
+    try:
+        with _lock:
+            conn = _connect()
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT batch_id, MAX(ts) AS latest
+                FROM observations
+                WHERE source_type = ? AND batch_id IS NOT NULL AND batch_id != ''
+                GROUP BY batch_id
+                ORDER BY latest DESC, batch_id DESC
+                LIMIT 1
+                """,
+                (SOURCE_OBSERVED,),
+            )
+            row = cur.fetchone()
+        if not row or not row[0]:
+            return None
+        return _ok_batch_id(row[0])
+    except Exception:
+        return None
+
+
+def attestation_for(batch_id: str | None = None) -> dict | None:
+    """Public hash of a 402signal_observed probe batch. Fail closed. Never on-chain."""
+    try:
+        bid = _ok_batch_id(batch_id) if batch_id else latest_batch_id()
+        if not bid:
+            return None
+        rows = _batch_rows(bid)
+        if not rows:
+            return None
+        canonical = canonical_observation_rows(rows)
+        digest = hash_canonical(canonical)
+        created = _iso_ts(min(int(r["ts"]) for r in rows if r.get("ts") is not None))
+        return {
+            "batch_id": bid,
+            "created_at": created,
+            "n": len(rows),
+            "algo": ATTEST_ALGO,
+            "hash": digest,
+        }
+    except Exception:
+        return None

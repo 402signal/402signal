@@ -435,7 +435,7 @@ class RankPayToChangedTests(unittest.TestCase):
             },
         ]
 
-        def fake_probe(url, catalog_item=None, deadline=None):
+        def fake_probe(url, catalog_item=None, deadline=None, **kwargs):
             _ = catalog_item, deadline
             if "changed" in url:
                 return {

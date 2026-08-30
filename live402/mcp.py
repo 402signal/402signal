@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from live402 import payment, pulse
+from live402 import payment, pulse, validate
 from live402.route import handle_route
 
 ROUTE_DESCRIPTION = (
@@ -122,6 +122,35 @@ PREVIEW_OUTPUT_SCHEMA = {
     },
 }
 
+VALIDATE_DESCRIPTION = (
+    "Unpaid probe: is this seller URL agent-ready? Fail-closed SSRF. "
+    "Returns readiness, claimed vs observed, flags. Does not charge."
+)
+
+VALIDATE_INPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "url": {"type": "string", "description": "https URL of the seller endpoint to probe."},
+    },
+    "required": ["url"],
+}
+
+VALIDATE_OUTPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "url": {"type": ["string", "null"]},
+        "readiness": {"type": "string", "enum": ["discovered", "payable", "invocable", "recently_verified"]},
+        "live": {"type": "boolean"},
+        "payable": {"type": "boolean"},
+        "invocable": {"type": "boolean"},
+        "claimed": {"type": "object"},
+        "observed": {"type": "object"},
+        "flags": {"type": "array", "items": {"type": "string"}},
+        "n_7d": {"type": "integer"},
+        "miss_reason": {"type": ["string", "null"]},
+    },
+}
+
 TOOLS = [
     {
         "name": "route",
@@ -134,6 +163,12 @@ TOOLS = [
         "description": PREVIEW_DESCRIPTION,
         "inputSchema": PREVIEW_INPUT_SCHEMA,
         "outputSchema": PREVIEW_OUTPUT_SCHEMA,
+    },
+    {
+        "name": "validate",
+        "description": VALIDATE_DESCRIPTION,
+        "inputSchema": VALIDATE_INPUT_SCHEMA,
+        "outputSchema": VALIDATE_OUTPUT_SCHEMA,
     },
 ]
 
@@ -185,6 +220,15 @@ def is_preview_call(payload: dict) -> bool:
     return isinstance(params, dict) and params.get("name") == "preview"
 
 
+def is_validate_call(payload: dict) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    if payload.get("method") != "tools/call":
+        return False
+    params = payload.get("params") or {}
+    return isinstance(params, dict) and params.get("name") == "validate"
+
+
 def _preview_result(args: dict) -> dict:
     need = ""
     if isinstance(args, dict) and isinstance(args.get("need"), str):
@@ -215,6 +259,10 @@ def handle_mcp(payload: dict, headers, resource_url: str) -> tuple[int, dict, di
             return 400, {"error": "arguments must be an object"}, None
         if name == "preview":
             return 200, _preview_result(args), None
+        if name == "validate":
+            url = args.get("url") if isinstance(args, dict) else ""
+            _code, body = validate.validate_url(url if isinstance(url, str) else "")
+            return 200 if _code != 400 else 400, body, None
         if name != "route":
             return 200, jsonrpc_error(req_id, -32601, "Unknown tool"), None
         return handle_route(args, headers, resource_url, bazaar=payment.BAZAAR_MCP)

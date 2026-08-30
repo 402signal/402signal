@@ -98,11 +98,15 @@
     if (code === 200 && parsed && typeof parsed === "object") {
       if (parsed.url) renderRecommend(parsed, { probed: true });
       renderObserved(parsed);
+      renderCompared(parsed);
     } else if (code === 503 && parsed && typeof parsed === "object") {
       renderObserved(parsed);
+      renderCompared(parsed);
     } else if (code === 402) {
       const obs = document.getElementById("observed-card");
       if (obs) obs.hidden = true;
+      const cmp = document.getElementById("compared-card");
+      if (cmp) cmp.hidden = true;
     }
   }
 
@@ -392,6 +396,8 @@
     renderRecommend(null);
     const obs = document.getElementById("observed-card");
     if (obs) obs.hidden = true;
+    const cmp = document.getElementById("compared-card");
+    if (cmp) cmp.hidden = true;
   }
 
   function hideEmpty() {
@@ -469,7 +475,52 @@
       lines.push("Also on " + also.join(", "));
     }
     body.textContent = lines.join("\n");
-    why.textContent = "Best capability match in the current index.";
+    why.textContent = whyFromProbe(hit, opts);
+  }
+
+  function whyFromProbe(parsed, opts) {
+    opts = opts || {};
+    if (opts.not_probed) return "Best capability match in the current index.";
+    const rows = parsed && Array.isArray(parsed.compared) ? parsed.compared : [];
+    const obj = parsed && parsed.objective;
+    if (rows.length && (obj === "cheapest" || obj === "fastest" || obj === "most_reliable")) {
+      return "Selected as " + String(obj).split("_").join(" ") + " among compared rows.";
+    }
+    return "Best capability match in the current index.";
+  }
+
+  function renderCompared(parsed) {
+    const card = document.getElementById("compared-card");
+    const body = document.getElementById("compared-body");
+    if (!card || !body) return;
+    if (!parsed || typeof parsed !== "object") {
+      card.hidden = true;
+      return;
+    }
+    const rows = parsed.compared;
+    if (!Array.isArray(rows) || !rows.length) {
+      card.hidden = true;
+      return;
+    }
+    const lines = [];
+    const obj = parsed.objective;
+    if (obj === "cheapest" || obj === "fastest" || obj === "most_reliable") {
+      lines.push("Objective " + obj);
+    }
+    rows.forEach(function (row) {
+      if (!row || typeof row !== "object") return;
+      const bits = [];
+      bits.push(row.selected ? "selected" : "candidate");
+      if (row.url) bits.push(row.url);
+      if (row.rail) bits.push("rail " + row.rail);
+      if (row.amount_atomic != null && row.amount_atomic !== "") bits.push("amount " + row.amount_atomic);
+      if (row.latency_ms != null && row.latency_ms !== "") bits.push(row.latency_ms + "ms");
+      bits.push("live " + yn(!!row.live));
+      bits.push("invocable " + yn(!!row.invocable));
+      lines.push(bits.join(" · "));
+    });
+    body.textContent = lines.join("\n");
+    card.hidden = false;
   }
 
   function renderObserved(parsed) {
@@ -536,6 +587,8 @@
       renderRecommend(hit, { not_probed: true });
       const obs = document.getElementById("observed-card");
       if (obs) obs.hidden = true;
+      const cmp = document.getElementById("compared-card");
+      if (cmp) cmp.hidden = true;
       status.textContent = "preview";
     } catch (err) {
       showEmpty("Preview fetch failed. " + EMPTY_STATE);

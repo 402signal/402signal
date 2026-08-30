@@ -291,7 +291,7 @@ class RouteNeedSelectTests(unittest.TestCase):
             cheap["url"]: self._live(cheap["url"], amount=1000, latency=40),
         }
 
-        def fake_probe(url, catalog_item=None, deadline=None):
+        def fake_probe(url, catalog_item=None, deadline=None, **kwargs):
             _ = catalog_item, deadline
             return dict(by_url[url])
 
@@ -316,7 +316,7 @@ class RouteNeedSelectTests(unittest.TestCase):
             fast["url"]: self._live(fast["url"], amount=9000, latency=4),
         }
 
-        def fake_probe(url, catalog_item=None, deadline=None):
+        def fake_probe(url, catalog_item=None, deadline=None, **kwargs):
             _ = catalog_item, deadline
             return dict(by_url[url])
 
@@ -333,7 +333,7 @@ class RouteNeedSelectTests(unittest.TestCase):
             dead["url"]: self._dead(dead["url"]),
         }
 
-        def fake_probe(url, catalog_item=None, deadline=None):
+        def fake_probe(url, catalog_item=None, deadline=None, **kwargs):
             _ = catalog_item, deadline
             return dict(by_url[url])
 
@@ -355,7 +355,7 @@ class RouteNeedSelectTests(unittest.TestCase):
             second["url"]: self._live(second["url"], amount=10000, latency=10, rail="base"),
         }
 
-        def fake_probe(url, catalog_item=None, deadline=None):
+        def fake_probe(url, catalog_item=None, deadline=None, **kwargs):
             _ = catalog_item, deadline
             return dict(by_url[url])
 

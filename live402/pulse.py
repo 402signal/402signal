@@ -805,12 +805,32 @@ def _collect() -> dict:
 
     samples = _mixed_samples(chains)
 
+    observed = {"n_7d": 0, "reliability": "unknown", "source": "402signal_observed"}
+    try:
+        from live402 import history as history_mod
+        observed = history_mod.pulse_observed()
+    except Exception:
+        observed = {"n_7d": 0, "reliability": "unknown", "source": "402signal_observed"}
+    if not isinstance(observed, dict):
+        observed = {"n_7d": 0, "reliability": "unknown", "source": "402signal_observed"}
+    n_7d = 0
+    try:
+        n_7d = int(observed.get("n_7d") or 0)
+    except (TypeError, ValueError):
+        n_7d = 0
+    if n_7d < 10:
+        observed.pop("healthy", None)
+        observed.pop("success_7d", None)
+        observed.pop("executable_now_rate", None)
+        observed["reliability"] = "unknown"
+
     return {
         "ok": True,
         "updated_at": probe.now_iso(),
         "cached_s": CACHE_TTL,
         "chains": chains,
         "samples": samples,
+        "observed": observed,
     }
 
 
