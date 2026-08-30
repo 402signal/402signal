@@ -143,6 +143,15 @@ def is_paid_call(payload: dict) -> bool:
     return isinstance(params, dict) and params.get("name") == "route"
 
 
+def is_preview_call(payload: dict) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    if payload.get("method") != "tools/call":
+        return False
+    params = payload.get("params") or {}
+    return isinstance(params, dict) and params.get("name") == "preview"
+
+
 def _preview_result(args: dict) -> dict:
     need = ""
     if isinstance(args, dict) and isinstance(args.get("need"), str):

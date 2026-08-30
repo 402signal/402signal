@@ -63,7 +63,7 @@ Body:
 - GET `/` homepage is plain English. Raw JSON is behind “Show technical details”. Footer is 402signal.com / @402Signal. Example needs are clickable chips. Injected wallet (window.ethereum): Pay $0.01 on Base signs one EIP-3009 authorization and POSTs PAYMENT-SIGNATURE; no wallet keeps the curl/agent copy. Sample chips only prefill, never auto-pay. Solana/Algorand stay agent/CLI. A short “for agents” box shows `POST https://402signal.com/route` plus links to `/openapi.json` and `/.well-known/x402.json`. Sample lookups fetch `/pulse` `samples` (not a theme catalog).
 - `GET /route` is split by `Accept`: browsers (`text/html`) get the human page (HTTP 200). Agents (`application/json`) and curl with no Accept get HTTP 402 + bazaar + accepts (amount 10000). Agents that intend to pay should **POST**, not GET.
 - Discovery: `GET /openapi.json`, `GET /mcp.json`, `GET /.well-known/x402`, `GET /.well-known/x402.json`, `GET /robots.txt`, `GET /llms.txt`, `GET /preview`, `GET /rails`. Paid `POST /route` is documented with `x-payment-info` and HTTP 402. MCP bazaar type is `mcp` + `toolName: route`.
-- `POST /route` is rate-limited in memory (~60/min per IP, higher burst for Coinbase / PayAI / GoPlausible user-agents). `429` when exceeded. Payment headers are redacted in logs. Responses send `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`.
+- `POST /route` is rate-limited in memory (~60/min per IP, higher burst for Coinbase / PayAI / GoPlausible user-agents). `GET /preview` and unpaid MCP `tools/call preview` share a looser limiter (~180/min per IP, at least 2× the route cap). `429` when exceeded. Payment headers are redacted in logs. Responses send `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, `Strict-Transport-Security: max-age=31536000` (no includeSubDomains; www is a CNAME and Fly has no extra hostnames), and `Content-Security-Policy: default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'self'; img-src 'self' data:; base-uri 'self'; frame-ancestors 'none'`. Payment resource / OpenAPI `servers` / MCP resource are pinned to `https://402signal.com` (Host is not reflected). Probe DNS (`getaddrinfo`) times out in 2s.
 
 Clients send v2 `PAYMENT-SIGNATURE` (base64 `PaymentPayload`) or v1 `X-PAYMENT`. Success/settle echo is `PAYMENT-RESPONSE`.
 
@@ -95,6 +95,9 @@ Base CDP calls need `CDP_API_KEY_ID` + `CDP_API_KEY_SECRET` (or `CDP_ACCESS_TOKE
 | `LOCAL_FREE` | unset | `1` skips the paywall (tests only) |
 | `LIVE402_FIXTURE` | unset | `1` uses local JSON, no network |
 | `LIVE402_PROBE_TIMEOUT` | `4` | probe timeout seconds |
+| `LIVE402_ROUTE_RPM` | `60` | paid `POST /route` per IP per minute |
+| `LIVE402_ROUTE_RPM_FACILITATOR` | `180` | higher burst for Coinbase / PayAI / GoPlausible UAs |
+| `LIVE402_PREVIEW_RPM` | `180` (or 2× route, whichever is larger) | unpaid `GET /preview` and MCP preview per IP per minute |
 
 ## Fly (do not run until you have an account)
 

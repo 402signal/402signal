@@ -8,6 +8,7 @@ import json
 import os
 import re
 import socket
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -32,6 +33,7 @@ PULSE_LIMIT = 100
 CATALOG_READ_LIMIT = 524_288
 DEFAULT_TIMEOUT = 4.0
 MAX_SINGLE_TIMEOUT = 10.0
+DNS_TIMEOUT = 2.0
 PROBE_BUDGET_SECONDS = 55.0
 MAX_PROBE = 5
 READ_LIMIT = 65536
@@ -390,6 +392,32 @@ def _try_ip(host: str):
         return None
 
 
+def _getaddrinfo_timed(host: str, timeout: float | None = None):
+    """socket.getaddrinfo with a join timeout. Fail closed on hang."""
+    cap = DNS_TIMEOUT if timeout is None else float(timeout)
+    if cap <= 0:
+        raise TimeoutError("getaddrinfo timed out")
+    box: list = []
+
+    def run() -> None:
+        try:
+            box.append(
+                ("ok", socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM))
+            )
+        except Exception as exc:
+            box.append(("err", exc))
+
+    t = threading.Thread(target=run, daemon=True)
+    t.start()
+    t.join(cap)
+    if not box:
+        raise TimeoutError("getaddrinfo timed out")
+    kind, payload = box[0]
+    if kind == "err":
+        raise payload
+    return payload
+
+
 def _resolve_public(host: str) -> bool:
     """DNS-resolve host and reject unless every address is a public IP. Fail closed."""
     literal = _try_ip(host)
@@ -398,8 +426,8 @@ def _resolve_public(host: str) -> bool:
     if _host_name_blocked(host):
         return False
     try:
-        infos = socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)
-    except OSError:
+        infos = _getaddrinfo_timed(host)
+    except (OSError, TimeoutError):
         return False
     if not infos:
         return False

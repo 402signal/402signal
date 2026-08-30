@@ -19,7 +19,14 @@ from live402.route import handle_route
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 MAX_BODY = 64_000
 DEFAULT_ROUTE_RPM = 60
+DEFAULT_PREVIEW_RPM = 180
 FACILITATOR_ROUTE_RPM = 180
+HSTS = "max-age=31536000"
+CSP = (
+    "default-src 'none'; script-src 'self'; connect-src 'self'; "
+    "style-src 'self'; img-src 'self' data:; base-uri 'self'; "
+    "frame-ancestors 'none'"
+)
 FACILITATOR_UA = (
     "coinbase",
     "cdp",
@@ -60,6 +67,7 @@ class _RateLimiter:
 
 
 _ROUTE_LIMITER = _RateLimiter()
+_PREVIEW_LIMITER = _RateLimiter()
 
 
 def route_rpm() -> int:
@@ -80,6 +88,17 @@ def facilitator_rpm() -> int:
         except ValueError:
             return FACILITATOR_ROUTE_RPM
     return max(FACILITATOR_ROUTE_RPM, route_rpm())
+
+
+def preview_rpm() -> int:
+    raw = (os.environ.get("LIVE402_PREVIEW_RPM") or "").strip()
+    if raw:
+        try:
+            return max(1, int(raw))
+        except ValueError:
+            pass
+    # Crawlers and unpaid MCP preview must stay looser than paid POST /route.
+    return max(DEFAULT_PREVIEW_RPM, route_rpm() * 2)
 
 
 def _is_facilitator_ua(ua: str) -> bool:
@@ -113,6 +132,9 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("X-Frame-Options", "DENY")
         self.send_header("Referrer-Policy", "no-referrer")
+        # Fly terminates TLS; browsers ignore HSTS on plain HTTP.
+        self.send_header("Strict-Transport-Security", HSTS)
+        self.send_header("Content-Security-Policy", CSP)
         super().end_headers()
 
     def _cors(self) -> None:
@@ -169,25 +191,14 @@ class Handler(SimpleHTTPRequestHandler):
         return "text/html" in accept
 
     def _resource_url(self) -> str:
-        host = (self.headers.get("Host") or "").split(",")[0].strip() or "127.0.0.1:8081"
-        proto = (self.headers.get("X-Forwarded-Proto") or "").split(",")[0].strip().lower()
-        if proto not in {"http", "https"}:
-            hostname = host.rsplit(":", 1)[0].strip("[]").lower()
-            local = (
-                hostname in {"localhost", "127.0.0.1", "::1"}
-                or hostname.startswith("127.")
-            )
-            proto = "http" if local else "https"
-        return f"{proto}://{host}/route"
+        # Pinned public origin. Do not reflect Host (fly.dev / spoofed Host).
+        return discover.ROUTE
 
     def _origin(self) -> str:
-        route = self._resource_url()
-        if route.endswith("/route"):
-            return route[: -len("/route")]
-        return route.rstrip("/")
+        return discover.ORIGIN
 
     def _mcp_resource_url(self) -> str:
-        return self._origin() + "/mcp"
+        return discover.ORIGIN + "/mcp"
 
     def _discard_body(self) -> None:
         try:
@@ -203,6 +214,10 @@ class Handler(SimpleHTTPRequestHandler):
         limit = facilitator_rpm() if _is_facilitator_ua(ua) else route_rpm()
         return _ROUTE_LIMITER.allow(ip, limit)
 
+    def _preview_allowed(self) -> bool:
+        ip = client_ip(self)
+        return _PREVIEW_LIMITER.allow(ip, preview_rpm())
+
     def do_OPTIONS(self) -> None:
         self.send_response(204)
         self._cors()
@@ -212,7 +227,7 @@ class Handler(SimpleHTTPRequestHandler):
         parsed = urlparse(self.path)
         if parsed.path in {"/", "/index.html"}:
             return SimpleHTTPRequestHandler.do_GET(self)
-        if parsed.path in {"/styles.css", "/app.js"}:
+        if parsed.path in {"/styles.css", "/app.js", "/dashboard.js"}:
             return SimpleHTTPRequestHandler.do_GET(self)
         if parsed.path == "/route":
             allow = {"Allow": "GET, POST, OPTIONS"}
@@ -226,6 +241,8 @@ class Handler(SimpleHTTPRequestHandler):
         if parsed.path == "/health":
             return self._json(200, {"ok": True})
         if parsed.path == "/preview":
+            if not self._preview_allowed():
+                return self._json(429, {"error": "rate limit"})
             qs = parse_qs(parsed.query)
             need = (qs.get("need") or [""])[0]
             return self._json(
@@ -312,6 +329,8 @@ class Handler(SimpleHTTPRequestHandler):
         if not isinstance(payload, dict):
             return self._json(400, {"error": "JSON object required"})
         if mcp.is_paid_call(payload) and not self._route_allowed():
+            return self._json(429, {"error": "rate limit"})
+        if mcp.is_preview_call(payload) and not self._preview_allowed():
             return self._json(429, {"error": "rate limit"})
         code, body, extra = mcp.handle_mcp(payload, self.headers, self._mcp_resource_url())
         if extra is None and code == 402:

@@ -2,6 +2,7 @@ import base64
 import json
 import os
 import threading
+import time
 import unittest
 from http.client import HTTPConnection
 from http.server import ThreadingHTTPServer
@@ -305,6 +306,19 @@ class PaywallTests(unittest.TestCase):
         self.assertEqual(headers.get("x-content-type-options"), "nosniff")
         self.assertEqual(headers.get("x-frame-options"), "DENY")
         self.assertEqual(headers.get("referrer-policy"), "no-referrer")
+        self.assertEqual(headers.get("strict-transport-security"), "max-age=31536000")
+        self.assertEqual(
+            headers.get("content-security-policy"),
+            "default-src 'none'; script-src 'self'; connect-src 'self'; "
+            "style-src 'self'; img-src 'self' data:; base-uri 'self'; "
+            "frame-ancestors 'none'",
+        )
+        prev_status, prev_raw = _get(self.port, "/preview?need=weather")
+        self.assertEqual(prev_status, 200)
+        self.assertTrue(json.loads(prev_raw).get("not_probed"))
+        mcp_status, mcp_raw = _get(self.port, "/mcp.json")
+        self.assertEqual(mcp_status, 200)
+        self.assertIn("route", [t.get("name") for t in json.loads(mcp_raw).get("tools") or []])
 
     def test_dashboard_page(self):
         status, html = _get(self.port, "/dashboard")
@@ -318,7 +332,13 @@ class PaywallTests(unittest.TestCase):
         self.assertIn("402signal.com/route", html)
         self.assertIn("$0.01", html)
         self.assertIn("/pulse", html)
-        self.assertIn("setInterval", html)
+        self.assertIn("/dashboard.js", html)
+        self.assertNotIn("<script>", html.replace('<script src="/dashboard.js"></script>', ""))
+        js_path = os.path.join(os.path.dirname(__file__), "..", "live402", "static", "dashboard.js")
+        with open(js_path, encoding="utf-8") as fh:
+            dash_js = fh.read()
+        self.assertIn("setInterval", dash_js)
+        self.assertIn('fetch("/pulse"', dash_js)
         self.assertIn("/?need=", html)
         self.assertNotIn("What's listed", html)
         self.assertNotIn("theme-bar", html)
@@ -495,25 +515,45 @@ class PaywallTests(unittest.TestCase):
         self.assertIn("info", bazaar)
         self.assertEqual(bazaar["info"]["input"]["method"], "POST")
 
-    def test_resource_url_uses_https_forwarded_proto(self):
-        conn = HTTPConnection("127.0.0.1", self.port, timeout=5)
-        body = json.dumps({"need": "erc20 token balance"}).encode("utf-8")
-        conn.request(
-            "POST",
-            "/route",
-            body=body,
-            headers={
-                "Content-Type": "application/json",
-                "Host": "402signal.fly.dev",
-                "X-Forwarded-Proto": "https",
-            },
+    def test_resource_url_pins_public_origin(self):
+        """Host / fly.dev must not be reflected into payment resource or OpenAPI servers."""
+        for host in ("402signal.fly.dev", "evil.example", "attacker.test"):
+            conn = HTTPConnection("127.0.0.1", self.port, timeout=5)
+            body = json.dumps({"need": "erc20 token balance"}).encode("utf-8")
+            conn.request(
+                "POST",
+                "/route",
+                body=body,
+                headers={
+                    "Content-Type": "application/json",
+                    "Host": host,
+                    "X-Forwarded-Proto": "https",
+                },
+            )
+            res = conn.getresponse()
+            raw = res.read()
+            conn.close()
+            self.assertEqual(res.status, 402, host)
+            data = json.loads(raw.decode("utf-8"))
+            self.assertEqual(data["resource"]["url"], "https://402signal.com/route", host)
+            self.assertNotIn("fly.dev", json.dumps(data))
+            self.assertNotIn(host, data["resource"]["url"])
+        spec = json.loads(
+            _get_full(
+                self.port,
+                "/openapi.json",
+                extra_headers={"Host": "402signal.fly.dev"},
+            )[1]
         )
-        res = conn.getresponse()
-        raw = res.read()
-        conn.close()
-        self.assertEqual(res.status, 402)
-        data = json.loads(raw.decode("utf-8"))
-        self.assertEqual(data["resource"]["url"], "https://402signal.fly.dev/route")
+        self.assertEqual(spec["servers"][0]["url"], "https://402signal.com")
+        wk = json.loads(
+            _get_full(
+                self.port,
+                "/.well-known/x402.json",
+                extra_headers={"Host": "evil.example"},
+            )[1]
+        )
+        self.assertEqual(wk.get("resource"), "https://402signal.com/route")
 
 
 class FixtureProbeTests(unittest.TestCase):
@@ -984,6 +1024,20 @@ class SsrfTests(unittest.TestCase):
             self.assertEqual(result.get("miss_reason"), "ssrf")
             opener.assert_not_called()
 
+    def test_getaddrinfo_timeout_fail_closed(self):
+        def hang(*_a, **_k):
+            time.sleep(5)
+            return []
+
+        with patch("live402.probe.DNS_TIMEOUT", 0.25), patch(
+            "socket.getaddrinfo", side_effect=hang
+        ):
+            t0 = time.monotonic()
+            self.assertFalse(probe._resolve_public("this-must-not-hang.invalid"))
+            elapsed = time.monotonic() - t0
+        self.assertLess(elapsed, 1.5)
+        self.assertGreaterEqual(elapsed, 0.2)
+
 
 class FacilitatorFailClosedTests(unittest.TestCase):
     def test_call_rejects_http_4xx_even_if_isValid(self):
@@ -1109,6 +1163,85 @@ class RateLimitTests(unittest.TestCase):
             statuses.append(status)
         self.assertEqual(statuses, [402, 402, 402])
 
+    def test_preview_uses_separate_looser_limiter(self):
+        ip_headers = {"Fly-Client-IP": "203.0.113.52"}
+        statuses = []
+        for _ in range(3):
+            status, _body = _json_post(
+                self.port, "/route", {"need": "weather"}, extra_headers=ip_headers
+            )
+            statuses.append(status)
+        self.assertEqual(statuses[2], 429)
+        status, raw, _hdrs = _get_full(
+            self.port, "/preview?need=weather", extra_headers=ip_headers
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(json.loads(raw).get("not_probed"))
+        status, body = _json_post(
+            self.port,
+            "/mcp",
+            {
+                "jsonrpc": "2.0",
+                "id": 9,
+                "method": "tools/call",
+                "params": {"name": "preview", "arguments": {"need": "weather"}},
+            },
+            extra_headers=ip_headers,
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(body.get("not_probed"))
+
+
+
+class PreviewRateLimitTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        os.environ.pop("LOCAL_FREE", None)
+        os.environ["LIVE402_PREVIEW_RPM"] = "2"
+        cls.httpd, cls.host, cls.port = _serve()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.httpd.shutdown()
+        cls.httpd.server_close()
+        os.environ.pop("LIVE402_PREVIEW_RPM", None)
+
+    def test_preview_rate_limit_429(self):
+        ip_headers = {"Fly-Client-IP": "203.0.113.60"}
+        statuses = []
+        for _ in range(3):
+            status, _raw, _hdrs = _get_full(
+                self.port, "/preview?need=weather", extra_headers=ip_headers
+            )
+            statuses.append(status)
+        self.assertEqual(statuses[0], 200)
+        self.assertEqual(statuses[1], 200)
+        self.assertEqual(statuses[2], 429)
+
+    def test_mcp_preview_shares_preview_limiter(self):
+        ip_headers = {"Fly-Client-IP": "203.0.113.61"}
+        statuses = []
+        payload = {
+            "jsonrpc": "2.0",
+            "id": 9,
+            "method": "tools/call",
+            "params": {"name": "preview", "arguments": {"need": "weather"}},
+        }
+        for _ in range(3):
+            status, _body = _json_post(
+                self.port, "/mcp", payload, extra_headers=ip_headers
+            )
+            statuses.append(status)
+        self.assertEqual(statuses[0], 200)
+        self.assertEqual(statuses[1], 200)
+        self.assertEqual(statuses[2], 429)
+        # Paid /route still uses the route limiter, not this preview bucket.
+        status, body = _json_post(
+            self.port, "/route", {}, extra_headers=ip_headers
+        )
+        self.assertEqual(status, 402)
+        amounts = [str(a.get("amount")) for a in body.get("accepts") or []]
+        self.assertEqual(amounts, ["10000", "10000", "10000"])
 
 
 class ProductBriefTests(unittest.TestCase):
