@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import base64
 import os
+import sys
 from collections.abc import Callable
 from typing import Any
 
@@ -25,6 +26,10 @@ from live402.pq import trust
 _signer: Any = None
 _before_append_hooks: list[Callable[[bytes], None]] = []
 
+# Env name only. Never interpolate the value into logs or exceptions.
+_SK_ENV = "LIVE402_PQ_LOG_SK"
+_VKEY_ENV = "LIVE402_PQ_LOG_VKEY"
+
 
 class ReceiptError(RuntimeError):
     pass
@@ -32,6 +37,10 @@ class ReceiptError(RuntimeError):
 
 class CrashBeforeSign(RuntimeError):
     """Test crash after durable idx, before checkpoint signature."""
+
+
+class SignerConfigError(ValueError):
+    """LIVE402_PQ_LOG_SK was set but could not be parsed. Do not generate a key."""
 
 
 def configure_signer(private_key: Any = None) -> str:
@@ -46,6 +55,68 @@ def configure_signer(private_key: Any = None) -> str:
     pk = private_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
     vkey = ckpt.vkey_encode(ORIGIN, pk)
     store.meta_set("vkey", vkey)
+    return vkey
+
+
+def _parse_log_sk(raw: str) -> Any:
+    """Parse a 32-byte hex seed or PKCS8 PEM. Raises SignerConfigError if malformed.
+
+    Never include the secret in the exception message.
+    """
+    text = (raw or "").strip()
+    if not text:
+        raise SignerConfigError("empty")
+    try:
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        from cryptography.hazmat.primitives.serialization import load_pem_private_key
+    except ImportError as exc:
+        raise SignerConfigError("cryptography unavailable") from exc
+    if "BEGIN" in text and "PRIVATE KEY" in text:
+        try:
+            key = load_pem_private_key(text.encode("utf-8"), password=None)
+        except Exception as exc:
+            raise SignerConfigError("malformed pem") from exc
+        if not isinstance(key, Ed25519PrivateKey):
+            raise SignerConfigError("not ed25519")
+        return key
+    hex_s = text.lower()
+    if hex_s.startswith("0x"):
+        hex_s = hex_s[2:]
+    hex_s = "".join(hex_s.split())
+    if len(hex_s) != 64:
+        raise SignerConfigError("not 32-byte hex")
+    try:
+        seed = bytes.fromhex(hex_s)
+    except ValueError as exc:
+        raise SignerConfigError("not hex") from exc
+    if len(seed) != 32:
+        raise SignerConfigError("not 32-byte hex")
+    try:
+        return Ed25519PrivateKey.from_private_bytes(seed)
+    except Exception as exc:
+        raise SignerConfigError("invalid seed") from exc
+
+
+def load_signer_from_env() -> str:
+    """Load LIVE402_PQ_LOG_SK into memory. Never generate a key.
+
+    Unset or blank: leave signer unconfigured (receipts stay unavailable).
+    Malformed: fail closed — clear any signer, do not generate, keep serving.
+    Success: configure_signer + store vkey + LIVE402_PQ_LOG_VKEY from the public key.
+    Never logs, prints, or writes the secret.
+    """
+    raw = os.environ.get(_SK_ENV)
+    if raw is None or not str(raw).strip():
+        return ""
+    try:
+        key = _parse_log_sk(raw)
+    except Exception:
+        configure_signer(None)
+        sys.stderr.write("%s malformed; log signing disabled\n" % _SK_ENV)
+        return ""
+    vkey = configure_signer(key)
+    if vkey:
+        os.environ[_VKEY_ENV] = vkey
     return vkey
 
 

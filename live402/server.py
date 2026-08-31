@@ -583,11 +583,23 @@ def default_port() -> int:
     return 8081
 
 
+def boot_optional_log_signer() -> None:
+    """Load LIVE402_PQ_LOG_SK into memory if set. Never generate a key.
+
+    Malformed secret fails closed (no signer). /route still serves.
+    Never logs or prints the secret.
+    """
+    from live402.pq import receipt as pq_receipt
+
+    pq_receipt.load_signer_from_env()
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Serve 402Signal locally")
     parser.add_argument("--host", default=default_host())
     parser.add_argument("--port", type=int, default=default_port())
     args = parser.parse_args(argv)
+    boot_optional_log_signer()
     httpd = ThreadingHTTPServer((args.host, args.port), Handler)
     catalog.start_refresher()
     print(
