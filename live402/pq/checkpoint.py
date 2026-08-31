@@ -10,16 +10,13 @@ from __future__ import annotations
 import base64
 import hashlib
 import re
-
-from cryptography.exceptions import InvalidSignature
-from cryptography.hazmat.primitives.asymmetric.ed25519 import (
-    Ed25519PrivateKey,
-    Ed25519PublicKey,
-)
-from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+from typing import TYPE_CHECKING
 
 from live402.pq import ORIGIN
 from live402.pq.merkle import HASH_SIZE
+
+if TYPE_CHECKING:
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 SIG_ED25519 = 0x01
 SIG_WITNESS = 0x04
@@ -103,7 +100,9 @@ def parse_checkpoint_body(text: str) -> dict:
     }
 
 
-def sign_note(body: str, name: str, private_key: Ed25519PrivateKey) -> str:
+def sign_note(body: str, name: str, private_key: "Ed25519PrivateKey") -> str:
+    from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+
     if not body.endswith("\n"):
         body = body + "\n"
     pk = private_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
@@ -168,6 +167,9 @@ def verify_signed_note(note: str, vkey: str) -> dict:
             continue
         if len(sig["payload"]) != 64:
             raise ValueError("invalid ed25519 signature length")
+        from cryptography.exceptions import InvalidSignature
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+
         pub = Ed25519PublicKey.from_public_bytes(key["public_key"])
         try:
             pub.verify(sig["payload"], parsed["text"].encode("utf-8"))
@@ -191,6 +193,6 @@ def parse_witness_sig(sig: dict) -> dict | None:
     return {"type": SIG_WITNESS, "timestamp": ts, "signature": payload[8:], "name": sig.get("name")}
 
 
-def sign_checkpoint(origin: str, tree_size: int, root: bytes, private_key: Ed25519PrivateKey) -> str:
+def sign_checkpoint(origin: str, tree_size: int, root: bytes, private_key: "Ed25519PrivateKey") -> str:
     body = checkpoint_body(origin or ORIGIN, tree_size, root)
     return sign_note(body, origin or ORIGIN, private_key)

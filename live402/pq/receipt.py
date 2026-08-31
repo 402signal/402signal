@@ -13,9 +13,7 @@ from __future__ import annotations
 import base64
 import os
 from collections.abc import Callable
-
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+from typing import Any
 
 from live402.pq import ORIGIN
 from live402.pq import checkpoint as ckpt
@@ -24,7 +22,7 @@ from live402.pq import merkle
 from live402.pq import store
 from live402.pq import trust
 
-_signer: Ed25519PrivateKey | None = None
+_signer: Any = None
 _before_append_hooks: list[Callable[[bytes], None]] = []
 
 
@@ -36,20 +34,22 @@ class CrashBeforeSign(RuntimeError):
     """Test crash after durable idx, before checkpoint signature."""
 
 
-def configure_signer(private_key: Ed25519PrivateKey | None) -> str:
+def configure_signer(private_key: Any = None) -> str:
     """Install an in-memory Ed25519 log key. Never log or serialize the private key."""
     global _signer
     _signer = private_key
     if private_key is None:
         store.meta_set("vkey", "")
         return ""
+    from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+
     pk = private_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
     vkey = ckpt.vkey_encode(ORIGIN, pk)
     store.meta_set("vkey", vkey)
     return vkey
 
 
-def current_signer() -> Ed25519PrivateKey | None:
+def current_signer():
     return _signer
 
 
