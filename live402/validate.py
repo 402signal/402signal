@@ -75,7 +75,10 @@ def public_validate_body(result: dict) -> dict:
     url = result.get("url")
     pay_to = result.get("payTo")
     live = bool(result.get("live"))
-    payable = bool(live and pay_to)
+    if result.get("payable") is not None:
+        payable = bool(result.get("payable"))
+    else:
+        payable = bool(live and history._observed_payable(result))
     observed = result.get("observed") if isinstance(result.get("observed"), dict) else history._empty_observed()
     claimed = result.get("claimed") if isinstance(result.get("claimed"), dict) else history._empty_claimed()
     hist = result.get("history") if isinstance(result.get("history"), dict) else {}

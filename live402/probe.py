@@ -423,24 +423,33 @@ def normalize_target_accepts(accepts: list | None) -> list[dict]:
 
 
 def _accepts_from(item: dict | None, envelope: dict | None) -> list[dict]:
-    """Merge envelope + catalog accepts so multi-rail terms survive."""
+    """CURRENT HTTP 402 envelope accepts only. Catalog claims never enter target.accepts."""
+    _ = item
     out: list[dict] = []
+    if not isinstance(envelope, dict):
+        return out
+    raw = envelope.get("accepts")
+    if not isinstance(raw, list):
+        return out
     seen: set[tuple] = set()
-    for blob in (envelope, item):
-        if not isinstance(blob, dict):
+    for acc in raw:
+        if not isinstance(acc, dict):
             continue
-        raw = blob.get("accepts")
-        if not isinstance(raw, list):
+        key = payment.accept_identity(acc)
+        if key in seen:
             continue
-        for acc in raw:
-            if not isinstance(acc, dict):
-                continue
-            key = payment.accept_identity(acc)
-            if key in seen:
-                continue
-            seen.add(key)
-            out.append(acc)
+        seen.add(key)
+        out.append(acc)
     return out
+
+
+def _catalog_accepts(item: dict | None) -> list[dict]:
+    if not isinstance(item, dict):
+        return []
+    raw = item.get("accepts")
+    if not isinstance(raw, list):
+        return []
+    return [acc for acc in raw if isinstance(acc, dict)]
 
 
 def build_target(item: dict | None, envelope: dict | None = None) -> dict:
@@ -472,25 +481,36 @@ def build_target(item: dict | None, envelope: dict | None = None) -> dict:
 
 
 def attach_invocable_target(result: dict, item: dict | None = None, envelope: dict | None = None) -> dict:
-    """On a live probe, attach the invocable contract. Missing schema is not a fake miss of liveness."""
+    """On a live probe, attach the invocable contract. Missing schema is not a fake miss of liveness.
+
+    challenge_observed = HTTP 402 + parseable x402.
+    payable = at least one complete CURRENT observed payment option.
+    invocable = payable + input schema. Fail closed. Never fill from catalog.
+    """
     env = envelope if isinstance(envelope, dict) else result.get("envelope")
+    if isinstance(env, dict):
+        result["envelope"] = env
     target = build_target(item, env)
     result["target"] = target
     schema, source = extract_input_schema_source(item, env)
     has_schema = isinstance(schema, dict) and bool(schema.get("properties") or schema.get("required"))
     live = bool(result.get("live"))
-    result["invocable"] = bool(live and has_schema)
+    result["challenge_observed"] = bool(live)
+    result["payable"] = bool(live and select._is_payable(result))
+    result["invocable"] = bool(result["payable"] and has_schema)
     if result["invocable"] and source:
         result["schema_source"] = source
         target["schema_source"] = source
-    if live and not result["invocable"]:
+    if result["payable"] and not result["invocable"]:
         result["miss_reason"] = "no_input_schema"
     elif not live:
         result["invocable"] = False
+        result["payable"] = False
+        result["challenge_observed"] = False
         if result.get("miss_reason"):
             result["miss_reason"] = public_miss_reason(result.get("miss_reason"))
-        # Keep target so the caller still sees catalog accepts/prices, but
-        # a 503 is not an invocable handoff.
+        # Keep target (envelope-only accepts) so the caller sees the observed
+        # handoff shape. Catalog prices stay on claimed, never here.
     return result
 
 
@@ -1036,6 +1056,10 @@ def attach_catalog_fields(result: dict, item: dict | None = None) -> dict:
     rail = item.get("_rail") if isinstance(item, dict) else None
     if rail and str(rail).strip():
         claimed.setdefault("source", str(rail).strip())
+    catalog_acc = _catalog_accepts(item)
+    if catalog_acc:
+        claimed["accepts"] = catalog_acc
+        claimed["payment_options"] = payment.payment_options_from_accepts(catalog_acc)
     if claimed:
         result["claimed"] = claimed
     return result
@@ -1208,6 +1232,27 @@ def _infer_fixture_miss(canned: dict) -> str:
     return _miss_from_status(status)
 
 
+def _fixture_observed_envelope(row: dict | None, canned: dict) -> dict | None:
+    """Canned 402 for fixture mode. Observed only — never merge a second catalog item."""
+    if isinstance(canned.get("envelope"), dict) and canned["envelope"].get("accepts"):
+        return canned["envelope"]
+    accepts = row.get("accepts") if isinstance(row, dict) else None
+    if not isinstance(accepts, list) or not accepts:
+        return None
+    env_accepts = []
+    pay = canned.get("payTo")
+    for acc in accepts:
+        if not isinstance(acc, dict):
+            continue
+        row_acc = dict(acc)
+        if pay and not str(row_acc.get("payTo") or "").strip():
+            row_acc["payTo"] = pay
+        env_accepts.append(row_acc)
+    if not env_accepts:
+        return None
+    return {"x402Version": 2, "accepts": env_accepts}
+
+
 def _fixture_probe(url: str, catalog_item: dict | None = None, batch_id: str | None = None, record: bool = True) -> dict:
     row = fixtures.lookup_url(url)
     probed_at = now_iso()
@@ -1245,9 +1290,12 @@ def _fixture_probe(url: str, catalog_item: dict | None = None, batch_id: str | N
         if not payable and canned.get("miss_reason"):
             entry["miss_reason"] = canned["miss_reason"]
         canned["probes"] = [entry]
+    env = _fixture_observed_envelope(row, canned) if payable else None
     result = health_from_probe(row.get("url") or url, canned)
+    if env:
+        result["envelope"] = env
     result = attach_catalog_fields(result, catalog_item or row)
-    result = attach_invocable_target(result, catalog_item or row)
+    result = attach_invocable_target(result, catalog_item or row, env)
     return _finalize_probe(result, batch_id=batch_id, record=record)
 
 
@@ -1613,9 +1661,30 @@ def _discovery_unavailable_miss(objective: str) -> dict:
     }
 
 
-def _attach_selection(body: dict, probed: list, winner, objective: str) -> dict:
+def _align_target_with_selected(result: dict, selected: dict | None) -> None:
+    """Handoff amount/facilitator must be the same observed option as selected_payment."""
+    if not isinstance(result, dict) or not isinstance(selected, dict):
+        return
+    target = result.get("target") if isinstance(result.get("target"), dict) else None
+    if target is None:
+        return
+    if selected.get("amount_atomic") is not None:
+        target["amountAtomic"] = str(selected["amount_atomic"])
+    if selected.get("display_amount"):
+        target["displayAmount"] = selected["display_amount"]
+    if selected.get("facilitator"):
+        target["facilitator"] = selected["facilitator"]
+
+
+def _attach_selection(body: dict, probed: list, winner, objective: str, constraints=None) -> dict:
     body["objective"] = objective
-    body["compared"] = select.comparison(probed, winner)
+    if isinstance(winner, dict):
+        selected = select.pick_selected_payment(winner, objective, constraints)
+        if selected:
+            winner["selected_payment"] = selected
+            body["selected_payment"] = selected
+            _align_target_with_selected(winner, selected)
+    body["compared"] = select.comparison(probed, winner, objective, constraints)
     body["tried"] = len(probed)
     return body
 
@@ -1924,16 +1993,19 @@ def _probe_tranche(
     return collected
 
 
-def _commit_route_batch(batch_id: str, probed: list) -> None:
-    """Coordinator: persist only the finalized selection set, then seal."""
+def _commit_route_batch(batch_id: str, probed: list) -> dict:
+    """Coordinator: persist only the finalized selection set, then seal.
+
+    Returns {url: write_meta} so the winner can be rehydrated with change state.
+    """
     accepted = [row for row in probed if isinstance(row, dict)]
     for row in accepted:
         row["batch_id"] = batch_id
     try:
         from live402 import history as history_mod
-        history_mod.persist_route_batch(batch_id, accepted)
+        return history_mod.persist_route_batch(batch_id, accepted) or {}
     except Exception:
-        return
+        return {}
 
 
 def _budget_hit(deadline: float | None) -> bool:
@@ -2029,13 +2101,14 @@ def route_need(
     }
     if winner:
         body = _attach_route_funnel(
-            _attach_selection(winner, probed, winner, obj),
+            _attach_selection(winner, probed, winner, obj, cons),
             **funnel,
         )
-        _commit_route_batch(batch_id, probed)
+        metas = _commit_route_batch(batch_id, probed)
         try:
             from live402 import history as history_mod
-            body = history_mod.attach_to_result(body)
+            meta = metas.get(body.get("url") or "") if isinstance(metas, dict) else None
+            body = history_mod.attach_to_result(body, meta)
         except Exception:
             pass
         body["batch_id"] = batch_id
@@ -2085,7 +2158,7 @@ def route_need(
         }
         if last.get("rail"):
             body["rail"] = last.get("rail")
-    out = _attach_route_funnel(_attach_selection(body, probed, None, obj), **funnel)
+    out = _attach_route_funnel(_attach_selection(body, probed, None, obj, cons), **funnel)
     _commit_route_batch(batch_id, probed)
     out["batch_id"] = batch_id
     return out

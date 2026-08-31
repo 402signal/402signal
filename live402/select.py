@@ -265,7 +265,41 @@ def _payto(result) -> str | None:
 
 
 def _is_payable(result) -> bool:
-    return bool(isinstance(result, dict) and result.get("live") and _payto(result))
+    """True iff at least one complete CURRENT observed payment option exists. Fail closed."""
+    if not isinstance(result, dict) or not result.get("live"):
+        return False
+    env = result.get("envelope") if isinstance(result.get("envelope"), dict) else {}
+    for opt in payment_options(result):
+        if payment.is_complete_payment_option(opt, env):
+            return True
+    return False
+
+
+def pick_selected_payment(result, objective=None, constraints=None) -> dict | None:
+    """Exact CURRENT OBSERVED option that made this route win. Never catalog-only."""
+    if not isinstance(result, dict) or not result.get("live"):
+        return None
+    env = result.get("envelope") if isinstance(result.get("envelope"), dict) else {}
+    cons = constraints if isinstance(constraints, dict) else {}
+    opts = _options_for_constraints(result, cons)
+    complete = [o for o in opts if payment.is_complete_payment_option(o, env)]
+    if not complete:
+        return None
+    obj = parse_objective(objective)
+    usd = [o for o in complete if o.get("normalized_usd") is not None]
+    if obj == "cheapest" or usd:
+        if usd:
+            complete = sorted(usd, key=lambda o: float(o["normalized_usd"]))
+        else:
+            keys = {payment.asset_identity(o) for o in complete}
+            keys.discard(None)
+            if len(keys) == 1:
+                complete = sorted(
+                    [o for o in complete if o.get("amount_atomic") is not None],
+                    key=lambda o: int(o["amount_atomic"]),
+                )
+    picked = complete[0]
+    return payment.selected_payment_fields(picked)
 
 
 def passes_constraints(result, constraints) -> bool:
@@ -274,7 +308,7 @@ def passes_constraints(result, constraints) -> bool:
         return False
     if not result.get("live"):
         return False
-    if not _payto(result):
+    if not _is_payable(result):
         return False
     cons = constraints if isinstance(constraints, dict) else {}
     rails = cons.get("rails")
@@ -553,29 +587,43 @@ def _compared_7d(result) -> tuple[int, float | None]:
     return n_7d, _as_float(hist.get("success_7d"))
 
 
-def comparison(results, winner) -> list[dict]:
-    """Slim rows for a later `compared` field. Cap 5. n<3 → success_7d is None."""
+def comparison(results, winner, objective=None, constraints=None) -> list[dict]:
+    """Slim rows for a later `compared` field. Cap 5. n<3 → success_7d is None.
+
+    amount_atomic / rail / selected_payment on the winner row are the same
+    CURRENT OBSERVED option stored on selected_payment.
+    """
     rows: list[dict] = []
     if not isinstance(results, list):
         return rows
+    winner_pay = None
+    if isinstance(winner, dict):
+        winner_pay = winner.get("selected_payment")
+        if not isinstance(winner_pay, dict):
+            winner_pay = pick_selected_payment(winner, objective, constraints)
     for result in results:
         if not isinstance(result, dict):
             continue
         n_7d, success_7d = _compared_7d(result)
-        rows.append(
-            {
-                "url": result.get("url"),
-                "rail": result.get("rail"),
-                "amount_atomic": amount_atomic(result),
-                "latency_ms": latency_ms(result),
-                "success_7d": success_7d,
-                "n_7d": n_7d,
-                "readiness": _readiness_label(result),
-                "live": bool(result.get("live")),
-                "invocable": bool(result.get("invocable")),
-                "selected": result is winner,
-            }
-        )
+        selected = result is winner
+        pay = winner_pay if selected else pick_selected_payment(result, objective, constraints)
+        row = {
+            "url": result.get("url"),
+            "rail": (pay or {}).get("rail") or result.get("rail"),
+            "amount_atomic": (pay or {}).get("amount_atomic")
+            if pay and pay.get("amount_atomic") is not None
+            else amount_atomic(result),
+            "latency_ms": latency_ms(result),
+            "success_7d": success_7d,
+            "n_7d": n_7d,
+            "readiness": _readiness_label(result),
+            "live": bool(result.get("live")),
+            "invocable": bool(result.get("invocable")),
+            "selected": selected,
+        }
+        if selected and pay:
+            row["selected_payment"] = pay
+        rows.append(row)
         if len(rows) >= 5:
             break
     return rows

@@ -41,6 +41,11 @@ def run_probe(body: dict) -> tuple[int, dict]:
         except Exception:
             if result.get("payTo_changed"):
                 result["risk"] = ["payTo_changed"]
+        if result.get("live"):
+            selected = select.pick_selected_payment(result, "best", None)
+            if selected:
+                result["selected_payment"] = selected
+                probe._align_target_with_selected(result, selected)
         result["need"] = need or None
         result["tried"] = 1
         result["source"] = "fixture" if fixtures.fixture_mode() else "url"

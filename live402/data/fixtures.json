@@ -14,7 +14,9 @@
       "accepts": [
         {
           "network": "base",
-          "amount": "10000"
+          "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+          "amount": "10000",
+          "payTo": "0xabc"
         }
       ]
     },
@@ -32,7 +34,9 @@
       "accepts": [
         {
           "network": "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=",
-          "amount": "10000"
+          "asset": "31566704",
+          "amount": "10000",
+          "payTo": "0xabc"
         }
       ]
     },
@@ -50,7 +54,9 @@
       "accepts": [
         {
           "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
-          "amount": "10000"
+          "asset": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+          "amount": "10000",
+          "payTo": "0xabc"
         }
       ]
     },

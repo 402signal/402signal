@@ -610,6 +610,15 @@ def payment_option_from_accept(accept, fallback_network=None) -> dict | None:
     elif amount_atomic is None and raw_amt is None and not asset and not network_s:
         return None
 
+    fac = extra.get("facilitator")
+    fac_url = None
+    if isinstance(fac, str) and fac.strip().startswith("https://"):
+        fac_url = fac.strip()
+    elif isinstance(fac, dict):
+        cand = str(fac.get("url") or "").strip()
+        if cand.startswith("https://"):
+            fac_url = cand
+
     return {
         "network": network_s,
         "rail": rail,
@@ -618,6 +627,10 @@ def payment_option_from_accept(accept, fallback_network=None) -> dict | None:
         "decimals": decimals,
         "display_amount": display_amount,
         "normalized_usd": normalized_usd,
+        "payTo": _text(accept.get("payTo")),
+        "facilitator": fac_url,
+        "scheme": _text(accept.get("scheme") or extra.get("scheme")),
+        "version": accept.get("x402Version", extra.get("version")),
     }
 
 
@@ -652,37 +665,103 @@ def _dedupe_options(opts: list[dict]) -> list[dict]:
     return out
 
 
+def observed_accepts(result) -> list[dict]:
+    """CURRENT observed accepts only. Never catalog / claimed / discovery.
+
+    Prefer the live 402 envelope, then target.accepts (envelope-normalized).
+    Top-level result.accepts is a test/helper fallback when no envelope exists.
+    """
+    if not isinstance(result, dict):
+        return []
+    env = result.get("envelope") if isinstance(result.get("envelope"), dict) else {}
+    target = result.get("target") if isinstance(result.get("target"), dict) else {}
+    env_acc = [a for a in (env.get("accepts") or []) if isinstance(a, dict)]
+    if env_acc:
+        return env_acc
+    tgt_acc = [a for a in (target.get("accepts") or []) if isinstance(a, dict)]
+    if tgt_acc:
+        return tgt_acc
+    return [a for a in (result.get("accepts") or []) if isinstance(a, dict)]
+
+
 def payment_options_from_result(result) -> list[dict]:
-    """Collect payment options from accepts / target / envelope / top-level amount."""
+    """Observed payment options only. Catalog claims are never promoted."""
     if not isinstance(result, dict):
         return []
     target = result.get("target") if isinstance(result.get("target"), dict) else {}
     env = result.get("envelope") if isinstance(result.get("envelope"), dict) else {}
     fallback = result.get("network") or result.get("rail")
-    blobs: list = []
-    for src in (result.get("accepts"), target.get("accepts"), env.get("accepts")):
-        if isinstance(src, list):
-            blobs.extend(a for a in src if isinstance(a, dict))
+    blobs = observed_accepts(result)
     opts = payment_options_from_accepts(blobs, fallback)
     if opts:
         return _dedupe_options(opts)
+    # Synthesize from this observation only when no accept list exists.
+    # Never invent from claimed.payment_options / catalog target leftovers.
     extra = {}
     display = target.get("displayAmount") or result.get("displayAmount")
     if display:
         extra["displayAmount"] = display
+    amount = result.get("amount")
+    if amount is None:
+        amount = result.get("amountAtomic") or target.get("amountAtomic")
     synth = payment_option_from_accept(
         {
             "network": fallback,
             "asset": result.get("asset") or target.get("asset"),
             "currency": result.get("currency"),
-            "amount": result.get("amount")
-            if result.get("amount") is not None
-            else (result.get("amountAtomic") or target.get("amountAtomic")),
+            "amount": amount,
+            "payTo": result.get("payTo"),
             "extra": extra,
         },
         fallback,
     )
     return [synth] if synth else []
+
+
+SUPPORTED_RAILS = frozenset(("base", "solana", "algorand"))
+
+
+def is_complete_payment_option(opt, envelope=None) -> bool:
+    """True iff the option is payable as observed. Fail closed. Never fill from catalog."""
+    if not isinstance(opt, dict):
+        return False
+    if opt.get("rail") not in SUPPORTED_RAILS:
+        return False
+    if not _text(opt.get("network")):
+        return False
+    if opt.get("amount_atomic") is None:
+        return False
+    if not _text(opt.get("asset")):
+        return False
+    if not _text(opt.get("payTo")):
+        return False
+    env = envelope if isinstance(envelope, dict) else {}
+    if env:
+        if "x402Version" in env and env.get("x402Version") is None:
+            return False
+        accepts = env.get("accepts") if isinstance(env.get("accepts"), list) else []
+        if any(isinstance(a, dict) and "scheme" in a for a in accepts):
+            if not _text(opt.get("scheme")):
+                return False
+    elif opt.get("scheme") is not None and not _text(opt.get("scheme")):
+        return False
+    return True
+
+
+def selected_payment_fields(opt) -> dict | None:
+    """Public selected_payment object. One observed option, no mixed rails."""
+    if not isinstance(opt, dict):
+        return None
+    return {
+        "rail": opt.get("rail"),
+        "network": opt.get("network"),
+        "asset": opt.get("asset"),
+        "amount_atomic": opt.get("amount_atomic"),
+        "display_amount": opt.get("display_amount"),
+        "normalized_usd": opt.get("normalized_usd"),
+        "payTo": opt.get("payTo"),
+        "facilitator": opt.get("facilitator"),
+    }
 
 
 def asset_identity(opt: dict | None) -> str | None:
