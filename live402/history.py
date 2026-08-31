@@ -632,6 +632,21 @@ def _write_probe_row(dest: str, snap: dict, meta: dict) -> None:
     _cap_observations(cur, dest)
 
 
+def _touch_shadow_verified(url: str | None, snap: dict | None = None) -> None:
+    """Verification clock on catalog.sqlite. Fail closed. Never writes claims as observed."""
+    dest = _text(url)
+    if not dest:
+        return
+    try:
+        from live402 import shadow
+
+        shadow.mark_verified(dest)
+        if isinstance(snap, dict) and snap.get("live"):
+            shadow.touch_routed([dest])
+    except Exception:
+        return
+
+
 def record_probe(url: str, snap: dict | None = None) -> dict:
     """Persist one probe. Ignores writes to a sealed batch_id. Never raises into the request path."""
     meta = {"payTo_flipped": False, "price_flipped": False, "schema_flipped": False}
@@ -648,6 +663,7 @@ def record_probe(url: str, snap: dict | None = None) -> dict:
             conn = _connect()
             conn.commit()
             _chmod_db_files(_conn_path or db_path())
+        _touch_shadow_verified(dest, snap)
         return meta
     except Exception:
         return meta
@@ -688,6 +704,8 @@ def persist_route_batch(batch_id: str | None, results: list | None) -> dict:
             conn = _connect()
             conn.commit()
             _chmod_db_files(_conn_path or db_path())
+        for raw in rows:
+            _touch_shadow_verified(_text(raw.get("url")), raw)
         return metas
     except Exception:
         return metas

@@ -1,6 +1,7 @@
 """Request-time discovery query. Slim records, capability labels.
 
-Never copies the three x402 catalogs into process memory. No daemon TTL crawl.
+Shadow catalog lives on disk (catalog.sqlite). Live search is need-scoped.
+Never copies the three x402 catalogs into process memory. No 44k RAM index.
 CDP is queried via /discovery/search. PayAI and GoPlausible use search when
 the host serves it, else a small first-pages fetch. Pagination is
 limit+offset+total only. Never send page= or cursor=. Never fetch caller URLs.
@@ -8,9 +9,12 @@ limit+offset+total only. Never send page= or cursor=. Never fetch caller URLs.
 
 from __future__ import annotations
 
+import os
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
-from live402 import fixtures, payment, probe
+from live402 import fixtures, payment, probe, shadow
 
 PAGE_SIZE = 100
 # Need-scoped working set only. Do not walk PayAI's ~279 pages or accumulate 30k.
@@ -20,6 +24,8 @@ SEARCH_LIMIT = 20
 NEED_QUERY_MAX = 200
 # Raw CDP pages include huge schemas; 1MiB/page then slim immediately. Oversize pages dropped.
 PAGE_READ_LIMIT = 1_048_576
+# Need-scoped union only. local FTS + 3 rails, each capped. Never a 44k list.
+WORKING_SET_HARD_CAP = QUERY_MAX_ITEMS * 3 + shadow.FTS_LIMIT
 CDP_SEARCH = "https://api.cdp.coinbase.com/platform/v2/x402/discovery/search"
 PAYAI_SEARCH = "https://facilitator.payai.network/discovery/search"
 GOPL_SEARCH = "https://facilitator.goplausible.xyz/discovery/search"
@@ -176,13 +182,56 @@ def _empty_index() -> dict:
     }
 
 
+_working_peak = 0
+_working_peak_lock = threading.Lock()
+_query_pool: ThreadPoolExecutor | None = None
+_query_pool_lock = threading.Lock()
+_refresh_thread: threading.Thread | None = None
+_refresh_stop = threading.Event()
+_refresh_lock = threading.Lock()
+
+
+def working_set_peak() -> int:
+    """Peak in-memory discovery items this process. Need-scoped, not the world."""
+    return _working_peak
+
+
+def reset_working_set_peak() -> None:
+    global _working_peak
+    with _working_peak_lock:
+        _working_peak = 0
+
+
+def _note_working(n: int) -> None:
+    global _working_peak
+    try:
+        count = int(n)
+    except (TypeError, ValueError):
+        return
+    if count < 0:
+        return
+    with _working_peak_lock:
+        if count > _working_peak:
+            _working_peak = count
+
+
+def _discovery_pool() -> ThreadPoolExecutor:
+    global _query_pool
+    with _query_pool_lock:
+        if _query_pool is None:
+            _query_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="disc")
+        return _query_pool
+
+
 def reset_index() -> None:
-    """No-op. There is no in-RAM world index to drop. Tests still call this."""
+    """Drop the test shadow DB. There is no in-RAM world index."""
+    reset_working_set_peak()
+    shadow.reset()
     return
 
 
 def refresh_in_progress() -> bool:
-    """Always False. There is no daemon catalog walk."""
+    """Always False. Trickle is one page at a time, never a world walk."""
     return False
 
 
@@ -939,6 +988,84 @@ def _first_pages_rail(rail: str) -> dict:
     return result
 
 
+def _local_fts(need: str, rails) -> dict:
+    """Disk FTS only. Need-scoped. Never a full-table scan into RAM."""
+    try:
+        items = shadow.fts_search(need, rails=rails, limit=shadow.FTS_LIMIT)
+    except Exception:
+        items = []
+    return {"items": items, "via": "local", "error": None, "truncated": False}
+
+
+def _merge_local_into_rails(by_rail: dict, local_items: list, rails) -> None:
+    """Add FTS hits that live search missed. Per-rail cap still applies."""
+    allowed = set(rails or _RAILS)
+    seen: dict[str, set[str]] = {}
+    for rail, rows in by_rail.items():
+        seen[rail] = {probe._resource_url(i) for i in rows if isinstance(i, dict)}
+    for item in local_items or []:
+        if not isinstance(item, dict):
+            continue
+        rail = probe._item_rail(item)
+        if rail not in allowed:
+            continue
+        key = probe._resource_url(item)
+        if not key:
+            continue
+        bucket = by_rail.setdefault(rail, [])
+        have = seen.setdefault(rail, set())
+        if key in have:
+            continue
+        if len(bucket) >= QUERY_MAX_ITEMS:
+            continue
+        bucket.append(item)
+        have.add(key)
+
+
+def _write_through(by_rail: dict, rails) -> None:
+    """Persist this request's slim hits. Page-sized. Discard after commit."""
+    allowed = set(rails or _RAILS)
+    for rail in allowed:
+        rows = [i for i in (by_rail.get(rail) or []) if isinstance(i, dict)]
+        if not rows:
+            continue
+        try:
+            shadow.upsert_items(rows, source=shadow.source_for_rail(rail))
+        except Exception:
+            continue
+
+
+def _union_local_and_write_through(
+    need: str,
+    rails,
+    items: list,
+    by_rail: dict,
+    local_already: bool = False,
+) -> tuple[list, dict]:
+    """Union local FTS (if needed), write-through, touch heat. Keep the working set small."""
+    if not local_already:
+        local = _local_fts(need, rails).get("items") or []
+        _note_working(len(local) + sum(len(v or []) for v in by_rail.values()))
+        _merge_local_into_rails(by_rail, local, rails)
+        items = _merge_items(by_rail)
+    if len(items) > WORKING_SET_HARD_CAP:
+        items = items[:WORKING_SET_HARD_CAP]
+    _note_working(len(items))
+    _write_through(by_rail, rails)
+    urls = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        key = probe._resource_url(item)
+        if key:
+            urls.append(key)
+    try:
+        shadow.touch_searched(urls)
+    except Exception:
+        pass
+    return items, by_rail
+
+
 def query_rail(rail: str, need: str, url_substring: str | None = None) -> dict:
     """Search this rail, else first pages. CDP is search-only (no 14k walk)."""
     if rail not in _RAILS:
@@ -982,6 +1109,7 @@ def query_for_need(
             row["_rail"] = rail
             by_rail[rail].append(row)
         items = _merge_items(by_rail)
+        items, by_rail = _union_local_and_write_through(need, rails, items, by_rail)
         discovery = {
             rail: {
                 "via": "fixture",
@@ -1022,11 +1150,25 @@ def query_for_need(
             "discovery": discovery,
         }
 
-    for rail in rails:
+    live_results: dict[str, dict] = {}
+    local_items: list[dict] = []
+    pool = _discovery_pool()
+    futs = {pool.submit(query_rail, rail, q): ("rail", rail) for rail in rails}
+    futs[pool.submit(_local_fts, q, rails)] = ("local", "local")
+    for fut in as_completed(futs):
+        kind, key = futs[fut]
         try:
-            result = query_rail(rail, q)
+            result = fut.result()
         except Exception:
             result = {**_empty_discovery_row("search", "fetch_failed"), "items": []}
+        if kind == "local":
+            local_items = list(result.get("items") or [])[: shadow.FTS_LIMIT]
+            _note_working(len(local_items))
+            continue
+        live_results[key] = result if isinstance(result, dict) else {}
+
+    for rail in rails:
+        result = live_results.get(rail) or {**_empty_discovery_row("search", "fetch_failed"), "items": []}
         got = list(result.get("items") or [])
         # Per-rail cap. Do not let leftovers from one rail raise another rail's cap.
         capped = got[:QUERY_MAX_ITEMS]
@@ -1043,8 +1185,14 @@ def query_for_need(
         err = row.get("error")
         if err:
             errors[rail] = err
+        _note_working(sum(len(v) for v in by_rail.values()) + len(local_items))
 
+    _merge_local_into_rails(by_rail, local_items, rails)
     items = _merge_items(by_rail)
+    if len(items) > WORKING_SET_HARD_CAP:
+        items = items[:WORKING_SET_HARD_CAP]
+    _note_working(len(items))
+    items, by_rail = _union_local_and_write_through(q, rails, items, by_rail, local_already=True)
     return {
         "items": items,
         "by_rail": by_rail,
@@ -1068,6 +1216,12 @@ def item_for_url(url: str) -> dict | None:
         if rail not in _RAILS:
             rail = "base"
         return slim_item(found, rail)
+    try:
+        shadowed = shadow.get_resource(raw)
+    except Exception:
+        shadowed = None
+    if shadowed:
+        return shadowed
     if fixtures.fixture_mode():
         return None
     parsed = urlparse(raw)
@@ -1081,6 +1235,11 @@ def item_for_url(url: str) -> dict | None:
             continue
         for item in result.get("items") or []:
             if probe._resource_url(item) == raw:
+                try:
+                    shadow.upsert_item(item, source=shadow.source_for_rail(rail))
+                    shadow.touch_searched([raw])
+                except Exception:
+                    pass
                 return item
     return None
 
@@ -1100,6 +1259,139 @@ def refresh() -> dict:
     return _empty_index()
 
 
+def _refresh_disabled() -> bool:
+    raw = (os.environ.get("LIVE402_CATALOG_REFRESH") or "1").strip().lower()
+    return raw in {"0", "false", "off", "no"}
+
+
+def ingest_one_page(source: str) -> dict:
+    """COLD trickle: one allowlisted page → slim → upsert → commit → discard."""
+    if fixtures.fixture_mode():
+        return {"upserted": 0, "skipped": "fixture", "complete": False}
+    src = (source or "").strip()
+    if src not in shadow.SOURCES:
+        return {"upserted": 0, "error": "unknown_source", "complete": False}
+    rail = shadow.rail_for_source(src)
+    base = ""
+    for name, url in probe.CATALOGS:
+        if name == rail:
+            base = url
+            break
+    if not base or not probe.catalog_url_allowed(base):
+        return {"upserted": 0, "error": "not_allowlisted", "complete": False}
+    state = shadow.source_state(src)
+    if state.get("sweep_started_at") is None:
+        shadow.begin_sweep(src)
+        state = shadow.source_state(src)
+    try:
+        offset = int(state.get("cursor") or 0)
+    except (TypeError, ValueError):
+        offset = 0
+    if offset < 0:
+        offset = 0
+    url = page_url(base, PAGE_SIZE, offset)
+    if not url:
+        return {"upserted": 0, "error": "not_allowlisted", "complete": False}
+    timeout = max(probe.probe_timeout(), 8.0)
+    try:
+        payload = probe._fetch_catalog_payload(url, timeout, read_limit=PAGE_READ_LIMIT)
+    except Exception:
+        return {"upserted": 0, "error": "fetch_failed", "complete": False}
+    raw_items = _items_from_payload(payload)
+    pag = parse_pagination(payload, requested_limit=PAGE_SIZE)
+    slimmed: list[dict] = []
+    for raw in raw_items:
+        slimmed.append(slim_item(raw, rail))
+        if len(slimmed) >= PAGE_SIZE:
+            break
+    n = len(slimmed)
+    _note_working(n)
+    step = _step_offset(pag, n)
+    last = bool(pag.get("last"))
+    total = pag.get("total")
+    if not last and total is not None and (offset + max(step, n)) >= int(total):
+        last = True
+    if n == 0:
+        last = True
+    result = shadow.ingest_page(
+        src,
+        slimmed,
+        offset=offset,
+        last=last,
+        upstream_total=total,
+        step=step or n,
+    )
+    slimmed.clear()
+    raw_items = None
+    return result
+
+
+def _refresh_url_claims(url: str) -> None:
+    """Re-search one HOT/WARM URL. Need-scoped. Discard the page after upsert."""
+    raw = (url or "").strip()
+    if not raw:
+        return
+    parsed = urlparse(raw)
+    host = (parsed.hostname or "").strip()
+    sub = host if len(host) >= 3 else None
+    q = raw[:NEED_QUERY_MAX]
+    for rail in _RAILS:
+        try:
+            result = query_rail(rail, q, url_substring=sub)
+        except Exception:
+            continue
+        got = list(result.get("items") or [])[:QUERY_MAX_ITEMS]
+        _note_working(len(got))
+        if got:
+            shadow.upsert_items(got, source=shadow.source_for_rail(rail))
+        del got
+
+
+def trickle_once() -> str:
+    """One adaptive step: HOT, else WARM, else one COLD page. Never a full sweep."""
+    if fixtures.fixture_mode() or _refresh_disabled():
+        return "idle"
+    hot = shadow.due_hot(3)
+    if hot:
+        for url in hot:
+            _refresh_url_claims(url)
+        return "hot"
+    warm = shadow.due_warm(3)
+    if warm:
+        for url in warm:
+            _refresh_url_claims(url)
+        return "warm"
+    src = shadow.next_cold_source()
+    if src:
+        ingest_one_page(src)
+        return "cold"
+    return "idle"
+
+
+def _trickle_loop() -> None:
+    while not _refresh_stop.wait(shadow.trickle_sleep_s()):
+        if fixtures.fixture_mode() or _refresh_disabled():
+            continue
+        try:
+            trickle_once()
+        except Exception:
+            continue
+
+
 def start_refresher() -> None:
-    """No-op. No 180s full-catalog daemon."""
-    return
+    """Start the trickle loop. Does not walk the world. Does not block /route."""
+    if fixtures.fixture_mode() or _refresh_disabled():
+        return
+    global _refresh_thread
+    with _refresh_lock:
+        if _refresh_thread is not None and _refresh_thread.is_alive():
+            return
+        _refresh_stop.clear()
+        _refresh_thread = threading.Thread(
+            target=_trickle_loop, name="catalog-trickle", daemon=True
+        )
+        _refresh_thread.start()
+
+
+def stop_refresher() -> None:
+    _refresh_stop.set()

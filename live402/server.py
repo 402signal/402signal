@@ -13,7 +13,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from live402 import discover, history, mcp, payment, pulse, rails, validate
+from live402 import catalog, discover, history, mcp, payment, pulse, rails, validate
 from live402.route import handle_route
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -500,6 +500,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--port", type=int, default=default_port())
     args = parser.parse_args(argv)
     httpd = ThreadingHTTPServer((args.host, args.port), Handler)
+    catalog.start_refresher()
     print(
         "402Signal http://%s:%s  fixture=%r local_free=%r"
         % (
