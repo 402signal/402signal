@@ -44,6 +44,10 @@ def run_probe(body: dict) -> tuple[int, dict]:
         result["need"] = need or None
         result["tried"] = 1
         result["source"] = "fixture" if fixtures.fixture_mode() else "url"
+        result["discovery_matches"] = 0
+        result["candidates_considered"] = 1
+        result["candidates_probed"] = 1
+        result["probe_budget_exhausted"] = False
         result.setdefault("payTo", None)
         result.setdefault("traction", "unknown")
         if result.get("live"):

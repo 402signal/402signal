@@ -566,6 +566,128 @@ def record_claim(url: str, fields: dict | None = None, *, source=None, rail=None
         return
 
 
+def rank_hints(urls: list[str]) -> dict[str, dict]:
+    """Cheap sqlite join for probe-shortlist order. Empty on miss. Never invents 0.0 rates."""
+    dests: list[str] = []
+    seen: set[str] = set()
+    for raw in urls:
+        dest = _text(raw)
+        if not dest or dest in seen:
+            continue
+        seen.add(dest)
+        dests.append(dest)
+    if not dests:
+        return {}
+    out: dict[str, dict] = {}
+    try:
+        now = int(time.time())
+        cutoff = now - WEEK
+        with _lock:
+            conn = _connect()
+            cur = conn.cursor()
+            qmarks = ",".join("?" * len(dests))
+            cur.execute(
+                f"SELECT url, last_checked, last_success_402 FROM url_state WHERE url IN ({qmarks})",
+                dests,
+            )
+            for url, last_checked, last_ok in cur.fetchall():
+                out[url] = {
+                    "last_checked": last_checked,
+                    "last_success_402": last_ok,
+                    "n_7d": 0,
+                    "ok_7d": 0,
+                }
+            cur.execute(
+                f"SELECT url, COUNT(*), SUM(live) FROM probes WHERE url IN ({qmarks}) AND ts >= ? GROUP BY url",
+                (*dests, cutoff),
+            )
+            for url, n, ok in cur.fetchall():
+                row = out.setdefault(
+                    url,
+                    {
+                        "last_checked": None,
+                        "last_success_402": None,
+                        "n_7d": 0,
+                        "ok_7d": 0,
+                    },
+                )
+                row["n_7d"] = int(n or 0)
+                row["ok_7d"] = int(ok or 0)
+        return out
+    except Exception:
+        return {}
+
+
+def preview_observations(urls: list[str]) -> dict[str, dict]:
+    """Read-only claimed/observed join for /preview. Never probes. Never invents rates."""
+    dests: list[str] = []
+    alias: dict[str, str] = {}
+    for raw in urls:
+        dest = _text(raw)
+        if not dest:
+            continue
+        alias[raw] = dest
+        if dest not in dests:
+            dests.append(dest)
+    unknown = {"status": "not_yet_observed"}
+    out: dict[str, dict] = {raw: dict(unknown) for raw in alias}
+    if not dests:
+        return out
+    try:
+        hints = rank_hints(dests)
+        with _lock:
+            conn = _connect()
+            cur = conn.cursor()
+            qmarks = ",".join("?" * len(dests))
+            cur.execute(
+                f"""
+                SELECT url, field, value, ts
+                FROM observations
+                WHERE url IN ({qmarks}) AND source_type = ?
+                ORDER BY ts DESC, id DESC
+                """,
+                (*dests, SOURCE_OBSERVED),
+            )
+            rows = cur.fetchall()
+        latest: dict[str, dict] = {}
+        for url, field, value, _ts in rows:
+            bucket = latest.setdefault(url, {})
+            if field in bucket:
+                continue
+            bucket[field] = value
+        by_dest: dict[str, dict] = {}
+        for dest in dests:
+            hint = hints.get(dest) or {}
+            fields = latest.get(dest) or {}
+            last_checked = hint.get("last_checked")
+            if last_checked is None and not fields:
+                by_dest[dest] = dict(unknown)
+                continue
+            row = {"status": "observed", "n_7d": int(hint.get("n_7d") or 0)}
+            iso = _iso_ts(last_checked)
+            if iso:
+                row["last_checked"] = iso
+            payable = _as_int(fields.get("payable"), None)
+            if payable is not None:
+                row["payable"] = bool(payable)
+            invocable = _as_int(fields.get("invocable"), None)
+            if invocable is not None:
+                row["invocable"] = bool(invocable)
+            latency = _as_int(fields.get("latency_ms"), None)
+            if latency is not None:
+                row["last_latency_ms"] = latency
+            n_7d = int(row["n_7d"] or 0)
+            if n_7d >= MIN_HEALTHY_N:
+                ok = int(hint.get("ok_7d") or 0)
+                row["success_7d"] = (ok / n_7d) if n_7d else None
+            by_dest[dest] = row
+        for raw, dest in alias.items():
+            out[raw] = dict(by_dest.get(dest) or unknown)
+        return out
+    except Exception:
+        return {raw: dict(unknown) for raw in alias}
+
+
 def latest_observations(url: str) -> dict:
     """Latest claimed vs observed per field. Missing side/field is empty / absent. Never invent 0/false."""
     out = {"claimed": {}, "observed": {}}

@@ -12,6 +12,7 @@ import time
 import uuid
 import urllib.error
 import urllib.request
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import datetime, timezone
 from urllib.parse import urljoin, urlparse
 
@@ -33,6 +34,8 @@ MAX_SINGLE_TIMEOUT = 10.0
 DNS_TIMEOUT = 2.0
 PROBE_BUDGET_SECONDS = 55.0
 MAX_PROBE = 5
+FIRST_TRANCHE = 3
+MAX_IN_FLIGHT = 3
 READ_LIMIT = 65536
 MAX_REDIRECTS = 2
 MISS_REASONS = (
@@ -47,6 +50,7 @@ MISS_REASONS = (
     "ssrf",
     "no_input_schema",
     "constraints_unmet",
+    "probe_budget_exhausted",
 )
 _MISS_MAP = {
     "empty_402": "no_402_envelope",
@@ -72,6 +76,7 @@ _MISS_MAP = {
     "probe_timeout": "probe_timeout",
     "upstream_5xx": "upstream_5xx",
     "constraints_unmet": "constraints_unmet",
+    "probe_budget_exhausted": "probe_budget_exhausted",
 }
 BLOCKED_HOSTS = {
     "localhost",
@@ -1399,6 +1404,10 @@ def _discovery_unavailable_miss(objective: str) -> dict:
         "probed_at": probed_at,
         "objective": objective,
         "compared": [],
+        "discovery_matches": 0,
+        "candidates_considered": 0,
+        "candidates_probed": 0,
+        "probe_budget_exhausted": False,
         "health": {
             "live": False,
             "last_probe": probed_at,
@@ -1416,12 +1425,166 @@ def _attach_selection(body: dict, probed: list, winner, objective: str) -> dict:
     return body
 
 
+def _attach_route_funnel(
+    body: dict,
+    *,
+    discovery_matches: int,
+    candidates_considered: int,
+    candidates_probed: int,
+    probe_budget_exhausted: bool,
+) -> dict:
+    body["discovery_matches"] = int(discovery_matches)
+    body["candidates_considered"] = int(candidates_considered)
+    body["candidates_probed"] = int(candidates_probed)
+    body["probe_budget_exhausted"] = bool(probe_budget_exhausted)
+    return body
+
+
 def _selection_set(probed: list) -> list:
     """Live hits. Drop payTo_changed when a stable live hit exists in the window."""
     live_hits = [r for r in probed if isinstance(r, dict) and r.get("live")]
     if any(not r.get("payTo_changed") for r in live_hits):
         return [r for r in live_hits if not r.get("payTo_changed")]
     return live_hits
+
+
+def _history_boost_shortlist(ranked: list[dict]) -> list[dict]:
+    """Cheap sqlite join: prefer recently-successful URLs inside the ranked window.
+
+    Does not rewrite rank_resources. prefer_network / need score stay primary.
+    """
+    if len(ranked) <= 1:
+        return ranked
+    window = min(len(ranked), max(MAX_PROBE * 2, FIRST_TRANCHE * 2))
+    head = ranked[:window]
+    tail = ranked[window:]
+    urls = [_resource_url(item) for item in head]
+    try:
+        from live402 import history as history_mod
+        hints = history_mod.rank_hints(urls)
+    except Exception:
+        return ranked
+    if not hints:
+        return ranked
+    indexed = list(enumerate(head))
+
+    def sort_key(pair):
+        idx, item = pair
+        hint = hints.get(_resource_url(item)) or {}
+        last_ok = 1 if hint.get("last_success_402") else 0
+        n_7d = 0
+        try:
+            n_7d = int(hint.get("n_7d") or 0)
+        except (TypeError, ValueError):
+            n_7d = 0
+        mature = 1 if n_7d >= 10 else 0
+        weak = 1 if n_7d >= 3 else 0
+        return (last_ok, mature, weak, n_7d, -idx)
+
+    indexed.sort(key=sort_key, reverse=True)
+    return [item for _idx, item in indexed] + tail
+
+
+def _finalize_routed_probe(result: dict, item: dict, need: str) -> dict:
+    result = attach_catalog_fields(result, item)
+    try:
+        from live402 import history as history_mod
+        result = history_mod.attach_to_result(result)
+    except Exception:
+        if result.get("payTo_changed"):
+            result["risk"] = ["payTo_changed"]
+    result["need"] = need
+    result["rail"] = _item_rail(item)
+    result["source"] = "fixture" if fixtures.fixture_mode() else "discovery"
+    return result
+
+
+def _probe_one_candidate(item: dict, need: str, deadline: float | None, batch_id: str) -> dict:
+    url = _resource_url(item)
+    result = probe_url(url, catalog_item=item, deadline=deadline, batch_id=batch_id)
+    return _finalize_routed_probe(result, item, need)
+
+
+def _probe_miss_stub(item: dict, need: str, miss_reason: str) -> dict:
+    url = _resource_url(item)
+    return {
+        "live": False,
+        "invocable": False,
+        "url": url,
+        "status": None,
+        "latency_ms": 0,
+        "has_402_challenge": False,
+        "payTo": None,
+        "miss_reason": public_miss_reason(miss_reason) or miss_reason,
+        "probes": [],
+        "probed_at": now_iso(),
+        "need": need,
+        "rail": _item_rail(item) if isinstance(item, dict) else None,
+        "source": "fixture" if fixtures.fixture_mode() else "discovery",
+    }
+
+
+def _probe_one_or_stub(item: dict, need: str, deadline: float | None, batch_id: str) -> dict:
+    try:
+        return _probe_one_candidate(item, need, deadline, batch_id)
+    except Exception:
+        return _probe_miss_stub(item, need, "no_402_envelope")
+
+
+def _probe_tranche(
+    items: list[dict],
+    need: str,
+    deadline: float | None,
+    batch_id: str,
+    should_stop=None,
+) -> list[dict]:
+    """Concurrent unpaid probes. max MAX_IN_FLIGHT. Stop when should_stop; ignore stragglers."""
+    if not items:
+        return []
+    if remaining_timeout(deadline) is not None and remaining_timeout(deadline) <= 0:
+        return []
+    collected: list[dict] = []
+
+    def take(row: dict) -> bool:
+        collected.append(row)
+        return bool(should_stop and should_stop(collected))
+
+    if len(items) == 1:
+        if take(_probe_one_or_stub(items[0], need, deadline, batch_id)):
+            return collected
+        return collected
+
+    workers = min(MAX_IN_FLIGHT, len(items))
+    pool = ThreadPoolExecutor(max_workers=workers)
+    try:
+        futs = {
+            pool.submit(_probe_one_candidate, item, need, deadline, batch_id): item
+            for item in items
+        }
+        pending = set(futs)
+        while pending:
+            if remaining_timeout(deadline) is not None and remaining_timeout(deadline) <= 0:
+                break
+            done, pending = wait(pending, timeout=0.05, return_when=FIRST_COMPLETED)
+            for fut in done:
+                item = futs[fut]
+                try:
+                    row = fut.result()
+                except Exception:
+                    row = _probe_miss_stub(item, need, "no_402_envelope")
+                if take(row):
+                    for leftover in pending:
+                        leftover.cancel()
+                    pending.clear()
+                    return collected
+        return collected
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
+
+
+def _budget_hit(deadline: float | None) -> bool:
+    left = remaining_timeout(deadline)
+    return left is not None and left <= 0
 
 
 def route_need(
@@ -1431,7 +1594,7 @@ def route_need(
     objective: str | None = None,
     constraints: dict | None = None,
 ) -> dict:
-    """Fuzzy-match discovery, probe up to 5, pick best-of-N. Else fail-closed."""
+    """Rank, probe in concurrent tranches under the 55s budget, pick best-of-N. Fail-closed."""
     if deadline is None:
         deadline = time.monotonic() + PROBE_BUDGET_SECONDS
     prefer = normalize_prefer_network(prefer_network)
@@ -1442,42 +1605,63 @@ def route_need(
     except Exception:
         return _discovery_unavailable_miss(obj)
     ranked = rank_resources(need, items, prefer_network=prefer)
+    ranked = _history_boost_shortlist(ranked)
+    discovery_matches = len(ranked)
     probed: list[dict] = []
     last = None
     batch_id = uuid.uuid4().hex
-    for item in ranked[:MAX_PROBE]:
-        if remaining_timeout(deadline) is not None and remaining_timeout(deadline) <= 0:
-            if not probed:
-                last = {
-                    "live": False,
-                    "invocable": False,
-                    "url": _resource_url(item),
-                    "status": None,
-                    "latency_ms": 0,
-                    "has_402_challenge": False,
-                    "payTo": None,
-                    "miss_reason": "probe_timeout",
-                    "probes": [],
-                    "probed_at": now_iso(),
-                }
+    next_idx = 0
+    probe_budget_exhausted = False
+
+    def winner_now():
+        return select.pick_winner(_selection_set(probed), obj, cons)
+
+    def should_stop(batch_so_far: list[dict]) -> bool:
+        return select.enough_evidence(probed + batch_so_far, obj, cons)
+
+    while next_idx < len(ranked) and len(probed) < MAX_PROBE:
+        if _budget_hit(deadline):
+            probe_budget_exhausted = True
             break
-        url = _resource_url(item)
-        last = probe_url(url, catalog_item=item, deadline=deadline, batch_id=batch_id)
-        last = attach_catalog_fields(last, item)
-        try:
-            from live402 import history as history_mod
-            last = history_mod.attach_to_result(last)
-        except Exception:
-            if last.get("payTo_changed"):
-                last["risk"] = ["payTo_changed"]
-        last["need"] = need
-        last["rail"] = _item_rail(item)
-        last["source"] = "fixture" if fixtures.fixture_mode() else "discovery"
-        probed.append(last)
-    selection_set = _selection_set(probed)
-    winner = select.pick_winner(selection_set, obj, cons)
+        if select.enough_evidence(probed, obj, cons):
+            break
+        take = min(FIRST_TRANCHE, MAX_PROBE - len(probed), len(ranked) - next_idx)
+        if take <= 0:
+            break
+        tranche = ranked[next_idx:next_idx + take]
+        batch = _probe_tranche(tranche, need, deadline, batch_id, should_stop=should_stop)
+        if batch:
+            probed.extend(batch)
+            last = batch[-1]
+            next_idx += take
+        elif _budget_hit(deadline):
+            probe_budget_exhausted = True
+            break
+        else:
+            next_idx += take
+        if select.enough_evidence(probed, obj, cons):
+            break
+        if winner_now() and (next_idx >= len(ranked) or len(probed) >= MAX_PROBE):
+            break
+        if _budget_hit(deadline) and next_idx < len(ranked):
+            probe_budget_exhausted = True
+            break
+
+    if _budget_hit(deadline) and next_idx < len(ranked) and not winner_now():
+        probe_budget_exhausted = True
+
+    winner = winner_now()
+    funnel = {
+        "discovery_matches": discovery_matches,
+        "candidates_considered": discovery_matches,
+        "candidates_probed": len(probed),
+        "probe_budget_exhausted": bool(probe_budget_exhausted),
+    }
     if winner:
-        return _attach_selection(winner, probed, winner, obj)
+        return _attach_route_funnel(
+            _attach_selection(winner, probed, winner, obj),
+            **funnel,
+        )
     some_live = any(isinstance(r, dict) and r.get("live") for r in probed)
     body = {
         "live": False,
@@ -1502,12 +1686,21 @@ def route_need(
             "status": (last or {}).get("status"),
         },
     }
-    if some_live:
+    untested = next_idx < len(ranked)
+    if not ranked:
+        body["miss_reason"] = "no_candidates"
+    elif probe_budget_exhausted and untested:
+        body["miss_reason"] = "probe_budget_exhausted"
+    elif some_live:
         body["miss_reason"] = "constraints_unmet"
     elif last and last.get("miss_reason"):
         body["miss_reason"] = public_miss_reason(last.get("miss_reason")) or last.get("miss_reason")
-    elif not probed:
-        body["miss_reason"] = "no_candidates"
+    elif not probed and ranked:
+        body["miss_reason"] = "probe_budget_exhausted" if probe_budget_exhausted else "no_candidates"
+        if not probe_budget_exhausted:
+            # Ranked existed but nothing was probed and the budget is still open:
+            # treat as no usable candidate rather than leaking an internal stall.
+            body["miss_reason"] = "no_candidates"
     if last:
         body["last"] = {
             "url": last.get("url"),
@@ -1517,4 +1710,4 @@ def route_need(
         }
         if last.get("rail"):
             body["rail"] = last.get("rail")
-    return _attach_selection(body, probed, None, obj)
+    return _attach_route_funnel(_attach_selection(body, probed, None, obj), **funnel)

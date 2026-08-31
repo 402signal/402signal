@@ -638,11 +638,11 @@ class PaywallTests(unittest.TestCase):
         prices = {s["need"]: s["price"] for s in body["samples"]}
         self.assertTrue(any(v == "$0.01" for v in prices.values()))
         chains_in_samples = [s["chain"] for s in body["samples"]]
-        self.assertIn("algorand", chains_in_samples)
-        first_algo = next(i for i, c in enumerate(chains_in_samples) if c == "algorand")
-        first_other = next((i for i, c in enumerate(chains_in_samples) if c != "algorand"), None)
-        if first_other is not None:
-            self.assertLess(first_algo, first_other)
+        seen = []
+        for chain in chains_in_samples:
+            if chain not in seen:
+                seen.append(chain)
+        self.assertEqual(seen, [c for c in ("base", "solana", "algorand") if c in seen])
 
     def test_discovery_docs_are_200(self):
         for path in (
@@ -682,9 +682,10 @@ class PaywallTests(unittest.TestCase):
         self.assertIn("$0.01", llms)
         self.assertIn("POST /route, not GET", llms)
         self.assertIn(
-            "x402scan skips Algorand/GoPlausible; POST /route returns a currently-alive Algo 402 plus the target contract when that's what is live.",
+            "We support Base, Solana, and Algorand.",
             llms,
         )
+        self.assertNotIn("x402scan skips Algorand", llms)
         self.assertNotIn("Signal402", llms)
         self.assertIn("https://glama.ai/mcp/servers/402signal/402signal", llms)
         self.assertIn("https://smithery.ai/servers/live402/signal", llms)
@@ -1026,7 +1027,7 @@ class UnitHelpers(unittest.TestCase):
         self.assertEqual(pulse_mod.named_chain("solana search"), "solana")
         self.assertIsNone(pulse_mod.named_chain(""))
 
-    def test_mixed_samples_algorand_first_real_urls(self):
+    def test_mixed_samples_follow_chains_order(self):
         from live402 import pulse as pulse_mod
         chains = {
             "base": {
@@ -1046,7 +1047,7 @@ class UnitHelpers(unittest.TestCase):
             },
         }
         mixed = pulse_mod._mixed_samples(chains)
-        self.assertEqual([s["chain"] for s in mixed], ["algorand", "base", "solana"])
+        self.assertEqual([s["chain"] for s in mixed], ["base", "solana", "algorand"])
         self.assertTrue(all(str(s["url"]).startswith("https://") for s in mixed))
         empty_algo = pulse_mod._mixed_samples(
             {
@@ -1059,7 +1060,7 @@ class UnitHelpers(unittest.TestCase):
         self.assertFalse(any("invent" in str(s["url"]) for s in empty_algo))
         self.assertEqual(pulse_mod._mixed_samples({}), [])
 
-    def test_preview_weights_algorand_when_need_ambiguous(self):
+    def test_preview_no_algorand_bonus_when_need_ambiguous(self):
         from live402 import pulse as pulse_mod
         items = [
             {
@@ -1105,9 +1106,13 @@ class UnitHelpers(unittest.TestCase):
         self.assertNotIn("live", amb)
         self.assertTrue(all("live" not in h for h in amb["hits"]))
         self.assertGreaterEqual(len(amb["hits"]), 2)
-        self.assertEqual(amb["hits"][0]["chain"], "algorand")
-        self.assertEqual(amb["hits"][0]["url"], "https://a.example/algo-weather")
+        self.assertNotEqual(amb["hits"][0]["chain"], "algorand")
+        self.assertEqual(amb["hits"][0]["url"], "https://w.example/base-weather")
         self.assertTrue(any(h["chain"] == "base" for h in amb["hits"]))
+        self.assertTrue(any(h["chain"] == "algorand" for h in amb["hits"]))
+        self.assertEqual(amb.get("discovery_matches"), len(amb["hits"]))
+        self.assertEqual(amb.get("displayed"), len(amb["hits"]))
+        self.assertTrue(all(h.get("observation", {}).get("status") == "not_yet_observed" for h in amb["hits"]))
         self.assertTrue(all(h["chain"] == "base" for h in named_base["hits"]))
         self.assertTrue(all(h["chain"] == "algorand" for h in named_algo["hits"]))
         self.assertTrue(named_sol["not_probed"])
@@ -1670,12 +1675,18 @@ class ProductBriefTests(unittest.TestCase):
             self.assertEqual(body.get("need"), "weather")
             self.assertIn("hits", body)
             self.assertIn("freshness", body)
+            self.assertIn("discovery_matches", body)
+            self.assertIn("displayed", body)
+            self.assertTrue(body.get("not_probed"))
             self.assertIsInstance(body["hits"], list)
             self.assertNotIn("live", body)
+            self.assertNotIn("candidates_probed", body)
             if body["hits"]:
-                self.assertEqual(body["hits"][0].get("chain"), "algorand")
+                self.assertNotEqual(body["hits"][0].get("chain"), "algorand")
                 self.assertTrue(str(body["hits"][0].get("url") or "").startswith("https://"))
                 self.assertNotIn("live", body["hits"][0])
+                self.assertIn("observation", body["hits"][0])
+                self.assertEqual(body["hits"][0]["observation"].get("status"), "not_yet_observed")
             mock_url.assert_not_called()
             mock_need.assert_not_called()
 
@@ -1751,8 +1762,10 @@ class ProductBriefTests(unittest.TestCase):
             "ssrf",
             "no_input_schema",
             "constraints_unmet",
+            "probe_budget_exhausted",
         }
         self.assertEqual(set(MISS_REASONS), expected)
+        self.assertEqual(public_miss_reason("probe_budget_exhausted"), "probe_budget_exhausted")
         self.assertEqual(public_miss_reason("empty_402"), "no_402_envelope")
         self.assertEqual(public_miss_reason("http_200_no_challenge"), "reachable_200")
         self.assertEqual(public_miss_reason("timeout"), "probe_timeout")

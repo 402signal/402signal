@@ -9,6 +9,7 @@
 
   const RAIL_NAMES = { base: "Base", solana: "Solana", algorand: "Algorand" };
   const FORBIDDEN_RESULT_LABELS = /^(recommended|verified|live|payable now|best for)$/i;
+  const MIN_RELIABILITY_N = 10;
 
   function hasContent() {
     return Boolean(((need && need.value) || "").trim());
@@ -101,6 +102,77 @@
     row.appendChild(span);
   }
 
+  function observationOf(hit) {
+    if (!hit || typeof hit !== "object") return null;
+    return hit.observation && typeof hit.observation === "object" ? hit.observation : null;
+  }
+
+  function isoOrEmpty(value) {
+    if (value == null || value === "") return "";
+    return String(value);
+  }
+
+  function renderClaimSide(hit) {
+    const side = document.createElement("div");
+    side.className = "result-side claim";
+    const label = document.createElement("p");
+    label.className = "result-side-label";
+    label.textContent = "DISCOVERED · discovery claim";
+    side.appendChild(label);
+    const bits = document.createElement("p");
+    bits.className = "result-bits";
+    appendBit(bits, railOf(hit));
+    const price = listedPrice(hit);
+    if (price) appendBit(bits, "Listed price " + price);
+    const schema = schemaListed(hit);
+    if (schema) appendBit(bits, "Schema listed: " + schema);
+    const source = catalogSource(hit);
+    if (source) appendBit(bits, source);
+    if (hit && hit.method) appendBit(bits, String(hit.method));
+    if (!bits.childNodes.length) appendBit(bits, "Seller fields as listed");
+    side.appendChild(bits);
+    return side;
+  }
+
+  function renderObservationSide(hit) {
+    const side = document.createElement("div");
+    side.className = "result-side observation";
+    const label = document.createElement("p");
+    label.className = "result-side-label";
+    label.textContent = "OBSERVED · 402Signal observation";
+    side.appendChild(label);
+    const bits = document.createElement("p");
+    bits.className = "result-bits";
+    const obs = observationOf(hit);
+    const status = obs && typeof obs.status === "string" ? obs.status : "not_yet_observed";
+    if (!obs || status === "not_yet_observed") {
+      appendBit(bits, "Not yet observed");
+      side.appendChild(bits);
+      return side;
+    }
+    appendBit(bits, "observed");
+    if (obs.payable === true) appendBit(bits, "payable");
+    else if (obs.payable === false) appendBit(bits, "not payable");
+    if (obs.invocable === true) appendBit(bits, "invocable");
+    const checked = isoOrEmpty(obs.last_checked);
+    if (checked) appendBit(bits, "Last checked " + checked);
+    if (obs.last_latency_ms != null && obs.last_latency_ms !== "") {
+      appendBit(bits, String(obs.last_latency_ms) + " ms");
+    }
+    const n7 = Number(obs.n_7d);
+    if (Number.isFinite(n7) && n7 > 0) {
+      if (n7 >= MIN_RELIABILITY_N && obs.success_7d != null && obs.success_7d !== "") {
+        const pct = Math.round(Number(obs.success_7d) * 100);
+        if (Number.isFinite(pct)) appendBit(bits, n7 + " in 7d · " + pct + "%");
+        else appendBit(bits, n7 + " in 7d");
+      } else {
+        appendBit(bits, n7 + " in 7d");
+      }
+    }
+    side.appendChild(bits);
+    return side;
+  }
+
   function renderHit(hit) {
     const article = document.createElement("article");
     article.className = "result-row";
@@ -117,16 +189,11 @@
       article.appendChild(urlP);
     }
 
-    const bits = document.createElement("p");
-    bits.className = "result-bits";
-    appendBit(bits, railOf(hit));
-    const price = listedPrice(hit);
-    if (price) appendBit(bits, "Listed price " + price);
-    const schema = schemaListed(hit);
-    if (schema) appendBit(bits, "Schema listed: " + schema);
-    const source = catalogSource(hit);
-    if (source) appendBit(bits, source);
-    if (bits.childNodes.length) article.appendChild(bits);
+    const sides = document.createElement("div");
+    sides.className = "result-sides";
+    sides.appendChild(renderClaimSide(hit));
+    sides.appendChild(renderObservationSide(hit));
+    article.appendChild(sides);
     return article;
   }
 
@@ -154,7 +221,14 @@
     }
     const heading = document.createElement("p");
     heading.className = "results-heading";
-    heading.textContent = hits.length === 1 ? "1 catalog match" : hits.length + " catalog matches";
+    const shown = hits.length;
+    const matches = Number(parsed && parsed.discovery_matches);
+    const shownLabel = shown === 1 ? "1 shown" : shown + " shown";
+    let text = "DISCOVERED · " + shownLabel;
+    if (Number.isFinite(matches) && matches > shown) {
+      text += " · " + matches + " discovery matches";
+    }
+    heading.textContent = text;
     results.appendChild(heading);
     hits.forEach(function (hit) {
       results.appendChild(renderHit(hit));

@@ -609,6 +609,20 @@ a.lookup:link, a.lookup:visited { color: var(--ink); text-decoration: none; }
   margin: 0 8px;
   color: var(--line);
 }
+.result-sides {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px 20px;
+  margin-top: 8px;
+}
+.result-side-label {
+  margin: 0 0 2px;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.result-side .result-bits { margin-top: 0; }
 .results-heading + .result-row { border-top: 1px solid var(--line); }
 
 .seg {
@@ -649,6 +663,7 @@ a.lookup:link, a.lookup:visited { color: var(--ink); text-decoration: none; }
 .quiet p { color: var(--muted); }
 
 @media (max-width: 720px) {
+  .result-sides { grid-template-columns: 1fr; }
   .flow {
     grid-template-columns: 1fr;
     grid-template-rows: auto 22px auto 22px auto;

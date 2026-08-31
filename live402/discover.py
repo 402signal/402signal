@@ -34,7 +34,10 @@ GUIDANCE = (
     "GET /pulse and GET /dashboard are sample lookups. GET /health is {ok:true} only. "
     "POST /validate {url} (or GET /validate?url=) is an unpaid seller probe: agent-ready? Fail-closed SSRF, not a /route paywall bypass. "
     "GET /attestation is a public sha256 of a recent 402signal_observed probe batch (not on-chain). "
-    "Probe budget is under 60s; a hang returns 503 JSON with miss_reason probe_timeout."
+    "Probe budget is under 60s; a hang returns 503 JSON with miss_reason probe_timeout. "
+    "If ranked candidates remain when the budget ends, miss_reason is probe_budget_exhausted "
+    "(not no_candidates). GET /preview adds discovery_matches, displayed, and a read-only "
+    "observation from 402signal_observed history (not_yet_observed when never probed)."
 )
 
 def _origin_from_resource(resource_url: str) -> str:
@@ -136,6 +139,10 @@ def openapi_spec(resource_url: str = ROUTE) -> dict:
             "has_402_challenge": {"type": "boolean"},
             "probed_at": {"type": "string"},
             "tried": {"type": "integer"},
+            "discovery_matches": {"type": "integer"},
+            "candidates_considered": {"type": "integer"},
+            "candidates_probed": {"type": "integer"},
+            "probe_budget_exhausted": {"type": "boolean"},
             "payTo": {"type": ["string", "null"]},
             "payTo_changed": {"type": "boolean"},
             "verified_at": {"type": ["string", "null"]},
@@ -445,8 +452,8 @@ def openapi_spec(resource_url: str = ROUTE) -> dict:
                 "get": {
                     "operationId": "previewNeed",
                     "tags": ["Public"],
-                    "summary": "Preview cached catalog hits without probing",
-                    "description": "Unpaid request-time catalog search. Returns hits, prices, freshness, not_probed:true. Does not probe and does not charge. Paid POST /route remains the fail-closed 402 probe.",
+                    "summary": "Preview catalog hits without probing them",
+                    "description": "Unpaid request-time catalog search. Returns discovery_matches, displayed hits, seller claims, and a read-only 402Signal observation when history exists. not_probed is always true. Does not probe and does not charge. Paid POST /route remains the fail-closed 402 probe.",
                     "parameters": [
                         {
                             "in": "query",
@@ -475,6 +482,10 @@ def openapi_spec(resource_url: str = ROUTE) -> dict:
                                             "not_probed": {"type": "boolean"},
                                             "freshness": {"type": ["string", "null"]},
                                             "cached_s": {"type": ["number", "null"]},
+                                            "discovery_matches": {"type": "integer"},
+                                            "displayed": {"type": "integer"},
+                                            "truncated": {"type": "boolean"},
+                                            "total": {"type": ["integer", "null"]},
                                             "hits": {"type": "array"},
                                             "miss_reason": {"type": "string", "enum": miss_enum},
                                         },
@@ -483,12 +494,15 @@ def openapi_spec(resource_url: str = ROUTE) -> dict:
                                         "need": "weather",
                                         "not_probed": True,
                                         "freshness": "2026-08-30T14:00:00Z",
+                                        "discovery_matches": 1,
+                                        "displayed": 1,
                                         "hits": [
                                             {
                                                 "need": "weather",
                                                 "url": "https://example.com/x402/weather",
                                                 "price": "$0.01",
                                                 "chain": "base",
+                                                "observation": {"status": "not_yet_observed"},
                                             }
                                         ],
                                     },
@@ -810,7 +824,7 @@ HTTP 200 = live URL plus target contract. HTTP 503 = typed miss_reason.
 ## Paid
 
 - POST /route  $0.01 USDC on Base, Solana, or Algorand
-- x402scan skips Algorand/GoPlausible; POST /route returns a currently-alive Algo 402 plus the target contract when that's what is live.
+- We support Base, Solana, and Algorand. Ranking is rail-neutral unless prefer_network or a named chain is requested.
 - Body: {"need": "what you want", "url": "https://optional", "prefer_network": "base|solana|algorand", "objective": "best|cheapest|fastest|most_reliable", "max_amount_atomic": 0, "max_latency_ms": 0, "require_invocable": false, "networks": ["base"]}
 - Agents that intend to pay should POST /route, not GET.
 - GET /route with Accept: application/json (or no Accept) returns HTTP 402 so crawlers can index payment. Browsers that send Accept: text/html get a human page.
@@ -818,7 +832,8 @@ HTTP 200 = live URL plus target contract. HTTP 503 = typed miss_reason.
 - Paid live hit → HTTP 200 + URL that 402s with a payment envelope + target {method,inputSchema,outputSchema,accepts,facilitator,amountAtomic,displayAmount,timeoutSeconds}
 - If inputSchema is missing: live may be true, invocable false, miss_reason no_input_schema
 - Paid miss → HTTP 503 {live:false, miss_reason}
-- miss_reason enum: no_candidates, no_402_envelope, no_payto, reachable_200, probe_timeout, quote_expired, invalid_need, upstream_5xx, ssrf, no_input_schema, constraints_unmet
+- miss_reason enum: no_candidates, no_402_envelope, no_payto, reachable_200, probe_timeout, quote_expired, invalid_need, upstream_5xx, ssrf, no_input_schema, constraints_unmet, probe_budget_exhausted
+- Paid /route also returns discovery_matches, candidates_considered, candidates_probed, probe_budget_exhausted. probe_budget_exhausted means ranked candidates remained when the 55s budget ended; it is not no_candidates.
 - POST /mcp tools/call name=route is the same paid probe (unpaid tools/call also 402s)
 - MCP bazaar type is mcp, toolName is route. Live MCP: https://402signal.com/mcp and /mcp.json
 
@@ -827,7 +842,7 @@ HTTP 200 = live URL plus target contract. HTTP 503 = typed miss_reason.
 - GET /  human homepage
 - GET /dashboard  sample lookups per chain (Base / Solana / Algorand)
 - GET /pulse  same snapshot as JSON, including samples[]
-- GET /preview?need=weather  request-time catalog search + prices + freshness + not_probed:true (does not probe, does not charge). Optional prefer_network=base|solana|algorand. HEAD 200 on /llms.txt /openapi.json /mcp.json /preview /rails /pulse.
+- GET /preview?need=weather  request-time catalog search + discovery_matches + displayed + seller claims + read-only 402Signal observation (not_yet_observed when never independently probed). not_probed:true (does not probe, does not charge). Optional prefer_network=base|solana|algorand. HEAD 200 on /llms.txt /openapi.json /mcp.json /preview /rails /pulse.
 - POST /validate {"url":"https://seller.example/x402"}  unpaid dual-probe: is this seller agent-ready? Also GET /validate?url=. Fail-closed SSRF. Not a /route paywall bypass. Readiness + claimed vs observed + flags. healthy omitted unless n_7d >= 10 observed.
 - GET /attestation  public sha256 of a recent 402signal_observed probe batch (batch_id, created_at, n, algo, hash). Not on-chain. Optional ?batch_id=.
 - GET /rails  three pay-in networks, asset, amountAtomic, facilitators, feePayers, maxTimeoutSeconds, per-rail up+latency

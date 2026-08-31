@@ -73,8 +73,7 @@ PREFERRED_SAMPLE_THEMES = ("weather", "onchain", "search", "market", "messaging"
 DEFER_SAMPLE_THEMES = frozenset({"games", "other"})
 MAX_SAMPLES = 4
 NEED_MAX = 40
-# Homepage mixed chips: Algorand first (x402scan skips GoPlausible). Per-chain columns stay CHAINS.
-SAMPLE_CHAIN_ORDER = ("algorand", "base", "solana")
+PREVIEW_DISPLAY = 8
 _PATH_SKIP = frozenset({
     "api", "v0", "v1", "v2", "v3", "v4", "http", "https", "www", "com",
     "index", "json", "xml", "html", "x402", "mcp", "rest", "public",
@@ -398,10 +397,10 @@ def named_chain(need: str) -> str | None:
 
 
 def _mixed_samples(chains: dict) -> list[dict]:
-    """Homepage chips: real catalog URLs, Algorand-first. Never invents URLs."""
+    """Homepage chips: real catalog URLs in CHAINS order. No rail bonus. Never invents URLs."""
     out: list[dict] = []
     seen: set[tuple[str, str]] = set()
-    for chain in SAMPLE_CHAIN_ORDER:
+    for chain in CHAINS:
         for sample in list((chains.get(chain) or {}).get("samples") or []):
             if not isinstance(sample, dict):
                 continue
@@ -892,19 +891,60 @@ def get_pulse() -> dict:
     return built
 
 
+def _working_total(working: dict | None):
+    """Pass through an upstream pagination.total when present. Never invent one."""
+    if not isinstance(working, dict):
+        return None
+    pag = working.get("pagination")
+    raw = None
+    if isinstance(pag, dict) and pag.get("total") is not None:
+        raw = pag.get("total")
+    elif working.get("total") is not None:
+        raw = working.get("total")
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def _attach_preview_observations(hits: list[dict]) -> None:
+    """Read-only sqlite join. Never probes. Missing history → not_yet_observed."""
+    if not hits:
+        return
+    try:
+        from live402 import history as history_mod
+        urls = [str(h.get("url") or "") for h in hits if isinstance(h, dict)]
+        obs_map = history_mod.preview_observations(urls)
+    except Exception:
+        obs_map = {}
+    for hit in hits:
+        if not isinstance(hit, dict):
+            continue
+        url = str(hit.get("url") or "")
+        row = obs_map.get(url)
+        if not isinstance(row, dict):
+            row = {"status": "not_yet_observed"}
+        hit["observation"] = row
+
+
 def preview_need(need: str, prefer_network: str | None = None) -> dict:
-    """Free request-time catalog search. Never probes. Never charges."""
+    """Request-time catalog search. Never probes. Never charges. Rail-neutral unless asked."""
     raw = (need or "").strip()
     freshness = probe.now_iso()
+    empty = {
+        "need": raw,
+        "not_probed": True,
+        "freshness": freshness,
+        "cached_s": None,
+        "discovery_matches": 0,
+        "displayed": 0,
+        "hits": [],
+    }
     if not raw:
-        return {
-            "need": "",
-            "not_probed": True,
-            "freshness": freshness,
-            "cached_s": None,
-            "hits": [],
-            "miss_reason": "invalid_need",
-        }
+        empty["miss_reason"] = "invalid_need"
+        return empty
     prefer = probe.normalize_prefer_network(prefer_network)
     named = prefer or named_chain(raw)
     try:
@@ -923,10 +963,9 @@ def preview_need(need: str, prefer_network: str | None = None) -> dict:
         need_key = (sample_need_for(item, url) or raw).strip().lower()
         if need_key and chain in CHAINS:
             by_need_chains.setdefault(need_key, set()).add(chain)
-    hits: list[dict] = []
-    scored: list[tuple[int, int, dict]] = []
+    candidates: list[dict] = []
     seen: set[str] = set()
-    for idx, item in enumerate(ranked):
+    for item in ranked:
         if not isinstance(item, dict):
             continue
         url = probe._resource_url(item)
@@ -960,23 +999,29 @@ def preview_need(need: str, prefer_network: str | None = None) -> dict:
             ),
             "rails_up": rails_up.get(chain) if chain else None,
         }
-        algo_lead = 0 if (named is None and chain == "algorand") else 1
-        scored.append((algo_lead, idx, row))
-    scored.sort(key=lambda pair: (pair[0], pair[1]))
-    for _lead, _neg, row in scored[:8]:
         need_key = str(row.get("need") or "").strip().lower()
-        chain = str(row.get("chain") or "")
         others = sorted((by_need_chains.get(need_key) or set()) - ({chain} if chain else set()))
         if others:
             row["also_on"] = others
-        hits.append(row)
-    return {
+        candidates.append(row)
+    discovery_matches = len(candidates)
+    hits = candidates[:PREVIEW_DISPLAY]
+    _attach_preview_observations(hits)
+    body = {
         "need": raw,
         "not_probed": True,
         "freshness": freshness,
         "cached_s": None,
+        "discovery_matches": discovery_matches,
+        "displayed": len(hits),
         "hits": hits,
     }
+    if discovery_matches > len(hits):
+        body["truncated"] = True
+    world_total = _working_total(working)
+    if world_total is not None:
+        body["total"] = world_total
+    return body
 
 
 def _esc(value: str) -> str:

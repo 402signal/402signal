@@ -6,6 +6,8 @@ from functools import cmp_to_key
 
 OBJECTIVES = ("best", "cheapest", "fastest", "most_reliable")
 RAILS = frozenset(("base", "solana", "algorand"))
+WEAK_MIN_N = 3
+MATURE_N = 10
 
 
 def parse_objective(raw) -> str:
@@ -165,17 +167,41 @@ def latency_ms(result) -> int | None:
     return _as_int(health.get("latency_ms"))
 
 
-def reliability(result) -> float | None:
-    """History rate only when the window has n >= 3. None is unknown, never 0.0."""
+def _reliability_window(result) -> tuple[int, float | None]:
+    """Return (n, rate) for the preferred history window. Rate is None when unknown."""
     if not isinstance(result, dict):
-        return None
+        return 0, None
     hist = result.get("history") if isinstance(result.get("history"), dict) else {}
     n_7d = _as_int(hist.get("n_7d")) or 0
     n_24h = _as_int(hist.get("n_24h")) or 0
-    if n_7d >= 3:
-        return _as_float(hist.get("success_7d"))
-    if n_24h >= 3:
-        return _as_float(hist.get("success_24h"))
+    if n_7d >= WEAK_MIN_N:
+        return n_7d, _as_float(hist.get("success_7d"))
+    if n_24h >= WEAK_MIN_N:
+        return n_24h, _as_float(hist.get("success_24h"))
+    return 0, None
+
+
+def reliability(result) -> float | None:
+    """History rate when n >= 3. None is unknown, never 0.0. Ranking treats n<10 as weak."""
+    n, rate = _reliability_window(result)
+    if n >= WEAK_MIN_N:
+        return rate
+    return None
+
+
+def mature_reliability(result) -> float | None:
+    """Rate only when n >= 10. None is unknown, never 0.0."""
+    n, rate = _reliability_window(result)
+    if n >= MATURE_N:
+        return rate
+    return None
+
+
+def weak_reliability(result) -> float | None:
+    """Rate only when 3 <= n < 10. Last-rank tie-break. None is unknown, never 0.0."""
+    n, rate = _reliability_window(result)
+    if WEAK_MIN_N <= n < MATURE_N:
+        return rate
     return None
 
 
@@ -258,8 +284,7 @@ def _cmp_latency_asc(a, b, unknown_last: bool) -> int:
     return 0
 
 
-def _cmp_reliability_desc(a, b) -> int:
-    ra, rb = reliability(a), reliability(b)
+def _cmp_rate_desc(ra, rb) -> int:
     if ra is not None and rb is not None:
         if ra > rb:
             return -1
@@ -271,6 +296,14 @@ def _cmp_reliability_desc(a, b) -> int:
     if rb is not None:
         return 1
     return 0
+
+
+def _cmp_mature_reliability_desc(a, b) -> int:
+    return _cmp_rate_desc(mature_reliability(a), mature_reliability(b))
+
+
+def _cmp_weak_reliability_desc(a, b) -> int:
+    return _cmp_rate_desc(weak_reliability(a), weak_reliability(b))
 
 
 def _cmp_cheapest(a, b) -> int:
@@ -295,7 +328,10 @@ def _cmp_fastest(a, b) -> int:
 
 
 def _cmp_most_reliable(a, b) -> int:
-    c = _cmp_reliability_desc(a, b)
+    c = _cmp_mature_reliability_desc(a, b)
+    if c:
+        return c
+    c = _cmp_weak_reliability_desc(a, b)
     if c:
         return c
     c = _cmp_latency_asc(a, b, unknown_last=True)
@@ -314,16 +350,16 @@ def _cmp_best(a, b) -> int:
     ta, tb = _readiness_tier(a), _readiness_tier(b)
     if ta != tb:
         return -1 if ta > tb else 1
-    ra, rb = reliability(a), reliability(b)
-    if ra is not None and rb is not None and ra != rb:
-        return -1 if ra > rb else 1
+    c = _cmp_mature_reliability_desc(a, b)
+    if c:
+        return c
     la, lb = latency_ms(a), latency_ms(b)
     if la is not None and lb is not None and la != lb:
         return -1 if la < lb else 1
     aa, ab = amount_atomic(a), amount_atomic(b)
     if aa is not None and ab is not None and aa != ab:
         return -1 if aa < ab else 1
-    return 0
+    return _cmp_weak_reliability_desc(a, b)
 
 
 _CMP = {
@@ -332,6 +368,26 @@ _CMP = {
     "most_reliable": _cmp_most_reliable,
     "best": _cmp_best,
 }
+
+
+def enough_evidence(results: list[dict], objective: str, constraints: dict | None = None) -> bool:
+    """True when more probes would not change a selectable winner for this objective.
+
+    best: one stable (not payTo_changed) live+payTo that passes constraints.
+    cheapest/fastest/most_reliable: at least two viable hits so comparison is real.
+    payTo_changed-only windows keep looking. Fail-closed: no viable → False.
+    """
+    if not isinstance(results, list) or not results:
+        return False
+    obj = parse_objective(objective)
+    cons = constraints if isinstance(constraints, dict) else {}
+    viable = [r for r in results if isinstance(r, dict) and passes_constraints(r, cons)]
+    if not viable:
+        return False
+    stable = [r for r in viable if not r.get("payTo_changed")]
+    if obj == "best":
+        return bool(stable)
+    return len(stable or viable) >= 2
 
 
 def pick_winner(results: list[dict], objective: str, constraints: dict | None = None) -> dict | None:

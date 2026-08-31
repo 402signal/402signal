@@ -89,6 +89,75 @@ class HistoryDbTests(unittest.TestCase):
         self.assertIsNotNone(summ["p50_latency_ms"])
         self.assertIsNotNone(summ["p95_latency_ms"])
 
+    def test_preview_observation_not_yet_vs_observed_hides_thin_rate(self):
+        seen = "https://w.example/base-weather"
+        unseen = "https://a.example/algo-weather"
+        history.record_probe(
+            seen,
+            _snap(live=True, payTo="0xabc", latency_ms=17, invocable=1, payable=1),
+        )
+        for _ in range(3):
+            history.record_probe(seen, _snap(live=True, payTo="0xabc", latency_ms=17))
+        obs = history.preview_observations([seen, unseen])
+        self.assertEqual(obs[unseen]["status"], "not_yet_observed")
+        self.assertEqual(obs[seen]["status"], "observed")
+        self.assertTrue(obs[seen].get("payable"))
+        self.assertEqual(obs[seen].get("last_latency_ms"), 17)
+        self.assertGreaterEqual(obs[seen].get("n_7d"), 3)
+        self.assertLess(obs[seen].get("n_7d"), 10)
+        self.assertNotIn("success_7d", obs[seen])
+
+        items = [
+            {
+                "url": seen,
+                "description": "weather",
+                "_rail": "base",
+                "accepts": [{"network": "eip155:8453", "amount": "10000"}],
+            },
+            {
+                "url": unseen,
+                "description": "weather",
+                "_rail": "algorand",
+                "accepts": [{"network": "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=", "amount": "10000"}],
+            },
+        ]
+        with patch("live402.catalog.query_for_need", return_value={"items": items}):
+            body = pulse.preview_need("weather")
+        self.assertTrue(body.get("not_probed"))
+        self.assertNotIn("candidates_probed", body)
+        self.assertEqual(body.get("discovery_matches"), 2)
+        self.assertEqual(body.get("displayed"), 2)
+        by_url = {h["url"]: h for h in body["hits"]}
+        self.assertEqual(by_url[seen]["observation"]["status"], "observed")
+        self.assertEqual(by_url[unseen]["observation"]["status"], "not_yet_observed")
+        self.assertNotIn("success_7d", by_url[seen]["observation"])
+
+    def test_preview_discovery_matches_truncated_without_invented_total(self):
+        items = []
+        for i in range(12):
+            items.append(
+                {
+                    "url": "https://wx%d.example/weather" % i,
+                    "description": "weather forecast",
+                    "_rail": "base",
+                    "accepts": [{"network": "eip155:8453", "amount": "10000"}],
+                }
+            )
+        with patch("live402.catalog.query_for_need", return_value={"items": items}):
+            body = pulse.preview_need("weather")
+        self.assertTrue(body.get("not_probed"))
+        self.assertEqual(body.get("discovery_matches"), 12)
+        self.assertEqual(body.get("displayed"), 8)
+        self.assertTrue(body.get("truncated"))
+        self.assertNotIn("total", body)
+        self.assertEqual(len(body["hits"]), 8)
+        with patch(
+            "live402.catalog.query_for_need",
+            return_value={"items": items, "pagination": {"total": 99}},
+        ):
+            with_total = pulse.preview_need("weather")
+        self.assertEqual(with_total.get("total"), 99)
+
     def test_n0_success_is_none_not_zero(self):
         summ = history.summary("https://never-seen.example/x")
         self.assertEqual(summ["n_7d"], 0)

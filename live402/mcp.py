@@ -11,9 +11,9 @@ ROUTE_DESCRIPTION = (
 )
 
 PREVIEW_DESCRIPTION = (
-    "Cached catalog preflight from /pulse. Returns hits, prices, freshness, "
-    "not_probed:true. Does not probe and does not charge. Pay POST /route or "
-    "tools/call route for a fail-closed live probe."
+    "Request-time catalog preflight. Returns discovery_matches, displayed hits, "
+    "seller claims vs 402Signal observations, not_probed:true. Does not probe "
+    "and does not charge. Pay POST /route or tools/call route for a live probe."
 )
 
 INPUT_SCHEMA = {
@@ -87,9 +87,14 @@ OUTPUT_SCHEMA = {
                 "ssrf",
                 "no_input_schema",
                 "constraints_unmet",
+                "probe_budget_exhausted",
             ],
         },
         "tried": {"type": "integer"},
+        "discovery_matches": {"type": "integer"},
+        "candidates_considered": {"type": "integer"},
+        "candidates_probed": {"type": "integer"},
+        "probe_budget_exhausted": {"type": "boolean"},
         "latency_ms": {"type": ["integer", "null"]},
         "schema_source": {"type": ["string", "null"], "enum": ["envelope", "catalog", "bazaar", None]},
         "objective": {"type": "string", "enum": ["best", "cheapest", "fastest", "most_reliable"]},
@@ -117,6 +122,10 @@ PREVIEW_OUTPUT_SCHEMA = {
         "not_probed": {"type": "boolean"},
         "freshness": {"type": ["string", "null"]},
         "cached_s": {"type": ["number", "null"]},
+        "discovery_matches": {"type": "integer"},
+        "displayed": {"type": "integer"},
+        "truncated": {"type": "boolean"},
+        "total": {"type": ["integer", "null"]},
         "hits": {"type": "array"},
         "miss_reason": {"type": ["string", "null"]},
     },

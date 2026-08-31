@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import time
 import unittest
 from unittest.mock import patch
 
@@ -123,6 +124,63 @@ class ObjectivePickTests(unittest.TestCase):
         self.assertEqual(select.reliability(known), 0.5)
         winner = select.pick_winner([unknown, known], "most_reliable", None)
         self.assertIs(winner, known)
+
+    def test_thin_perfect_does_not_beat_mature_almost_perfect_on_best(self):
+        thin = _hit(
+            url="https://thin.example/x",
+            history=_hist(success_7d=1.0, n_7d=3),
+            latency=10,
+            amount=10000,
+        )
+        mature = _hit(
+            url="https://mature.example/x",
+            history=_hist(success_7d=0.997, n_7d=400),
+            latency=10,
+            amount=10000,
+        )
+        self.assertEqual(select.reliability(thin), 1.0)
+        self.assertEqual(select.mature_reliability(thin), None)
+        self.assertEqual(select.weak_reliability(thin), 1.0)
+        self.assertAlmostEqual(select.mature_reliability(mature), 0.997)
+        self.assertIsNone(select.weak_reliability(mature))
+        winner = select.pick_winner([thin, mature], "best", None)
+        self.assertIs(winner, mature)
+        winner_rel = select.pick_winner([thin, mature], "most_reliable", None)
+        self.assertIs(winner_rel, mature)
+
+    def test_weak_reliability_is_last_tie_break_on_best(self):
+        weak_high = _hit(
+            url="https://weak-high.example/x",
+            history=_hist(success_7d=1.0, n_7d=4),
+            latency=10,
+            amount=10000,
+        )
+        weak_low = _hit(
+            url="https://weak-low.example/x",
+            history=_hist(success_7d=0.5, n_7d=4),
+            latency=10,
+            amount=10000,
+        )
+        winner = select.pick_winner([weak_low, weak_high], "best", None)
+        self.assertIs(winner, weak_high)
+        unknown = _hit(
+            url="https://unk.example/x",
+            history=_hist(),
+            latency=10,
+            amount=10000,
+        )
+        winner_unk = select.pick_winner([unknown, weak_high], "best", None)
+        self.assertIs(winner_unk, weak_high)
+
+    def test_enough_evidence_best_vs_comparison(self):
+        one = _hit(url="https://one.example/x")
+        two = _hit(url="https://two.example/x")
+        flipped = _hit(url="https://flip.example/x", payTo_changed=True)
+        self.assertTrue(select.enough_evidence([one], "best", None))
+        self.assertFalse(select.enough_evidence([flipped], "best", None))
+        self.assertFalse(select.enough_evidence([one], "cheapest", None))
+        self.assertTrue(select.enough_evidence([one, two], "cheapest", None))
+        self.assertFalse(select.enough_evidence([], "best", None))
 
     def test_no_rail_bias_first_equal_live_wins(self):
         orders = (
@@ -299,7 +357,9 @@ class RouteNeedSelectTests(unittest.TestCase):
         self.assertTrue(result.get("live"))
         self.assertEqual(result.get("url"), cheap["url"])
         self.assertEqual(result.get("objective"), "cheapest")
-        self.assertEqual(result.get("tried"), 2)
+        self.assertGreaterEqual(result.get("tried"), 2)
+        self.assertGreaterEqual(result.get("candidates_probed") or 0, 2)
+        self.assertFalse(result.get("probe_budget_exhausted"))
         compared = result.get("compared") or []
         self.assertEqual(len(compared), 2)
         selected = [row for row in compared if row.get("selected")]
@@ -342,9 +402,9 @@ class RouteNeedSelectTests(unittest.TestCase):
         self.assertFalse(result.get("live"))
         self.assertEqual(result.get("miss_reason"), "constraints_unmet")
         self.assertEqual(result.get("objective"), "best")
-        self.assertEqual(result.get("tried"), 2)
+        self.assertGreaterEqual(result.get("tried"), 2)
         compared = result.get("compared") or []
-        self.assertEqual(len(compared), 2)
+        self.assertGreaterEqual(len(compared), 2)
         self.assertFalse(any(row.get("selected") for row in compared))
 
     def test_default_objective_first_equal_live_wins(self):
@@ -364,7 +424,72 @@ class RouteNeedSelectTests(unittest.TestCase):
         self.assertEqual(result.get("url"), first["url"])
         self.assertEqual(result.get("objective"), "best")
         self.assertEqual(result.get("rail"), "solana")
-        self.assertEqual(result.get("tried"), 2)
+        self.assertGreaterEqual(result.get("tried"), 1)
+        self.assertGreaterEqual(result.get("candidates_probed") or result.get("tried"), 1)
+
+    def test_best_early_stops_without_waiting_stragglers(self):
+        fast = self._item("https://fast.example/weather")
+        slow_a = self._item("https://slow-a.example/weather")
+        slow_b = self._item("https://slow-b.example/weather")
+        started = []
+
+        def fake_probe(url, catalog_item=None, deadline=None, **kwargs):
+            _ = catalog_item, deadline
+            started.append(url)
+            if "fast" in url:
+                return self._live(url, latency=5)
+            time.sleep(0.35)
+            return self._live(url, latency=80)
+
+        t0 = time.monotonic()
+        result = self._route([fast, slow_a, slow_b], fake_probe, objective="best")
+        elapsed = time.monotonic() - t0
+        self.assertTrue(result.get("live"))
+        self.assertEqual(result.get("url"), fast["url"])
+        self.assertLess(elapsed, 0.3)
+        self.assertLessEqual(result.get("candidates_probed"), 2)
+        self.assertFalse(result.get("probe_budget_exhausted"))
+        self.assertIsNotNone(result.get("url"))
+        self.assertTrue(result.get("live"))
+
+    def test_concurrent_tranche_fail_closed_no_unverified_winner(self):
+        items = [self._item("https://dead%d.example/weather" % i) for i in range(4)]
+
+        def fake_probe(url, catalog_item=None, deadline=None, **kwargs):
+            _ = catalog_item, deadline
+            time.sleep(0.02)
+            return self._dead(url)
+
+        result = self._route(items, fake_probe)
+        self.assertFalse(result.get("live"))
+        self.assertIsNone(result.get("url"))
+        self.assertNotEqual(result.get("miss_reason"), "no_candidates")
+        self.assertGreaterEqual(result.get("candidates_probed") or 0, 1)
+        self.assertGreaterEqual(result.get("discovery_matches") or 0, 4)
+        self.assertFalse(result.get("live"))
+
+    def test_probe_budget_exhausted_when_untested_remain(self):
+        items = [self._item("https://n%d.example/weather" % i) for i in range(8)]
+
+        def fake_probe(url, catalog_item=None, deadline=None, **kwargs):
+            _ = catalog_item, deadline
+            return self._dead(url)
+
+        result = self._route(items, fake_probe, deadline=time.monotonic())
+        self.assertFalse(result.get("live"))
+        self.assertIsNone(result.get("url"))
+        self.assertEqual(result.get("miss_reason"), "probe_budget_exhausted")
+        self.assertTrue(result.get("probe_budget_exhausted"))
+        self.assertGreater(result.get("candidates_considered"), result.get("candidates_probed"))
+        self.assertNotEqual(result.get("miss_reason"), "no_candidates")
+        self.assertGreaterEqual(result.get("discovery_matches"), 8)
+
+    def test_empty_ranked_is_no_candidates_not_budget(self):
+        result = self._route([], lambda *a, **k: self._dead("https://x.example/weather"))
+        self.assertFalse(result.get("live"))
+        self.assertEqual(result.get("miss_reason"), "no_candidates")
+        self.assertFalse(result.get("probe_budget_exhausted"))
+        self.assertEqual(result.get("discovery_matches"), 0)
 
 
 if __name__ == "__main__":
