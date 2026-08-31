@@ -608,7 +608,9 @@ class PaywallTests(unittest.TestCase):
         }
         with patch("live402.pulse.fixtures.fixture_mode", return_value=False), patch(
             "live402.catalog.get_index", return_value=empty_idx
-        ), patch("urllib.request.urlopen") as urlopen:
+        ), patch("live402.catalog.query_for_need") as query, patch(
+            "urllib.request.urlopen"
+        ) as urlopen:
             pulse_mod.reset_cache()
             status, raw = _get(
                 self.port, "/pulse?url=http://127.0.0.1/latest/meta-data&src=https://evil.example"
@@ -616,6 +618,7 @@ class PaywallTests(unittest.TestCase):
             self.assertEqual(status, 200)
             body = json.loads(raw)
             self.assertTrue(body.get("ok"))
+            self.assertEqual(body.get("index_status"), "upstream")
             self.assertIn("chains", body)
             self.assertNotIn("listings", body)
             self.assertIn("samples", body)
@@ -624,7 +627,9 @@ class PaywallTests(unittest.TestCase):
                 self.assertIn(chain, body["chains"])
                 self.assertIn("themes", body["chains"][chain])
                 self.assertIn("insight", body["chains"][chain])
+                self.assertIsNone(body["chains"][chain].get("count"))
             urlopen.assert_not_called()
+            query.assert_not_called()
 
     def test_pulse_fixture_samples(self):
         from live402 import pulse as pulse_mod
@@ -1072,17 +1077,42 @@ class UnitHelpers(unittest.TestCase):
 
     def test_preview_weights_algorand_when_need_ambiguous(self):
         from live402 import pulse as pulse_mod
-        payload = {
-            "updated_at": "2026-08-30T00:00:00Z",
-            "cached_s": 15,
-            "samples": [
-                {"need": "weather", "label": "weather", "url": "https://w.example/base-weather", "price": "$0.01", "chain": "base"},
-                {"need": "weather", "label": "weather", "url": "https://a.example/algo-weather", "price": "$0.01", "chain": "algorand"},
-                {"need": "search", "label": "search", "url": "https://s.example/sol-search", "price": "$0.01", "chain": "solana"},
-            ],
-            "chains": {},
-        }
-        with patch.object(pulse_mod, "get_pulse", return_value=payload):
+        items = [
+            {
+                "url": "https://w.example/base-weather",
+                "description": "weather",
+                "_rail": "base",
+                "accepts": [{"network": "eip155:8453", "amount": "10000"}],
+            },
+            {
+                "url": "https://a.example/algo-weather",
+                "description": "weather",
+                "_rail": "algorand",
+                "accepts": [{"network": "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=", "amount": "10000"}],
+            },
+            {
+                "url": "https://s.example/sol-search",
+                "description": "search",
+                "_rail": "solana",
+                "accepts": [{"network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp", "amount": "10000"}],
+            },
+        ]
+
+        def fake_query(need, prefer_network=None):
+            prefer = prefer_network
+            rows = []
+            for item in items:
+                rail = item["_rail"]
+                if prefer and rail != prefer:
+                    continue
+                if "weather" in (need or "") and "weather" not in item["description"]:
+                    continue
+                if "search" in (need or "") and "search" not in item["description"]:
+                    continue
+                rows.append(item)
+            return {"items": rows}
+
+        with patch("live402.catalog.query_for_need", side_effect=fake_query):
             amb = pulse_mod.preview_need("weather")
             named_base = pulse_mod.preview_need("base weather")
             named_algo = pulse_mod.preview_need("algorand weather")

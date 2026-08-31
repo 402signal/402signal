@@ -1,11 +1,9 @@
-"""Full catalog index + stronger matching. No network."""
+"""Request-time catalog query + stronger matching. No network."""
 
 from __future__ import annotations
 
 import json
 import os
-import threading
-import time
 import unittest
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
@@ -16,6 +14,7 @@ from live402 import catalog, fixtures, probe
 
 
 CDP = "https://api.cdp.coinbase.com/platform/v2/x402/discovery/resources"
+CDP_SEARCH = "https://api.cdp.coinbase.com/platform/v2/x402/discovery/search"
 PAYAI = "https://facilitator.payai.network/discovery/resources"
 GOPL = "https://facilitator.goplausible.xyz/discovery/resources"
 
@@ -41,41 +40,39 @@ class CatalogIndexTests(unittest.TestCase):
     def tearDown(self):
         catalog.reset_index()
 
-    def test_two_page_weather_on_page_1_ranks_first(self):
+    def test_cdp_search_query_ranks_weather(self):
         weather_url = "https://wx.example/forecast"
+        calls = []
 
         def fake_payload(url, timeout, read_limit=None):
-            host = urlparse(url).hostname
-            offset = int(_qs(url).get("offset") or 0)
-            if host != "api.cdp.coinbase.com":
-                return {"items": [], "pagination": {"limit": 100, "offset": offset, "total": 0}}
-            if offset == 0:
+            calls.append(url)
+            parsed = urlparse(url)
+            qs = _qs(url)
+            self.assertNotIn("page", qs)
+            self.assertNotIn("cursor", qs)
+            if parsed.path.endswith("/discovery/search"):
+                self.assertEqual(qs.get("query"), "weather")
                 return {
-                    "items": [
+                    "resources": [
                         _item("https://unrelated.example/search", "web search index"),
-                        _item("https://unrelated.example/docs", "billing docs"),
-                    ],
-                    "pagination": {"limit": 100, "offset": 0, "total": 101},
-                    "x402Version": 2,
-                }
-            if offset == 100:
-                return {
-                    "items": [
                         _item(weather_url, "hourly weather forecast"),
                     ],
-                    "pagination": {"limit": 100, "offset": 100, "total": 101},
-                    "x402Version": 2,
+                    "partialResults": False,
+                    "searchMethod": "hybrid",
                 }
-            return {"items": [], "pagination": {"limit": 100, "offset": offset, "total": 101}}
+            self.fail("request-time query must not walk /discovery/resources")
+            return {"items": []}
 
-        with patch("live402.probe._fetch_catalog_payload", side_effect=fake_payload):
-            rail = catalog.fetch_rail("base", CDP)
-            idx = catalog.get_index()
-        urls = [probe._resource_url(i) for i in rail["items"]]
+        with patch("live402.catalog.fixtures.fixture_mode", return_value=False), patch(
+            "live402.probe._fetch_catalog_payload", side_effect=fake_payload
+        ):
+            working = catalog.query_for_need("weather", prefer_network="base")
+        self.assertTrue(calls)
+        self.assertTrue(all("/discovery/search" in u for u in calls))
+        self.assertFalse(any("/discovery/resources" in u for u in calls))
+        urls = [probe._resource_url(i) for i in working["items"]]
         self.assertIn(weather_url, urls)
-        idx_urls = [probe._resource_url(i) for i in idx["items"]]
-        self.assertIn(weather_url, idx_urls)
-        ranked = probe.rank_resources("weather", idx["items"])
+        ranked = probe.rank_resources("weather", working["items"])
         self.assertTrue(ranked)
         self.assertEqual(probe._resource_url(ranked[0]), weather_url)
 
@@ -295,8 +292,10 @@ class CatalogIndexTests(unittest.TestCase):
                 }
             return {"items": [], "pagination": {"limit": 100, "offset": 0, "total": 0}}
 
-        with patch("live402.probe._fetch_catalog_payload", side_effect=fake_payload):
-            idx = catalog.get_index()
+        with patch("live402.catalog.fixtures.fixture_mode", return_value=False), patch(
+            "live402.probe._fetch_catalog_payload", side_effect=fake_payload
+        ):
+            idx = catalog.query_for_need("weather")
         self.assertEqual(len(idx["by_rail"]["base"]), 1)
         self.assertEqual(len(idx["by_rail"]["solana"]), 1)
         merged = [i for i in idx["items"] if probe._resource_url(i) == shared]
@@ -305,94 +304,132 @@ class CatalogIndexTests(unittest.TestCase):
         self.assertIn("base", merged[0].get("rails") or [])
         self.assertIn("solana", merged[0].get("rails") or [])
 
-    def test_overlapping_refresh_and_get_index_one_walk(self):
-        started = threading.Event()
-        release = threading.Event()
-        rails = []
+    def test_dedup_search_payloads(self):
+        shared = "https://both.example/weather"
 
-        def fake_fetch_rail(rail, base):
-            rails.append(rail)
-            started.set()
-            self.assertTrue(release.wait(5))
-            return {"items": [], "error": None, "total": 0, "truncated": False}
+        def fake_payload(url, timeout, read_limit=None):
+            host = urlparse(url).hostname
+            path = urlparse(url).path
+            if host == "api.cdp.coinbase.com" and path.endswith("/search"):
+                return {
+                    "resources": [_item(shared, "weather on base")],
+                    "partialResults": False,
+                    "searchMethod": "hybrid",
+                }
+            if host == "facilitator.payai.network" and path.endswith("/search"):
+                return {
+                    "items": [_item(shared, "weather on solana")],
+                    "partialResults": False,
+                }
+            if host == "facilitator.goplausible.xyz":
+                return {"items": [], "pagination": {"limit": 100, "offset": 0, "total": 0}}
+            return {"items": [], "pagination": {"limit": 100, "offset": 0, "total": 0}}
 
-        with patch.object(catalog, "fetch_rail", side_effect=fake_fetch_rail):
-            t1 = threading.Thread(target=catalog.refresh)
-            t1.start()
-            self.assertTrue(started.wait(2))
-            peeked = catalog.peek_index()
-            self.assertIsNotNone(peeked)
-            self.assertTrue(peeked.get("in_progress"))
-            self.assertFalse(peeked.get("complete"))
-            self.assertTrue(catalog.refresh_in_progress())
+        with patch("live402.catalog.fixtures.fixture_mode", return_value=False), patch(
+            "live402.probe._fetch_catalog_payload", side_effect=fake_payload
+        ):
+            idx = catalog.query_for_need("weather")
+        merged = [i for i in idx["items"] if probe._resource_url(i) == shared]
+        self.assertEqual(len(merged), 1)
+        self.assertIn("solana", merged[0].get("also_on") or [])
 
-            out = {}
-
-            def call_get():
-                out["idx"] = catalog.get_index()
-
-            t2 = threading.Thread(target=call_get)
-            t2.start()
-            time.sleep(0.05)
-            release.set()
-            t1.join(5)
-            t2.join(5)
-            self.assertFalse(t1.is_alive())
-            self.assertFalse(t2.is_alive())
-
-        self.assertEqual(rails, ["base", "solana", "algorand"])
-        self.assertIsNotNone(out.get("idx"))
-        self.assertFalse(out["idx"].get("in_progress"))
+    def test_start_refresher_does_not_walk(self):
+        with patch.object(catalog, "fetch_rail") as fetch_rail, patch.object(
+            catalog, "query_for_need"
+        ) as query, patch.object(catalog, "refresh") as refresh:
+            catalog.start_refresher()
+            fetch_rail.assert_not_called()
+            query.assert_not_called()
+            refresh.assert_not_called()
         self.assertFalse(catalog.refresh_in_progress())
-
-    def test_peek_during_crawl_is_in_progress_not_empty_complete(self):
-        started = threading.Event()
-        release = threading.Event()
-
-        def fake_fetch_rail(rail, base):
-            started.set()
-            self.assertTrue(release.wait(5))
-            return {"items": [], "error": None, "total": 0, "truncated": False}
-
-        with patch.object(catalog, "fetch_rail", side_effect=fake_fetch_rail):
-            t = threading.Thread(target=catalog.refresh)
-            t.start()
-            self.assertTrue(started.wait(2))
-            peeked = catalog.peek_index()
-            release.set()
-            t.join(5)
-
-        self.assertTrue(peeked.get("in_progress"))
-        self.assertFalse(peeked.get("complete"))
-        self.assertNotEqual(peeked.get("complete"), True)
-
-    def test_reset_index_clears_in_progress(self):
-        started = threading.Event()
-        release = threading.Event()
-
-        def fake_fetch_rail(rail, base):
-            started.set()
-            self.assertTrue(release.wait(5))
-            return {"items": [], "error": None, "total": 0, "truncated": False}
-
-        with patch.object(catalog, "fetch_rail", side_effect=fake_fetch_rail):
-            t = threading.Thread(target=catalog.refresh)
-            t.start()
-            self.assertTrue(started.wait(2))
-            self.assertTrue(catalog.refresh_in_progress())
-            catalog.reset_index()
-            self.assertFalse(catalog.refresh_in_progress())
-            self.assertIsNone(catalog.peek_index())
-            release.set()
-            t.join(5)
-        catalog.reset_index()
         self.assertIsNone(catalog.peek_index())
-        self.assertFalse(catalog.refresh_in_progress())
 
-    def test_caps_unchanged_from_live_size_model(self):
-        self.assertEqual(catalog.MAX_ITEMS, 30_000)
-        self.assertEqual(catalog.MAX_PAGES, 400)
-        self.assertEqual(catalog.PAGE_READ_LIMIT, 1_048_576)
+    def test_get_index_and_refresh_do_not_crawl(self):
+        with patch("live402.probe._fetch_catalog_payload") as fetch, patch.object(
+            catalog, "fetch_rail"
+        ) as fetch_rail:
+            idx = catalog.get_index()
+            refreshed = catalog.refresh()
+            fetch.assert_not_called()
+            fetch_rail.assert_not_called()
+        self.assertEqual(idx.get("items"), [])
+        self.assertEqual(refreshed.get("items"), [])
+        self.assertIsNone(catalog.peek_index())
+
+    def test_query_does_not_accumulate_max_items_across_rails(self):
+        calls = []
+
+        def fake_payload(url, timeout, read_limit=None):
+            calls.append(url)
+            qs = _qs(url)
+            self.assertNotIn("page", qs)
+            self.assertNotIn("cursor", qs)
+            offset = int(qs.get("offset") or 0)
+            self.assertLess(offset, catalog.QUERY_MAX_PAGES * catalog.PAGE_SIZE)
+            host = urlparse(url).hostname
+            path = urlparse(url).path
+            n = catalog.QUERY_MAX_ITEMS
+            if host == "api.cdp.coinbase.com" and path.endswith("/search"):
+                items = [
+                    _item("https://cdp.example/w/%d" % i, "weather %d" % i) for i in range(20)
+                ]
+                return {"resources": items, "partialResults": True, "searchMethod": "hybrid"}
+            if path.endswith("/search"):
+                return {}
+            items = [
+                _item("https://%s.example/w/%d" % (host, offset + i), "weather %d" % i)
+                for i in range(n)
+            ]
+            return {
+                "items": items,
+                "pagination": {"limit": catalog.PAGE_SIZE, "offset": offset, "total": 28000},
+            }
+
+        with patch("live402.catalog.fixtures.fixture_mode", return_value=False), patch(
+            "live402.probe._fetch_catalog_payload", side_effect=fake_payload
+        ):
+            working = catalog.query_for_need("weather")
+        self.assertLessEqual(len(working["items"]), catalog.QUERY_MAX_ITEMS * 3)
+        self.assertLessEqual(len(working["by_rail"]["base"]), catalog.QUERY_MAX_ITEMS)
+        self.assertLessEqual(len(working["by_rail"]["solana"]), catalog.QUERY_MAX_ITEMS)
+        self.assertLessEqual(len(working["by_rail"]["algorand"]), catalog.QUERY_MAX_ITEMS)
+        self.assertFalse(any(_qs(u).get("offset") == "200" for u in calls))
+        self.assertLessEqual(len(calls), 1 + 2 * (1 + catalog.QUERY_MAX_PAGES))
+        self.assertTrue(any("/discovery/search" in u for u in calls))
+
+    def test_search_url_allowlist_no_page_cursor(self):
+        url = catalog.search_url(CDP_SEARCH + "?page=3&cursor=abc&limit=20", "weather", 20, 0)
+        self.assertIsNotNone(url)
+        qs = parse_qs(urlparse(url).query)
+        self.assertEqual(qs.get("query"), ["weather"])
+        self.assertEqual(qs.get("limit"), ["20"])
+        self.assertNotIn("page", qs)
+        self.assertNotIn("cursor", qs)
+        self.assertIsNone(
+            catalog.search_url("https://evil.example/discovery/search", "weather", 20, 0)
+        )
+        self.assertIsNone(catalog.page_url("https://evil.example/discovery/resources", 100, 0))
+
+    def test_prefer_network_scopes_rails(self):
+        calls = []
+
+        def fake_payload(url, timeout, read_limit=None):
+            calls.append(url)
+            return {
+                "resources": [_item("https://wx.example/forecast", "weather")],
+                "partialResults": False,
+                "searchMethod": "hybrid",
+            }
+
+        with patch("live402.catalog.fixtures.fixture_mode", return_value=False), patch(
+            "live402.probe._fetch_catalog_payload", side_effect=fake_payload
+        ):
+            working = catalog.query_for_need("weather", prefer_network="base")
+        self.assertTrue(calls)
+        self.assertTrue(all("api.cdp.coinbase.com" in u for u in calls))
+        self.assertFalse(any("payai" in u or "goplausible" in u for u in calls))
+        self.assertEqual(working["by_rail"]["solana"], [])
+        self.assertEqual(working["by_rail"]["algorand"], [])
 
     def test_merge_items_reuses_by_rail_dicts(self):
         item = catalog.slim_item(_item("https://a.example/x", "alpha"), "base")
@@ -402,67 +439,53 @@ class CatalogIndexTests(unittest.TestCase):
         self.assertIs(merged[0], item)
         self.assertEqual(merged[0]["rails"], ["base"])
 
-    def test_refresh_drops_prev_index_before_merge(self):
-        def fake_payload(url, timeout, read_limit=None):
+    def test_query_caps_are_need_scoped(self):
+        self.assertEqual(catalog.QUERY_MAX_ITEMS, 100)
+        self.assertEqual(catalog.QUERY_MAX_PAGES, 2)
+        self.assertEqual(catalog.SEARCH_LIMIT, 20)
+        self.assertEqual(catalog.PAGE_READ_LIMIT, 1_048_576)
+        self.assertFalse(hasattr(catalog, "MAX_ITEMS") and catalog.MAX_ITEMS >= 30_000)
+        self.assertFalse(hasattr(catalog, "INDEX_TTL"))
+
+    def test_route_need_one_scoped_query_not_world_ingest(self):
+        calls = []
+
+        def fake_query(need, prefer_network=None):
+            calls.append((need, prefer_network))
             return {
-                "items": [_item("https://a.example/one", "alpha")],
-                "pagination": {"limit": 100, "offset": 0, "total": 1},
+                "items": [
+                    catalog.slim_item(
+                        _item("https://wx.example/forecast", "hourly weather forecast"),
+                        "base",
+                    )
+                ]
             }
 
-        with patch("live402.probe._fetch_catalog_payload", side_effect=fake_payload):
-            first = catalog.refresh()
-        prev = first
-        self.assertIs(catalog.peek_index(), prev)
+        def fake_probe(url, catalog_item=None, deadline=None, **kwargs):
+            return {
+                "live": True,
+                "url": url,
+                "payTo": "0xabc",
+                "invocable": False,
+                "status": 402,
+                "has_402_challenge": True,
+                "probed_at": "2026-08-31T00:00:00Z",
+                "latency_ms": 10,
+            }
 
-        seen = {}
-        real_merge = catalog._merge_items
-
-        def wrapped(by_rail):
-            seen["index_is_prev"] = catalog._index is prev
-            seen["index"] = catalog._index
-            return real_merge(by_rail)
-
-        with patch("live402.probe._fetch_catalog_payload", side_effect=fake_payload), patch.object(
-            catalog, "_merge_items", side_effect=wrapped
+        with patch("live402.catalog.fixtures.fixture_mode", return_value=False), patch(
+            "live402.probe.fixtures.fixture_mode", return_value=False
+        ), patch("live402.catalog.query_for_need", side_effect=fake_query), patch(
+            "live402.catalog.get_index"
+        ) as get_idx, patch("live402.probe._fetch_catalog_payload") as fetch, patch(
+            "live402.probe.probe_url", side_effect=fake_probe
         ):
-            catalog.refresh()
-        self.assertFalse(seen["index_is_prev"])
-        self.assertIsNone(seen["index"])
-        published = catalog.peek_index()
-        self.assertIsNotNone(published)
-        self.assertIs(published["items"][0], published["by_rail"]["base"][0])
-
-    def test_rail_error_keeps_previous_items(self):
-        def ok_payload(url, timeout, read_limit=None):
-            host = urlparse(url).hostname
-            if host == "api.cdp.coinbase.com":
-                return {
-                    "items": [_item("https://base.example/a", "base a")],
-                    "pagination": {"limit": 100, "offset": 0, "total": 1},
-                }
-            if host == "facilitator.payai.network":
-                return {
-                    "items": [_item("https://sol.example/b", "sol b")],
-                    "pagination": {"limit": 100, "offset": 0, "total": 1},
-                }
-            return {"items": [], "pagination": {"limit": 100, "offset": 0, "total": 0}}
-
-        with patch("live402.probe._fetch_catalog_payload", side_effect=ok_payload):
-            first = catalog.refresh()
-        self.assertEqual(len(first["by_rail"]["base"]), 1)
-
-        def then_fail_base(url, timeout, read_limit=None):
-            host = urlparse(url).hostname
-            if host == "api.cdp.coinbase.com":
-                raise RuntimeError("boom")
-            return ok_payload(url, timeout, read_limit)
-
-        with patch("live402.probe._fetch_catalog_payload", side_effect=then_fail_base):
-            second = catalog.refresh()
-        self.assertEqual(second["errors"].get("base"), "fetch_failed")
-        self.assertEqual(len(second["by_rail"]["base"]), 1)
-        self.assertEqual(probe._resource_url(second["by_rail"]["base"][0]), "https://base.example/a")
-        self.assertEqual(len(second["by_rail"]["solana"]), 1)
+            body = probe.route_need("weather", prefer_network="base")
+        self.assertEqual(calls, [("weather", "base")])
+        get_idx.assert_not_called()
+        fetch.assert_not_called()
+        self.assertTrue(body.get("live"))
+        self.assertEqual(body.get("url"), "https://wx.example/forecast")
 
 
 if __name__ == "__main__":

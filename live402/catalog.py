@@ -1,31 +1,44 @@
-"""Full-catalog index: paginated discovery, slim records, capability labels.
+"""Request-time discovery query. Slim records, capability labels.
 
-Fly VM is 1GB — slim at ingest, never retain raw JSON schemas.
-Pagination is limit+offset+total only. Never send page= or cursor=.
-refresh() is single-flight: overlapping daemon / get_index callers share one walk.
-TTL recrawl builds the next by_rail, drops the previous index, then merges.
+Never copies the three x402 catalogs into process memory. No daemon TTL crawl.
+CDP is queried via /discovery/search. PayAI and GoPlausible use search when
+the host serves it, else a small first-pages fetch. Pagination is
+limit+offset+total only. Never send page= or cursor=. Never fetch caller URLs.
 """
 
 from __future__ import annotations
 
-import threading
-import time
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
-from live402 import probe
+from live402 import fixtures, probe
 
 PAGE_SIZE = 100
-INDEX_TTL = 180.0
-MAX_PAGES = 400
-MAX_ITEMS = 30_000
-# Live 2026-08-30 size model (not a reason to raise caps): CDP Base pagination.total
-# 14376, PayAI Solana 27855 (279 pages), GoPlausible Algorand 1749. ~44k slim items.
-# by_rail alone ~82MB before merge. 1GB is a bandage. Build, swap, drop.
+# Need-scoped working set only. Do not walk PayAI's ~279 pages or accumulate 30k.
+QUERY_MAX_PAGES = 2
+QUERY_MAX_ITEMS = 100
+SEARCH_LIMIT = 20
+NEED_QUERY_MAX = 200
 # Raw CDP pages include huge schemas; 1MiB/page then slim immediately. Oversize pages dropped.
 PAGE_READ_LIMIT = 1_048_576
+CDP_SEARCH = "https://api.cdp.coinbase.com/platform/v2/x402/discovery/search"
+PAYAI_SEARCH = "https://facilitator.payai.network/discovery/search"
+GOPL_SEARCH = "https://facilitator.goplausible.xyz/discovery/search"
+SEARCH_BASES = {
+    "base": CDP_SEARCH,
+    "solana": PAYAI_SEARCH,
+    "algorand": GOPL_SEARCH,
+}
+# CDP search accepts CAIP-2 or legacy names. Only pass our hardcoded rail map.
+_RAIL_NETWORK = {
+    "base": "eip155:8453",
+    "solana": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+    "algorand": "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=",
+}
 
 _RAILS = ("base", "solana", "algorand")
-_DROP_QUERY = frozenset({"limit", "offset", "page", "cursor"})
+_DROP_QUERY = frozenset(
+    {"limit", "offset", "page", "cursor", "query", "network", "urlsubstring"}
+)
 _GENERIC_URL = frozenset(
     {
         "api",
@@ -151,16 +164,6 @@ _CAPABILITY_RULES: tuple[tuple[str, frozenset[str]], ...] = (
     ),
 )
 
-_lock = threading.Lock()
-_refresh_cv = threading.Condition(_lock)
-_index: dict | None = None
-_fetched_mono = 0.0
-_refresher_thread: threading.Thread | None = None
-_refreshing = False
-_refresh_result: dict | None = None
-_refresh_error: BaseException | None = None
-
-
 def _empty_index() -> dict:
     return {
         "items": [],
@@ -173,30 +176,14 @@ def _empty_index() -> dict:
     }
 
 
-def _in_progress_index() -> dict:
-    """Peek marker: crawl running, no completed index yet. Not a finished empty catalog."""
-    idx = _empty_index()
-    idx["in_progress"] = True
-    idx["complete"] = False
-    return idx
-
-
 def reset_index() -> None:
-    """Drop the in-memory catalog and in-flight crawl flags. Tests only."""
-    global _index, _fetched_mono, _refreshing, _refresh_result, _refresh_error
-    with _lock:
-        _index = None
-        _fetched_mono = 0.0
-        _refreshing = False
-        _refresh_result = None
-        _refresh_error = None
-        _refresh_cv.notify_all()
+    """No-op. There is no in-RAM world index to drop. Tests still call this."""
+    return
 
 
 def refresh_in_progress() -> bool:
-    """True while a catalog walk is running. Never starts a walk."""
-    with _lock:
-        return _refreshing
+    """Always False. There is no daemon catalog walk."""
+    return False
 
 
 def page_url(base: str, limit: int, offset: int) -> str | None:
@@ -220,6 +207,65 @@ def page_url(base: str, limit: int, offset: int) -> str | None:
     query.append(("limit", str(lim)))
     query.append(("offset", str(off)))
     built = urlunparse(parsed._replace(query=urlencode(query)))
+    if not probe.catalog_url_allowed(built):
+        return None
+    return built
+
+
+def _clip_need_query(need: str) -> str:
+    text = " ".join((need or "").split())
+    if not text:
+        return ""
+    return text[:NEED_QUERY_MAX]
+
+
+def search_url(
+    base: str,
+    query: str,
+    limit: int,
+    offset: int = 0,
+    network: str | None = None,
+    url_substring: str | None = None,
+) -> str | None:
+    """Allowlisted search URL. query + limit + offset only. Never page/cursor.
+
+    network and url_substring are optional hardcoded filters (CDP). The query
+    string is never used as a fetch target.
+    """
+    raw = (base or "").strip()
+    if not probe.catalog_url_allowed(raw):
+        return None
+    q = _clip_need_query(query)
+    if not q and not url_substring:
+        return None
+    try:
+        lim = int(limit)
+        off = int(offset)
+    except (TypeError, ValueError):
+        return None
+    if lim < 1 or off < 0:
+        return None
+    parsed = urlparse(raw)
+    params = [
+        (k, v)
+        for k, v in parse_qsl(parsed.query, keep_blank_values=True)
+        if k.lower() not in _DROP_QUERY
+    ]
+    if q:
+        params.append(("query", q))
+    if network:
+        net = str(network).strip()
+        if net not in _RAIL_NETWORK.values() and net not in _RAIL_NETWORK:
+            return None
+        params.append(("network", _RAIL_NETWORK.get(net, net)))
+    if url_substring:
+        sub = str(url_substring).strip()[:2048]
+        if len(sub) < 3:
+            return None
+        params.append(("urlSubstring", sub))
+    params.append(("limit", str(lim)))
+    params.append(("offset", str(off)))
+    built = urlunparse(parsed._replace(query=urlencode(params)))
     if not probe.catalog_url_allowed(built):
         return None
     return built
@@ -566,8 +612,13 @@ def _step_offset(pag: dict, n_items: int) -> int:
     return 0
 
 
-def fetch_rail(rail: str, base_url: str) -> dict:
-    """Walk offset=0,100,200… until empty, offset>=total, MAX_PAGES, or MAX_ITEMS."""
+def fetch_rail(
+    rail: str,
+    base_url: str,
+    max_pages: int = QUERY_MAX_PAGES,
+    max_items: int = QUERY_MAX_ITEMS,
+) -> dict:
+    """Walk a few first pages only. Never MAX_ITEMS across the world catalog."""
     items: list[dict] = []
     seen: set[str] = set()
     offset = 0
@@ -577,8 +628,18 @@ def fetch_rail(rail: str, base_url: str) -> dict:
     error = None
     tried_extra = False
     timeout = max(probe.probe_timeout(), 8.0)
+    try:
+        page_cap = int(max_pages)
+        item_cap = int(max_items)
+    except (TypeError, ValueError):
+        page_cap = QUERY_MAX_PAGES
+        item_cap = QUERY_MAX_ITEMS
+    if page_cap < 1:
+        page_cap = 1
+    if item_cap < 1:
+        item_cap = 1
 
-    while pages < MAX_PAGES and len(items) < MAX_ITEMS:
+    while pages < page_cap and len(items) < item_cap:
         url = page_url(base_url, PAGE_SIZE, offset)
         if not url:
             if pages == 0:
@@ -604,7 +665,7 @@ def fetch_rail(rail: str, base_url: str) -> dict:
                 continue
             seen.add(key)
             items.append(slim)
-            if len(items) >= MAX_ITEMS:
+            if len(items) >= item_cap:
                 truncated = True
                 break
 
@@ -630,7 +691,7 @@ def fetch_rail(rail: str, base_url: str) -> dict:
                 break
             tried_extra = True
 
-    if pages >= MAX_PAGES or len(items) >= MAX_ITEMS:
+    if pages >= page_cap or len(items) >= item_cap:
         truncated = True
 
     return {
@@ -677,145 +738,211 @@ def _merge_items(by_rail: dict) -> list[dict]:
     return [merged[k] for k in order]
 
 
-def _steal_prev_rail(rail: str) -> tuple[list, object, bool]:
-    """Borrow one previous rail list for error fallback. Does not snapshot the whole index."""
-    with _lock:
-        prev = _index if isinstance(_index, dict) else None
-        if not prev:
-            return [], None, False
-        stolen = (prev.get("by_rail") or {}).get(rail) or []
-        totals = (prev.get("totals") or {}).get(rail)
-        trunc = bool((prev.get("truncated") or {}).get(rail))
-        return stolen, totals, trunc
+def _looks_like_search_payload(payload) -> bool:
+    if isinstance(payload, list):
+        return True
+    if not isinstance(payload, dict) or not payload:
+        return False
+    if "items" in payload or "resources" in payload:
+        return True
+    if "searchMethod" in payload or "partialResults" in payload:
+        return True
+    if isinstance(payload.get("pagination"), dict):
+        return True
+    return False
 
 
-def _crawl_index() -> dict:
-    """Walk all three rails sequentially (RAM/CPU). Build, swap, drop.
+def _slim_payload_items(payload, rail: str) -> list[dict]:
+    items: list[dict] = []
+    seen: set[str] = set()
+    for item in _items_from_payload(payload):
+        slim = slim_item(item, rail)
+        key = probe._resource_url(slim)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        items.append(slim)
+        if len(items) >= QUERY_MAX_ITEMS:
+            break
+    return items
 
-    Does not keep a handle to the previous index for the whole crawl. On rail
-    error, steal that rail's last-good list only. Drops _index before merge so
-    we never hold previous index + new by_rail + merged items at once.
-    """
-    global _index
-    by_rail: dict[str, list] = {rail: [] for rail in _RAILS}
-    totals: dict = {}
-    truncated: dict = {}
-    errors: dict = {}
 
-    catalogs = list(probe.CATALOGS)
-    for rail, base in catalogs:
-        if rail not in by_rail:
-            by_rail[rail] = []
-        try:
-            result = fetch_rail(rail, base)
-        except Exception:
-            result = {"items": [], "error": "fetch_failed", "total": None, "truncated": False}
-        err = result.get("error")
-        got = list(result.get("items") or [])
-        if err and not got:
-            stolen, prev_total, prev_trunc = _steal_prev_rail(rail)
-            by_rail[rail] = stolen
-            errors[rail] = err
-            totals[rail] = prev_total
-            truncated[rail] = prev_trunc
-        else:
-            by_rail[rail] = got
-            totals[rail] = result.get("total")
-            truncated[rail] = bool(result.get("truncated"))
-            if err:
-                errors[rail] = err
-
-    # Last-good stays published during the walk (get_index stays instant).
-    # Drop it before merge so peak is not prev + by_rail + items.
-    with _lock:
-        _index = None
-    items = _merge_items(by_rail)
-    complete = (not any(truncated.values())) and (not errors)
+def _search_rail(rail: str, need: str, url_substring: str | None = None) -> dict:
+    """One search request. Does not walk resources pages."""
+    base = SEARCH_BASES.get(rail) or ""
+    network = _RAIL_NETWORK.get(rail) if rail == "base" else None
+    url = search_url(
+        base,
+        need,
+        SEARCH_LIMIT,
+        0,
+        network=network,
+        url_substring=url_substring,
+    )
+    if not url:
+        return {"items": [], "error": "not_allowlisted", "via": "search"}
+    timeout = max(probe.probe_timeout(), 8.0)
+    try:
+        payload = probe._fetch_catalog_payload(url, timeout, read_limit=PAGE_READ_LIMIT)
+    except Exception:
+        return {"items": [], "error": "fetch_failed", "via": "search"}
+    if not _looks_like_search_payload(payload):
+        return {"items": [], "error": "no_search", "via": "search"}
     return {
-        "items": items,
-        "by_rail": by_rail,
-        "fetched_at": time.time(),
-        "totals": totals,
-        "truncated": truncated,
-        "complete": complete,
-        "errors": errors,
+        "items": _slim_payload_items(payload, rail),
+        "error": None,
+        "via": "search",
     }
 
 
-def refresh() -> dict:
-    """Fetch all three rails sequentially. Single-flight: waiters reuse the in-flight walk."""
-    global _index, _fetched_mono, _refreshing, _refresh_result, _refresh_error
-    with _lock:
-        if _refreshing:
-            while _refreshing:
-                _refresh_cv.wait()
-            if _refresh_error is not None:
-                raise _refresh_error
-            if _refresh_result is not None:
-                return _refresh_result
-            # reset_index raced; do not start a second walk from a waiter
-            return _empty_index()
-        _refreshing = True
-        _refresh_error = None
+def _first_pages_rail(rail: str) -> dict:
+    """Small first-pages fallback. Never accumulates a world copy."""
+    base = ""
+    for name, url in probe.CATALOGS:
+        if name == rail:
+            base = url
+            break
+    if not base:
+        return {"items": [], "error": "not_allowlisted", "via": "pages"}
+    result = fetch_rail(rail, base, max_pages=QUERY_MAX_PAGES, max_items=QUERY_MAX_ITEMS)
+    result["via"] = "pages"
+    return result
 
-    try:
-        idx = _crawl_index()
-        with _lock:
-            _index = idx
-            _fetched_mono = time.monotonic()
-            _refresh_result = idx
-            _refresh_error = None
-            _refreshing = False
-            _refresh_cv.notify_all()
-        return idx
-    except Exception as exc:
-        with _lock:
-            _refresh_error = exc
-            _refreshing = False
-            _refresh_cv.notify_all()
-        raise
+
+def query_rail(rail: str, need: str, url_substring: str | None = None) -> dict:
+    """Search this rail, else first pages. CDP is search-only (no 14k walk)."""
+    if rail not in _RAILS:
+        return {"items": [], "error": "unknown_rail", "via": "search"}
+    searched = _search_rail(rail, need, url_substring=url_substring)
+    if rail == "base":
+        return searched
+    if searched.get("error") in (None,):
+        return searched
+    # PayAI / GoPlausible: search if they have it, else first pages.
+    if searched.get("error") in ("no_search", "fetch_failed", "not_allowlisted"):
+        return _first_pages_rail(rail)
+    return searched
+
+
+def query_for_need(need: str, prefer_network: str | None = None) -> dict:
+    """Need-scoped working set. Never stores a 44k index. Never walks MAX_ITEMS.
+
+    prefer_network scopes which rails are queried. Unscoped queries all three,
+    each capped at QUERY_MAX_ITEMS — caps do not accumulate into one 30k bag.
+    """
+    if fixtures.fixture_mode():
+        by_rail: dict[str, list] = {rail: [] for rail in _RAILS}
+        for item in fixtures.load_resources():
+            if not isinstance(item, dict):
+                continue
+            rail = probe._item_rail(item)
+            if rail not in _RAILS:
+                rail = "base"
+            row = dict(item)
+            row["_rail"] = rail
+            by_rail[rail].append(row)
+        prefer = probe.normalize_prefer_network(prefer_network)
+        if prefer:
+            by_rail = {r: (by_rail.get(r) or [] if r == prefer else []) for r in _RAILS}
+        items = _merge_items(by_rail)
+        return {
+            "items": items,
+            "by_rail": by_rail,
+            "totals": {},
+            "truncated": {},
+            "complete": True,
+            "errors": {},
+            "via": {rail: "fixture" for rail in _RAILS},
+        }
+
+    q = _clip_need_query(need)
+    prefer = probe.normalize_prefer_network(prefer_network)
+    rails = (prefer,) if prefer else _RAILS
+    by_rail: dict[str, list] = {rail: [] for rail in _RAILS}
+    errors: dict = {}
+    via: dict = {}
+    truncated: dict = {}
+    if not q:
+        return {
+            "items": [],
+            "by_rail": by_rail,
+            "totals": {},
+            "truncated": truncated,
+            "complete": False,
+            "errors": {"need": "invalid_need"},
+            "via": via,
+        }
+
+    for rail in rails:
+        try:
+            result = query_rail(rail, q)
+        except Exception:
+            result = {"items": [], "error": "fetch_failed", "via": "search"}
+        got = list(result.get("items") or [])
+        # Per-rail cap. Do not let leftovers from one rail raise another rail's cap.
+        by_rail[rail] = got[:QUERY_MAX_ITEMS]
+        via[rail] = result.get("via") or "search"
+        if result.get("truncated"):
+            truncated[rail] = True
+        err = result.get("error")
+        if err:
+            errors[rail] = err
+
+    items = _merge_items(by_rail)
+    return {
+        "items": items,
+        "by_rail": by_rail,
+        "totals": {},
+        "truncated": truncated,
+        "complete": not errors,
+        "errors": errors,
+        "via": via,
+    }
+
+
+def item_for_url(url: str) -> dict | None:
+    """Find one listing by URL. Fixture first. Else a scoped search. Never a 44k scan."""
+    raw = (url or "").strip()
+    if not raw:
+        return None
+    found = fixtures.lookup_url(raw)
+    if found:
+        rail = probe._item_rail(found)
+        if rail not in _RAILS:
+            rail = "base"
+        return slim_item(found, rail)
+    if fixtures.fixture_mode():
+        return None
+    parsed = urlparse(raw)
+    host = (parsed.hostname or "").strip()
+    sub = host if len(host) >= 3 else ""
+    q = raw[:NEED_QUERY_MAX]
+    for rail in _RAILS:
+        try:
+            result = query_rail(rail, q, url_substring=sub or None)
+        except Exception:
+            continue
+        for item in result.get("items") or []:
+            if probe._resource_url(item) == raw:
+                return item
+    return None
 
 
 def peek_index() -> dict | None:
-    """Cached index or None. Never refreshes. Pulse must not block on cold start.
-
-    During an in-flight crawl with no completed index, returns a status dict
-    with in_progress=True — not a finished empty catalog.
-    """
-    with _lock:
-        if _index is not None:
-            return _index
-        if _refreshing:
-            return _in_progress_index()
-        return None
+    """Always None. We do not keep a local catalog mirror. Never refreshes."""
+    return None
 
 
 def get_index() -> dict:
-    """Return cached index. Recrawl only on cold start. Daemon refresher handles TTL.
-
-    Cold start shares the in-flight daemon walk when one is already running.
-    """
-    with _lock:
-        if _index is not None:
-            return _index
-    return refresh()
+    """Empty working set. Does not crawl. Paid /route must use query_for_need."""
+    return _empty_index()
 
 
-def _refresh_loop() -> None:
-    while True:
-        try:
-            refresh()
-        except Exception:
-            pass
-        time.sleep(INDEX_TTL)
+def refresh() -> dict:
+    """No-op. We do not copy catalogs into RAM."""
+    return _empty_index()
 
 
 def start_refresher() -> None:
-    """Daemon thread: refill the index every INDEX_TTL. Idempotent."""
-    global _refresher_thread
-    with _lock:
-        if _refresher_thread is not None and _refresher_thread.is_alive():
-            return
-        t = threading.Thread(target=_refresh_loop, name="live402-catalog", daemon=True)
-        _refresher_thread = t
-        t.start()
+    """No-op. No 180s full-catalog daemon."""
+    return

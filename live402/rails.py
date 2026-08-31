@@ -7,7 +7,7 @@ import time
 import urllib.error
 import urllib.request
 
-from live402 import catalog, fixtures, payment, probe
+from live402 import fixtures, payment, probe
 
 CACHE_TTL = 30.0
 PING_TIMEOUT = 1.5
@@ -159,8 +159,8 @@ def get_rails() -> dict:
     """Cached facilitator pings. Single-flight: one in-flight collect.
 
     Waiters reuse the in-flight result. If last-good exists and a collect is
-    already running (or a catalog crawl is holding the process), return
-    last-good immediately so ThreadingHTTPServer handlers do not stack pings.
+    already running, return last-good immediately so ThreadingHTTPServer
+    handlers do not stack pings. Never waits on a discovery crawl.
     """
     global _collecting
     now = time.monotonic()
@@ -169,18 +169,12 @@ def get_rails() -> dict:
         if payload is not None and (now - _cache["at"]) < CACHE_TTL:
             return payload
 
-    refreshing = False
-    try:
-        refreshing = catalog.refresh_in_progress()
-    except Exception:
-        refreshing = False
-
     with _lock:
         payload = _cache.get("payload")
         now = time.monotonic()
         if payload is not None and (now - _cache["at"]) < CACHE_TTL:
             return payload
-        if payload is not None and (_collecting or refreshing):
+        if payload is not None and _collecting:
             return payload
         if _collecting:
             while _collecting:

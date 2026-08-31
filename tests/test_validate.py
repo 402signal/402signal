@@ -217,8 +217,10 @@ class ValidatePaywallSeparateTests(unittest.TestCase):
 class ValidateSsrfLiveModeTests(unittest.TestCase):
     def test_unknown_public_https_never_opens(self):
         with patch("live402.validate.fixtures.fixture_mode", return_value=False), patch(
-            "live402.validate.catalog.peek_index", return_value={"items": []}
-        ), patch("live402.validate.fixtures.lookup_url", return_value=None), patch(
+            "live402.validate.catalog.item_for_url", return_value=None
+        ), patch("live402.validate.catalog.peek_index", return_value=None), patch(
+            "live402.validate.fixtures.lookup_url", return_value=None
+        ), patch(
             "live402.probe.probe_url"
         ) as probed, patch("live402.probe._opener") as opener, patch(
             "live402.probe._one_request"
