@@ -26,6 +26,7 @@ LISTED_ON = (
     ("Smithery", "https://smithery.ai/servers/live402/signal"),
     ("Agentic Market", "https://agentic.market/services/402signal-com"),
     ("x402-dev", "https://github.com/michielpost/x402-dev/blob/master/Projects.md"),
+    ("GoPlausible", "https://facilitator.goplausible.xyz/dashboard/bazaar?q=402signal"),
 )
 BANNED = (
     "Where it fits",
@@ -378,7 +379,6 @@ class HomepageProductTests(unittest.TestCase):
             "x402scan.com/recipient",
             "www.x402scan.com",
             "Merchant record",
-            "GoPlausible",
             "402index.io",
             "api.cdp.coinbase.com",
             "facilitator.payai.network",
