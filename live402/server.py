@@ -595,7 +595,7 @@ def boot_optional_log_signer() -> None:
 
 
 def boot_http_process() -> None:
-    """HTTP process boot: log signer only. Never load a Falcon SK."""
+    """HTTP process boot: log signer only. No Algorand SK load."""
     boot_optional_log_signer()
 
 

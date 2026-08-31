@@ -185,7 +185,7 @@ class AlgorandConstructionTests(unittest.TestCase):
             raise AssertionError("send")
 
         with patch.object(algo_anchor, "send_forbidden", fake_send):
-            out = worker.process_one(callback, self.sender, algod.suggested_params(), now=15 * 60)
+            out = worker.process_one(callback, self.sender, _testnet_params(), now=15 * 60)
         self.assertIsNotNone(out)
         self.assertFalse(out["submitted"])
         self.assertEqual(out["status"], "pending")

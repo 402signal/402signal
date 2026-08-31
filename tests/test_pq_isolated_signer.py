@@ -329,8 +329,8 @@ class SignerClientProtocolTests(unittest.TestCase):
             dial.assert_not_called()
         src = inspect.getsource(server.boot_http_process)
         self.assertIn("boot_optional_log_signer", src)
-        self.assertNotIn("falcon", src.lower())
         self.assertNotIn("LIVE402_PQ_FALCON_SK", inspect.getsource(server))
+        self.assertNotIn("load_falcon_sk_from_env", inspect.getsource(server))
 
     def test_checkpoint_body_used_not_unsigned_txn(self):
         root = bytes.fromhex(_VECTOR_ROOT)
