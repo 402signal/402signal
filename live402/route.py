@@ -142,6 +142,29 @@ def _log_settle(body: dict | None) -> None:
     )
 
 
+def _attach_pq_trust(code: int, result: dict, body: dict) -> dict:
+    """Optional transparency receipt. Paid /route still succeeds if the log is down."""
+    if not isinstance(result, dict):
+        return result
+    if code not in (200, 503):
+        return result
+    try:
+        from live402.pq import receipt as pq_receipt
+
+        return pq_receipt.attach_to_route(result, body if isinstance(body, dict) else {})
+    except Exception:
+        result.setdefault("payment_authorization", {})
+        if isinstance(result.get("payment_authorization"), dict):
+            result["payment_authorization"]["pq_native"] = False
+        result["pq_trust"] = {
+            "transparency": {
+                "status": "unavailable",
+                "log_origin": "402signal.com/pq/log",
+            }
+        }
+        return result
+
+
 def handle_route(body: dict, headers, resource_url: str, bazaar: dict | None = None) -> tuple[int, dict, dict | None]:
     """Returns (status, json_body, extra_headers). Never probes before verify.
 
@@ -151,7 +174,7 @@ def handle_route(body: dict, headers, resource_url: str, bazaar: dict | None = N
     """
     if fixtures.local_free():
         code, result = run_probe(body if isinstance(body, dict) else {})
-        return code, result, None
+        return code, _attach_pq_trust(code, result, body if isinstance(body, dict) else {}), None
 
     parsed = payment.extract_payment_payload(headers)
     sender = _algorand_sender(headers)
@@ -196,4 +219,4 @@ def handle_route(body: dict, headers, resource_url: str, bazaar: dict | None = N
         extra.update(pay_extra)
         return 402, required, extra
     _log_settle(settle.body)
-    return code, result, extra or None
+    return code, _attach_pq_trust(code, result, body if isinstance(body, dict) else {}), extra or None
