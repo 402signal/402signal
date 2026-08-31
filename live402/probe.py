@@ -33,8 +33,12 @@ DEFAULT_TIMEOUT = 4.0
 MAX_SINGLE_TIMEOUT = 10.0
 DNS_TIMEOUT = 2.0
 PROBE_BUDGET_SECONDS = 55.0
-MAX_PROBE = 5
+# Hard server ceiling. Do not treat this as the typical per-request budget.
+PROBE_CEILING = 20
 FIRST_TRANCHE = 3
+EXPAND_TRANCHE = 3
+STANDARD_PROBE_CAP = 7
+THOROUGH_PROBE_CAP = 15
 MAX_IN_FLIGHT = 3
 MAX_PROCESS_PROBES = 10
 MAX_PER_HOST = 2
@@ -151,6 +155,56 @@ def remaining_timeout(deadline: float | None) -> float | None:
         return None
     left = float(deadline) - time.monotonic()
     return left
+
+
+def parse_search_depth(raw) -> str:
+    if raw is None:
+        return "standard"
+    text = str(raw).strip().lower()
+    if text == "thorough":
+        return "thorough"
+    return "standard"
+
+
+def probe_plan(
+    body=None,
+    search_depth=None,
+    max_candidates_to_probe=None,
+) -> dict:
+    """Per-request probe budget. Typical is 3 then +2–4. Hard cap is 20."""
+    src = body if isinstance(body, dict) else {}
+    depth = parse_search_depth(
+        search_depth if search_depth is not None else src.get("search_depth")
+    )
+    raw_max = max_candidates_to_probe
+    if raw_max is None:
+        raw_max = src.get("max_candidates_to_probe")
+    requested = select._nonneg_int(raw_max)
+    if requested is not None and requested < 1:
+        requested = None
+    if requested is not None:
+        ceiling = min(int(requested), PROBE_CEILING)
+    elif depth == "thorough":
+        ceiling = min(THOROUGH_PROBE_CAP, PROBE_CEILING)
+    else:
+        ceiling = min(STANDARD_PROBE_CAP, PROBE_CEILING)
+    if ceiling < 1:
+        ceiling = 1
+    return {
+        "search_depth": depth,
+        "max_candidates_to_probe": requested,
+        "probe_ceiling": ceiling,
+    }
+
+
+def next_tranche_size(probed_n: int, remaining: int, ceiling: int, first: bool) -> int:
+    """First tranche is 3. Later expansions are 2–4. Never past the request ceiling."""
+    left = min(int(remaining), int(ceiling) - int(probed_n))
+    if left <= 0:
+        return 0
+    if first:
+        return min(FIRST_TRANCHE, left)
+    return min(EXPAND_TRANCHE, left)
 
 
 _pool_lock = threading.Lock()
@@ -1676,8 +1730,10 @@ def _discovery_unavailable_miss(objective: str) -> dict:
         "objective": objective,
         "compared": [],
         "discovery_matches": 0,
+        "candidates_discovered": 0,
         "candidates_considered": 0,
         "candidates_probed": 0,
+        "probe_ceiling": STANDARD_PROBE_CAP,
         "probe_budget_exhausted": False,
         "candidate_evaluation_complete": True,
         "stop_reason": "candidate_set_exhausted",
@@ -1744,6 +1800,7 @@ def _stop_reason(
     probed: list,
     probe_budget_exhausted: bool,
     some_live: bool,
+    probe_ceiling: int | None = None,
 ) -> str:
     if winner:
         return "winner_selected"
@@ -1751,7 +1808,8 @@ def _stop_reason(
     untested = not complete
     if probe_budget_exhausted and untested:
         return "probe_budget_exhausted"
-    if untested and len(probed) >= MAX_PROBE:
+    cap = PROBE_CEILING if probe_ceiling is None else int(probe_ceiling)
+    if untested and len(probed) >= cap:
         return "probe_limit_reached"
     if some_live:
         return "constraints_unmet"
@@ -1771,10 +1829,16 @@ def _attach_route_funnel(
     probe_budget_exhausted: bool,
     candidate_evaluation_complete: bool,
     stop_reason: str,
+    candidates_discovered: int | None = None,
+    probe_ceiling: int | None = None,
 ) -> dict:
     body["discovery_matches"] = int(discovery_matches)
     body["candidates_considered"] = int(candidates_considered)
     body["candidates_probed"] = int(candidates_probed)
+    body["candidates_discovered"] = int(
+        candidates_discovered if candidates_discovered is not None else discovery_matches
+    )
+    body["probe_ceiling"] = int(probe_ceiling if probe_ceiling is not None else STANDARD_PROBE_CAP)
     body["probe_budget_exhausted"] = bool(probe_budget_exhausted)
     body["candidate_evaluation_complete"] = bool(candidate_evaluation_complete)
     body["stop_reason"] = stop_reason
@@ -1832,7 +1896,7 @@ def _history_boost_shortlist(
     """
     if len(ranked) <= 1:
         return ranked
-    window = min(len(ranked), max(MAX_PROBE * 2, FIRST_TRANCHE * 2))
+    window = min(len(ranked), max(STANDARD_PROBE_CAP * 2, FIRST_TRANCHE * 2))
     head = ranked[:window]
     tail = ranked[window:]
     urls = [_resource_url(item) for item in head]
@@ -2049,18 +2113,39 @@ def route_need(
     prefer_network: str | None = None,
     objective: str | None = None,
     constraints: dict | None = None,
+    search_depth: str | None = None,
+    max_candidates_to_probe=None,
+    probe_ceiling: int | None = None,
 ) -> dict:
-    """Rank, probe in concurrent tranches under the 55s budget, pick best-of-N. Fail-closed."""
+    """Rank, probe in adaptive tranches under the 55s budget, pick best-of-N.
+
+    Typical: first 3, then 2–4 more if no winner. Hard server ceiling is 20.
+    Candidate #6 is reachable when 1–5 fail without every request doing 20.
+    """
     if deadline is None:
         deadline = time.monotonic() + PROBE_BUDGET_SECONDS
     prefer = normalize_prefer_network(prefer_network)
     obj = select.parse_objective(objective)
     cons = constraints if isinstance(constraints, dict) else {}
     rails = cons.get("rails") if isinstance(cons, dict) else None
+    plan = probe_plan(
+        search_depth=search_depth,
+        max_candidates_to_probe=max_candidates_to_probe,
+    )
+    if probe_ceiling is not None:
+        try:
+            ceiling = min(max(int(probe_ceiling), 1), PROBE_CEILING)
+        except (TypeError, ValueError):
+            ceiling = plan["probe_ceiling"]
+    else:
+        ceiling = plan["probe_ceiling"]
     try:
         items = fetch_discovery(need, prefer_network=prefer, networks=rails)
     except Exception:
-        return _discovery_unavailable_miss(obj)
+        miss = _discovery_unavailable_miss(obj)
+        miss["probe_ceiling"] = ceiling
+        return miss
+    discovered = len(items)
     ranked = rank_resources(need, items, prefer_network=prefer)
     ranked = _history_boost_shortlist(ranked, need=need, prefer_network=prefer)
     try:
@@ -2074,6 +2159,7 @@ def route_need(
     batch_id = uuid.uuid4().hex
     next_idx = 0
     probe_budget_exhausted = False
+    first_tranche = True
 
     rank_of = {_resource_url(item): idx for idx, item in enumerate(ranked)}
 
@@ -2087,13 +2173,16 @@ def route_need(
     def winner_now():
         return select.pick_winner(_by_rank(_selection_set(probed)), obj, cons)
 
-    while next_idx < len(ranked) and len(probed) < MAX_PROBE:
+    while next_idx < len(ranked) and len(probed) < ceiling:
         if _budget_hit(deadline):
             probe_budget_exhausted = True
             break
         if select.enough_evidence(probed, obj, cons):
             break
-        take = min(FIRST_TRANCHE, MAX_PROBE - len(probed), len(ranked) - next_idx)
+        take = next_tranche_size(
+            len(probed), len(ranked) - next_idx, ceiling, first_tranche
+        )
+        first_tranche = False
         if take <= 0:
             break
         tranche = ranked[next_idx:next_idx + take]
@@ -2125,11 +2214,14 @@ def route_need(
         probed=probed,
         probe_budget_exhausted=bool(probe_budget_exhausted),
         some_live=some_live,
+        probe_ceiling=ceiling,
     )
     funnel = {
         "discovery_matches": discovery_matches,
+        "candidates_discovered": discovered,
         "candidates_considered": discovery_matches,
         "candidates_probed": len(probed),
+        "probe_ceiling": ceiling,
         "probe_budget_exhausted": bool(probe_budget_exhausted),
         "candidate_evaluation_complete": evaluation_complete,
         "stop_reason": stop_reason,
@@ -2176,7 +2268,7 @@ def route_need(
         body["miss_reason"] = "no_candidates"
     elif probe_budget_exhausted and untested:
         body["miss_reason"] = "probe_budget_exhausted"
-    elif untested and len(probed) >= MAX_PROBE:
+    elif untested and len(probed) >= ceiling:
         body["miss_reason"] = "probe_limit_reached"
     elif some_live:
         body["miss_reason"] = "constraints_unmet"

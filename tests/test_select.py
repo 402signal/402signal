@@ -844,12 +844,54 @@ class RouteNeedSelectTests(unittest.TestCase):
         self.assertIsNone(result.get("url"))
         self.assertEqual(result.get("miss_reason"), "probe_limit_reached")
         self.assertEqual(result.get("stop_reason"), "probe_limit_reached")
-        self.assertEqual(result.get("candidates_probed"), probe.MAX_PROBE)
+        self.assertEqual(result.get("probe_ceiling"), probe.STANDARD_PROBE_CAP)
+        self.assertEqual(result.get("candidates_probed"), result.get("probe_ceiling"))
+        self.assertLess(result.get("candidates_probed"), probe.PROBE_CEILING)
         self.assertEqual(result.get("discovery_matches"), 14)
+        self.assertEqual(result.get("candidates_discovered"), 14)
         self.assertGreater(result.get("candidates_considered"), result.get("candidates_probed"))
         self.assertFalse(result.get("candidate_evaluation_complete"))
         self.assertFalse(result.get("probe_budget_exhausted"))
         self.assertNotEqual(result.get("miss_reason"), "no_candidates")
+
+    def test_sixth_candidate_reached_when_first_five_fail_without_twenty_probes(self):
+        items = [self._item("https://d%d.example/weather" % i) for i in range(1, 13)]
+        started = []
+
+        def fake_probe(url, catalog_item=None, deadline=None, **kwargs):
+            _ = catalog_item, deadline
+            started.append(url)
+            if "d6.example" in url:
+                return self._live(url, amount=10000, latency=10)
+            return self._dead(url)
+
+        result = self._route(items, fake_probe)
+        self.assertTrue(result.get("live"))
+        self.assertIn("d6.example", result.get("url") or "")
+        self.assertIn("https://d6.example/weather", started)
+        self.assertEqual(result.get("candidates_probed"), 6)
+        self.assertLess(result.get("candidates_probed"), 20)
+        self.assertLess(result.get("candidates_probed"), probe.PROBE_CEILING)
+        self.assertEqual(result.get("probe_ceiling"), probe.STANDARD_PROBE_CAP)
+        self.assertEqual(result.get("stop_reason"), "winner_selected")
+        self.assertFalse(result.get("candidate_evaluation_complete"))
+        self.assertEqual(result.get("candidates_discovered"), 12)
+        self.assertEqual(result.get("candidates_considered"), 12)
+
+    def test_max_candidates_to_probe_is_capped_at_server_ceiling(self):
+        items = [self._item("https://cap%d.example/weather" % i) for i in range(30)]
+
+        def fake_probe(url, catalog_item=None, deadline=None, **kwargs):
+            _ = catalog_item, deadline
+            return self._dead(url)
+
+        result = self._route(
+            items, fake_probe, max_candidates_to_probe=50, search_depth="thorough"
+        )
+        self.assertEqual(result.get("probe_ceiling"), probe.PROBE_CEILING)
+        self.assertEqual(result.get("candidates_probed"), probe.PROBE_CEILING)
+        self.assertLessEqual(result.get("candidates_probed"), 20)
+        self.assertEqual(result.get("stop_reason"), "probe_limit_reached")
 
     def test_winner_selected_with_untested_ranked_is_not_evaluation_complete(self):
         items = [self._item("https://win%d.example/weather" % i) for i in range(8)]

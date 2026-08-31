@@ -50,8 +50,10 @@ def run_probe(body: dict) -> tuple[int, dict]:
         result["tried"] = 1
         result["source"] = "fixture" if fixtures.fixture_mode() else "url"
         result["discovery_matches"] = 0
+        result["candidates_discovered"] = 0
         result["candidates_considered"] = 1
         result["candidates_probed"] = 1
+        result["probe_ceiling"] = 1
         result["probe_budget_exhausted"] = False
         result["candidate_evaluation_complete"] = True
         result["stop_reason"] = "winner_selected" if result.get("live") else "candidate_set_exhausted"
@@ -68,12 +70,16 @@ def run_probe(body: dict) -> tuple[int, dict]:
     prefer = probe.normalize_prefer_network(body.get("prefer_network"))
     objective = select.parse_objective(body.get("objective"))
     constraints = select.parse_constraints(body)
+    plan = probe.probe_plan(body)
     result = probe.route_need(
         need,
         deadline=deadline,
         prefer_network=prefer,
         objective=objective,
         constraints=constraints,
+        search_depth=plan.get("search_depth"),
+        max_candidates_to_probe=plan.get("max_candidates_to_probe"),
+        probe_ceiling=plan.get("probe_ceiling"),
     )
     result.setdefault("payTo", None)
     result.setdefault("traction", "unknown")
