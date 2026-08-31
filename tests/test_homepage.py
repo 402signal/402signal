@@ -227,7 +227,7 @@ class HomepageProductTests(unittest.TestCase):
         self.assertIn("index_status", js)
         self.assertIn("pending", js)
         self.assertIn("refreshing", js)
-        self.assertIn('fetch("/pulse")', js)
+        self.assertIn('fetch("/pulse"', js)
         self.assertNotIn("healthy", js)
         self.assertNotIn("executable_now_rate", js)
         self.assertNotIn("success_7d", js)
@@ -295,7 +295,7 @@ class HomepageProductTests(unittest.TestCase):
         self.assertIn("aria-live=\"polite\"", html)
         self.assertIn("Building an x402 API? Check whether your endpoint is agent-ready.", html)
         self.assertIn("compared candidates", html)
-        self.assertIn("No qualifying endpoint was verified", html)
+        self.assertIn("no qualifying endpoint was verified", html)
         self.assertNotIn("x402scan lists Solana", html)
         self.assertNotIn("skips Algorand", html)
 

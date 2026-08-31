@@ -333,7 +333,7 @@ class PaywallTests(unittest.TestCase):
         self.assertNotIn("#use", js)
         self.assertNotIn("panel-use", js)
         self.assertNotIn("panel-overview", js)
-        self.assertIn('fetch("/pulse")', js)
+        self.assertIn('fetch("/pulse"', js)
         self.assertIn("need-chips", js)
         self.assertIn('fetch("/preview', js)
         self.assertNotIn('fetch("/rails', js)
