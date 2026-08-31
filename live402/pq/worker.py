@@ -139,14 +139,20 @@ def maybe_submit(
     root = store.root(size)
     prev = last_anchor()
     consistency = [node.hex() for node in store.consistency_path(prev["size"], size)]
-    body = ckpt.checkpoint_body(origin, size, root)
+    note = store.checkpoint_at(size) or store.latest_checkpoint()
+    if not note:
+        return None
     try:
-        pqsig = signer_client.request_sign(
+        ckpt.parse_signed_note(note)
+    except ValueError:
+        return None
+    try:
+        signed = signer_client.request_sign(
             origin=origin,
             tree_size=size,
             root=root,
             consistency=consistency,
-            checkpoint=body,
+            checkpoint=note,
             now=now,
         )
     except Exception:
@@ -155,7 +161,7 @@ def maybe_submit(
     save_anchor(size, when)
     return {
         "tree_size": size,
-        "pqsig": pqsig,
+        "signed": signed,
         "submitted": False,
         "status": "pending",
     }

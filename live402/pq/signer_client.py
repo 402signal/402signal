@@ -9,13 +9,18 @@ HMAC-SHA256 over versioned canonical bytes (signer internal/hmac @ 076825f):
     checkpoint, consistency (nodes joined by comma), origin, request_id,
     root (lowercase hex), timestamp (decimal), tree_size (decimal), v=1
   hmac field is hex(HMAC-SHA256(token, canonical)).
-Signer compares MAC; this client only generates the same canonical bytes.
 
 JSON keys sent (exactly these; signer rejects unknown fields):
   v, origin, tree_size, root, consistency, timestamp, request_id, checkpoint, hmac
-Do not send fee/firstValid/sender/amount/unsigned txn. Signer builds PaymentTxn.
+checkpoint is the Ed25519 signed-note the log already produced, not an
+unsigned checkpoint_body. Do not send fee/firstValid/sender/amount/txn.
+
+Reply shape (076825f): {ok, tree_size, root, pqsig, signed}
+signed is hex of the full SignedTxn. pqsig is a separate marker/hex field.
+Do not treat pqsig as the transaction bytes.
 
 LIVE402_PQ_SIGNER_TOKEN unset/empty: never dial, never sign (C1 live state).
+Dial/read timeout is 25s (signer Handle/algokey is 20s plus IPC).
 This module never loads a Falcon SK. No Algorand submit.
 """
 
@@ -29,6 +34,8 @@ import socket
 import time
 import uuid
 
+from live402.pq import checkpoint as ckpt
+
 TOKEN_ENV = "LIVE402_PQ_SIGNER_TOKEN"
 IPC_HOST_ENV = "LIVE402_PQ_SIGNER_HOST"
 IPC_PORT_ENV = "LIVE402_PQ_SIGNER_PORT"
@@ -36,15 +43,14 @@ IPC_PORT_ENV = "LIVE402_PQ_SIGNER_PORT"
 # Fly 6PN. Never PORT/8080.
 DEFAULT_IPC_HOST = "402signal-pq-signer.internal"
 DEFAULT_IPC_PORT = 9091
-IPC_TIMEOUT = 2.0
-# Signer rejects stale timestamp; router sends now (short window).
+# Signer Handle/algokey is 20s plus IPC.
+IPC_TIMEOUT = 25.0
 REQUEST_TTL_SECONDS = 30
 _MAX_LINE = 65536
 _FORBIDDEN_PORTS = frozenset({8080})
 
 CANONICAL_VERSION = "pq-anchor/1"
 REQUEST_VERSION = 1
-# Sorted HMAC keys. Must match signer internal/hmac @ 076825f.
 CANONICAL_KEYS = (
     "checkpoint",
     "consistency",
@@ -55,7 +61,6 @@ CANONICAL_KEYS = (
     "tree_size",
     "v",
 )
-# Wire object keys, exactly, in this order. No extras.
 REQUEST_KEYS = (
     "v",
     "origin",
@@ -67,6 +72,8 @@ REQUEST_KEYS = (
     "checkpoint",
     "hmac",
 )
+# Live signer 076825f reply. signed = hex SignedTxn; pqsig is not the txn.
+REPLY_KEYS = frozenset({"ok", "tree_size", "root", "pqsig", "signed"})
 
 
 class SignerClientError(RuntimeError):
@@ -108,6 +115,17 @@ def ipc_peer_host() -> str:
     if explicit:
         return explicit
     return DEFAULT_IPC_HOST
+
+
+def require_signed_note(text: str) -> str:
+    """checkpoint must be a C2SP signed-note, not an unsigned body."""
+    if not isinstance(text, str) or not text.strip():
+        raise SignerClientError("unsigned checkpoint")
+    try:
+        ckpt.parse_signed_note(text)
+    except ValueError as exc:
+        raise SignerClientError("unsigned checkpoint") from exc
+    return text
 
 
 def _hex_node(value) -> str:
@@ -155,7 +173,6 @@ def canonical_bytes(
         "tree_size": str(int(tree_size)),
         "v": "1",
     }
-    # sorted keys as k=v\n after the version line
     parts = [CANONICAL_VERSION]
     for key in sorted(fields):
         parts.append("%s=%s" % (key, fields[key]))
@@ -178,10 +195,11 @@ def build_request(
     checkpoint: str,
     token: str | None = None,
 ) -> dict:
-    """Exactly REQUEST_KEYS. HMAC covers the canonical set, not a JSON subset."""
+    """Exactly REQUEST_KEYS. checkpoint is the signed-note. HMAC covers all fields."""
     secret = token if token is not None else signer_token()
     if not secret:
         raise SignerClientError("token unset")
+    note = require_signed_note(checkpoint)
     nodes = [] if consistency is None else list(consistency)
     hex_nodes = [_hex_node(n) for n in nodes]
     root_hex = _hex_node(root)
@@ -192,7 +210,7 @@ def build_request(
         consistency=hex_nodes,
         timestamp=int(timestamp),
         request_id=request_id,
-        checkpoint=checkpoint,
+        checkpoint=note,
     )
     payload = {
         "v": REQUEST_VERSION,
@@ -202,16 +220,18 @@ def build_request(
         "consistency": hex_nodes,
         "timestamp": int(timestamp),
         "request_id": request_id,
-        "checkpoint": checkpoint,
+        "checkpoint": note,
         "hmac": mac_hex(secret, body),
     }
     if set(payload) != set(REQUEST_KEYS):
+        raise SignerClientError("request keys")
+    if "checkpoint_body" in payload:
         raise SignerClientError("request keys")
     return payload
 
 
 def encode_request_line(payload: dict) -> str:
-    """One JSON object. Refuses unknown keys and unsigned-txn fields."""
+    """One JSON object. Refuses unknown keys, unsigned-txn fields, checkpoint_body."""
     if not isinstance(payload, dict) or set(payload) != set(REQUEST_KEYS):
         raise SignerClientError("request keys")
     forbidden = {
@@ -226,9 +246,11 @@ def encode_request_line(payload: dict) -> str:
         "unsigned",
         "pk",
         "sk",
+        "checkpoint_body",
     }
     if set(payload) & forbidden:
         raise SignerClientError("request keys")
+    require_signed_note(str(payload.get("checkpoint") or ""))
     ordered = {key: payload[key] for key in REQUEST_KEYS}
     return json.dumps(ordered, separators=(",", ":"), ensure_ascii=True)
 
@@ -248,23 +270,48 @@ def _recv_line(sock: socket.socket, timeout: float) -> str:
     return buf.split(b"\n", 1)[0].decode("utf-8", errors="replace")
 
 
-def _parse_reply(raw: str) -> bytes:
+def parse_reply(raw: str) -> dict:
+    """Live reply {ok, tree_size, root, pqsig, signed}. signed is SignedTxn hex."""
     try:
         data = json.loads(raw)
     except json.JSONDecodeError as exc:
         raise SignerClientError("invalid json") from exc
-    if not isinstance(data, dict) or data.get("error"):
+    if not isinstance(data, dict):
+        raise SignerClientError("invalid json")
+    if data.get("error") or data.get("ok") is not True:
         raise SignerClientError("sign_failed")
-    hex_sig = data.get("pqsig")
-    if not isinstance(hex_sig, str) or not hex_sig:
+    extra = set(data) - REPLY_KEYS
+    missing = REPLY_KEYS - set(data)
+    if extra or missing:
+        raise SignerClientError("sign_failed")
+    signed_hex = data.get("signed")
+    if not isinstance(signed_hex, str) or not signed_hex:
         raise SignerClientError("sign_failed")
     try:
-        return bytes.fromhex(hex_sig)
+        signed = bytes.fromhex(signed_hex)
     except ValueError as exc:
         raise SignerClientError("sign_failed") from exc
+    if not signed:
+        raise SignerClientError("sign_failed")
+    pqsig = data.get("pqsig")
+    if not isinstance(pqsig, str) or not pqsig:
+        raise SignerClientError("sign_failed")
+    try:
+        pqsig_b = bytes.fromhex(pqsig)
+    except ValueError as exc:
+        raise SignerClientError("sign_failed") from exc
+    if signed == pqsig_b:
+        raise SignerClientError("sign_failed")
+    return {
+        "ok": True,
+        "tree_size": int(data["tree_size"]),
+        "root": _hex_node(data["root"]),
+        "pqsig": pqsig.lower() if not pqsig.startswith("0x") else pqsig,
+        "signed": signed,
+    }
 
 
-def request_sign(
+def request_signed(
     *,
     origin: str,
     tree_size: int,
@@ -277,12 +324,8 @@ def request_sign(
     port: int | None = None,
     timeout: float = IPC_TIMEOUT,
     token: str | None = None,
-) -> bytes:
-    """HMAC + one JSON-line. Never dials when the router token is missing.
-
-    timestamp is unix now (short expiry on the signer). request_id is unique.
-    Does not POST to Algorand.
-    """
+) -> dict:
+    """Dial once. Returns parsed reply. Never dials if token unset. Does not POST."""
     secret = token if token is not None else signer_token()
     if not secret:
         raise SignerClientError("token unset")
@@ -309,4 +352,35 @@ def request_sign(
         raise
     except Exception as exc:
         raise SignerClientError("unavailable") from exc
-    return _parse_reply(raw)
+    return parse_reply(raw)
+
+
+def request_sign(
+    *,
+    origin: str,
+    tree_size: int,
+    root,
+    consistency,
+    checkpoint: str,
+    now: int | None = None,
+    request_id: str | None = None,
+    host: str | None = None,
+    port: int | None = None,
+    timeout: float = IPC_TIMEOUT,
+    token: str | None = None,
+) -> bytes:
+    """Return SignedTxn bytes from reply['signed']. Never returns pqsig as the txn."""
+    data = request_signed(
+        origin=origin,
+        tree_size=tree_size,
+        root=root,
+        consistency=consistency,
+        checkpoint=checkpoint,
+        now=now,
+        request_id=request_id,
+        host=host,
+        port=port,
+        timeout=timeout,
+        token=token,
+    )
+    return data["signed"]
