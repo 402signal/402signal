@@ -50,6 +50,7 @@ class AlgorandConstructionTests(unittest.TestCase):
         worker.clear_queue()
         store.reset()
         os.environ.pop("LIVE402_PQ_LOG_DB", None)
+        os.environ.pop("LIVE402_PQ_FALCON_ADDRESS", None)
         self.tmp.cleanup()
 
     def test_note_is_84_bytes_and_round_trips_to_c2sp_body(self):
@@ -104,6 +105,37 @@ class AlgorandConstructionTests(unittest.TestCase):
         # Constructing the SDK-shaped signer must not imply a network send.
         sdk_like = _FakeFalconSigner(pk, callback)
         self.assertEqual(sdk_like.sign(txn), b"pqsig-fixture")
+
+    def test_validate_unsigned_anchor_accepts_pq1_and_rejects_forgeries(self):
+        os.environ["LIVE402_PQ_FALCON_ADDRESS"] = self.sender
+        note = algo_anchor.encode_note(ORIGIN, 1, merkle.mth([b"a"]))
+        txn = algo_anchor.build_payment_txn(self.sender, note, _testnet_params())
+        algo_anchor.validate_unsigned_anchor(txn)
+
+        bad_amt = dict(txn)
+        bad_amt["amt"] = 1
+        with self.assertRaises(algo_anchor.AnchorError):
+            algo_anchor.validate_unsigned_anchor(bad_amt)
+
+        bad_rcv = dict(txn)
+        bad_rcv["rcv"] = os.urandom(32)
+        with self.assertRaises(algo_anchor.AnchorError):
+            algo_anchor.validate_unsigned_anchor(bad_rcv)
+
+        bad_gen = dict(txn)
+        bad_gen["gen"] = algo_anchor.MAINNET_GENESIS_ID
+        with self.assertRaises(algo_anchor.AnchorError):
+            algo_anchor.validate_unsigned_anchor(bad_gen)
+
+        missing = dict(txn)
+        missing.pop("note", None)
+        with self.assertRaises(algo_anchor.AnchorError):
+            algo_anchor.validate_unsigned_anchor(missing)
+
+        forged = dict(txn)
+        forged["note"] = b"\x00" * algo_anchor.NOTE_LEN
+        with self.assertRaises(algo_anchor.AnchorError):
+            algo_anchor.validate_unsigned_anchor(forged)
 
     def test_idle_does_not_build_when_size_unchanged(self):
         store.append(b"one")

@@ -41,6 +41,7 @@ class IsolatedSignerProcessTests(unittest.TestCase):
         self.log_seed = os.urandom(32)
         self.log_hex = self.log_seed.hex()
         self.sender = payment.DEFAULT_PAYTO_ALGORAND
+        os.environ["LIVE402_PQ_FALCON_ADDRESS"] = self.sender
         self._stop = False
         self._threads = []
         self._socks = []
@@ -98,6 +99,20 @@ class IsolatedSignerProcessTests(unittest.TestCase):
         thread.start()
         self._threads.append(thread)
         return sock, port
+
+    def _assert_ipc_rejected(self, txn):
+        signed = []
+
+        def boom(_t):
+            signed.append(True)
+            return b"should-not-sign"
+
+        with patch.object(algo_anchor, "isolated_sign", side_effect=AssertionError("must not sign")) as sign:
+            _sock, port = self._start_ipc(signer_callback=boom)
+            with self.assertRaises(isolated_signer.SignerProcessError):
+                isolated_signer.request_pqsig(txn, host="127.0.0.1", port=port)
+            sign.assert_not_called()
+        self.assertEqual(signed, [])
 
     def test_unsigned_in_pqsig_out_via_callback(self):
         txn = self._unsigned()
@@ -273,6 +288,48 @@ class IsolatedSignerProcessTests(unittest.TestCase):
                 params=params,
             )
         )
+
+    def test_valid_pq1_txn_goes_through_ipc(self):
+        called = []
+
+        def cb(txn):
+            called.append(txn)
+            return b"pqsig-ok"
+
+        _sock, port = self._start_ipc(signer_callback=cb)
+        with patch.object(algo_anchor, "isolated_sign", wraps=algo_anchor.isolated_sign) as sign:
+            out = isolated_signer.request_pqsig(self._unsigned(), host="127.0.0.1", port=port)
+        self.assertEqual(out, b"pqsig-ok")
+        self.assertEqual(len(called), 1)
+        self.assertTrue(sign.called)
+        self.assertNotIn(self.hex_sk, json.dumps(called[0], default=str))
+
+    def test_ipc_rejects_wrong_amount_without_signing(self):
+        txn = self._unsigned()
+        txn["amt"] = 1
+        self._assert_ipc_rejected(txn)
+
+    def test_ipc_rejects_wrong_receiver_without_signing(self):
+        txn = self._unsigned()
+        txn["rcv"] = os.urandom(32)
+        self._assert_ipc_rejected(txn)
+
+    def test_ipc_rejects_mainnet_genesis_without_signing(self):
+        txn = self._unsigned()
+        txn["gen"] = algo_anchor.MAINNET_GENESIS_ID
+        self._assert_ipc_rejected(txn)
+
+    def test_ipc_rejects_missing_note_without_signing(self):
+        txn = self._unsigned()
+        txn.pop("note", None)
+        self._assert_ipc_rejected(txn)
+
+    def test_ipc_rejects_forged_note_without_signing(self):
+        txn = self._unsigned()
+        txn["note"] = b"\x00" * algo_anchor.NOTE_LEN
+        self._assert_ipc_rejected(txn)
+        txn["note"] = b"not-a-pq1-note"
+        self._assert_ipc_rejected(txn)
 
 
 if __name__ == "__main__":

@@ -113,6 +113,53 @@ def note_from_checkpoint_body(body_text: str) -> bytes:
     return encode_note(parsed["origin"], parsed["tree_size"], parsed["root"])
 
 
+def _field_bytes(val):
+    if isinstance(val, (bytes, bytearray)):
+        return bytes(val)
+    if isinstance(val, str) and val:
+        try:
+            return bytes.fromhex(val)
+        except ValueError:
+            return algo_tx.decode_address(val)
+    raise AnchorError("not pq1 construction")
+
+
+def validate_unsigned_anchor(txn: dict) -> None:
+    """Fail closed unless txn matches PQ1 construction. Does not sign.
+
+    PaymentTxn amount=0, receiver==sender==configured public address,
+    genesis testnet-v1.0 (MainNet rejected), note from encode_note.
+    """
+    if not isinstance(txn, dict):
+        raise AnchorError("not pq1 construction")
+    if str(txn.get("type") or "") != "pay":
+        raise AnchorError("not pq1 construction")
+    amt = txn.get("amt")
+    if amt not in (None, 0):
+        raise AnchorError("not pq1 construction")
+    gen = str(txn.get("gen") or "")
+    if gen == MAINNET_GENESIS_ID or gen != TESTNET_GENESIS_ID:
+        raise AnchorError("not pq1 construction")
+    addr = falcon_address()
+    if not addr:
+        raise AnchorError("not pq1 construction")
+    try:
+        want = algo_tx.decode_address(addr)
+        snd = _field_bytes(txn.get("snd"))
+        rcv = _field_bytes(txn.get("rcv"))
+    except Exception as exc:
+        raise AnchorError("not pq1 construction") from exc
+    if snd != want or rcv != want:
+        raise AnchorError("not pq1 construction")
+    try:
+        note = txn.get("note")
+        if isinstance(note, str):
+            note = bytes.fromhex(note)
+        decode_note(bytes(note))
+    except Exception as exc:
+        raise AnchorError("not pq1 construction") from exc
+
+
 def _genesis_hash_bytes(gen: str, gh):
     if isinstance(gh, (bytes, bytearray)) and gh:
         return bytes(gh)
