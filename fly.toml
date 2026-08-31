@@ -27,8 +27,10 @@ primary_region = "iad"
   memory = "1gb"  # Ross GO 2026-08-30; ~$5.92/mo. Do not ship 256mb.
   cpus = 1
 
-# 1GB persistent volume for probe history + catalog.sqlite (Ross approved ~$0.15/mo).
+# 1GB persistent volume for probe history + catalog.sqlite + pq-log.sqlite (Ross approved ~$0.15/mo).
 # Process-local only. Do not HTTP-serve /data or sqlite files.
+# pq-log.sqlite is a separate file. 402security must GO before Fly enablement of a log key
+# and before any Falcon spend. No extra machines in this PR.
 # Scheduled snapshots off.
 [[mounts]]
   source = "data"
@@ -37,3 +39,4 @@ primary_region = "iad"
 [env]
   LIVE402_HISTORY_DB = "/data/live402-history.sqlite"
   LIVE402_CATALOG_DB = "/data/catalog.sqlite"
+  LIVE402_PQ_LOG_DB = "/data/pq-log.sqlite"

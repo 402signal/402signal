@@ -37,6 +37,8 @@ GUIDANCE = (
     "GET /health is {ok:true} only. "
     "POST /validate {url} (or GET /validate?url=) is an unpaid seller probe: agent-ready? Fail-closed SSRF, not a /route paywall bypass. "
     "GET /attestation is a public sha256 of a recent 402signal_observed probe batch (not on-chain). "
+    "GET /pq/log/checkpoint and /pq/log/tile/* are an experimental C2SP transparency log "
+    "(not MainNet-anchored; 402security must GO before any Falcon spend). "
     "Probe budget is under 60s; a hang returns 503 JSON with miss_reason probe_timeout. "
     "If ranked candidates remain when the budget ends, miss_reason is probe_budget_exhausted "
     "(not no_candidates). If the request probe ceiling is hit with ranked candidates still untested and "
@@ -249,6 +251,35 @@ def openapi_spec(resource_url: str = ROUTE) -> dict:
                     "and scoring_model_id/hash. Score is never returned without components. "
                     "No public 0-100 catalog badge. Unique payer addresses are never listed."
                 ),
+            },
+            "payment_authorization": {
+                "type": "object",
+                "properties": {
+                    "pq_native": {
+                        "type": "boolean",
+                        "description": "Always false. x402 pay-in is not a Falcon authorization.",
+                    }
+                },
+            },
+            "pq_trust": {
+                "type": "object",
+                "description": (
+                    "Optional experimental transparency receipt. status is pending "
+                    "(durable leaf + signed checkpoint, not MainNet-anchored) or "
+                    "unavailable (log down). Not a /trust page."
+                ),
+                "properties": {
+                    "transparency": {
+                        "type": "object",
+                        "properties": {
+                            "status": {"type": "string", "enum": ["pending", "unavailable"]},
+                            "log_origin": {"type": "string"},
+                            "index": {"type": "integer"},
+                            "checkpoint_size": {"type": "integer"},
+                            "receipt": {"type": "object"},
+                        },
+                    }
+                },
             },
             "objective": {
                 "type": "string",
@@ -860,6 +891,41 @@ def openapi_spec(resource_url: str = ROUTE) -> dict:
                     },
                 },
             },
+            "/pq/log/checkpoint": {
+                "get": {
+                    "operationId": "pqLogCheckpoint",
+                    "tags": ["Public"],
+                    "summary": "Experimental C2SP signed checkpoint",
+                    "description": (
+                        "text/plain C2SP tlog-checkpoint. Experimental. Not MainNet-anchored. "
+                        "402security must approve before any live Falcon transaction."
+                    ),
+                    "responses": {
+                        "200": {"description": "Signed checkpoint note"},
+                        "404": {"description": "No checkpoint yet"},
+                    },
+                }
+            },
+            "/pq/log/tile/{level}/{n}": {
+                "get": {
+                    "operationId": "pqLogTile",
+                    "tags": ["Public"],
+                    "summary": "Experimental C2SP Merkle tile",
+                    "description": (
+                        "application/octet-stream tlog-tiles@v0.1.0. Path is /tile/<L>/<N> "
+                        "(height 8 implicit), not sumdb /tile/H/L/N. Partial tiles use .p/<W>. "
+                        "Experimental. Not MainNet-anchored."
+                    ),
+                    "parameters": [
+                        {"in": "path", "name": "level", "required": True, "schema": {"type": "integer"}},
+                        {"in": "path", "name": "n", "required": True, "schema": {"type": "string"}},
+                    ],
+                    "responses": {
+                        "200": {"description": "Tile bytes"},
+                        "404": {"description": "Unknown tile"},
+                    },
+                }
+            },
             "/attestation": {
                 "get": {
                     "operationId": "attestationHash",
@@ -1028,6 +1094,7 @@ Allow: /preview
 Allow: /rails
 Allow: /validate
 Allow: /attestation
+Allow: /pq/log/checkpoint
 
 Sitemap: https://402signal.com/
 """
@@ -1071,6 +1138,7 @@ HTTP 200 = live URL plus target contract. HTTP 503 = typed miss_reason.
 - GET /preview?need=weather  request-time catalog search (current upstream catalogs plus a local shadow; not a full-world RAM index) + discovery_matches + displayed + seller claims + read-only 402Signal observation (not_yet_observed when never independently probed). not_probed:true (does not probe, does not charge). Optional prefer_network=base|solana|algorand ranks across all rails; optional networks=solana restricts rails. discovery_via is a compact per-rail search|pages|error|fixture map. discovery_exhaustive is true only when the returned set is known complete. Catalog rows keep three clocks (discovery, claim, verification); a paid route also returns this request's probe time. HEAD 200 on /llms.txt /openapi.json /mcp.json /preview /rails /pulse.
 - POST /validate {"url":"https://seller.example/x402"}  unpaid seller probe (GET, then POST {} if needed, then POST catalog-declared body when present): is this seller agent-ready? Also GET /validate?url=. Fail-closed SSRF. Not a /route paywall bypass. Readiness + claimed vs observed + flags. Never a binary healthy flag. Seller-body tightening and DNS IP-pin are held for 402security.
 - GET /attestation  public sha256 of a recent 402signal_observed probe batch (batch_id, created_at, n, algo, hash). Not on-chain. Optional ?batch_id=.
+- GET /pq/log/checkpoint and GET /pq/log/tile/*  experimental C2SP transparency log (tlog-checkpoint + tlog-tiles). Not MainNet-anchored. Paid /route may include pq_trust.transparency {status: pending|unavailable}. pending means a durable leaf and a signed checkpoint, not an Algorand inclusion. unavailable means the log was down; it is not pending. payment_authorization.pq_native is always false. No /trust page. 402security must GO before any Falcon spend or homepage PQ copy.
 - GET /rails  three pay-in networks, asset, amountAtomic, facilitators, feePayers, maxTimeoutSeconds, per-rail up+latency
 - GET /health  {"ok":true}
 - GET /openapi.json

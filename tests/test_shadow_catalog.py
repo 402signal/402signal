@@ -532,6 +532,7 @@ class CatalogNotHttpExposedTests(unittest.TestCase):
         "/data/catalog.sqlite",
         "/data/catalog.sqlite-wal",
         "/data/live402-history.sqlite",
+        "/data/pq-log.sqlite",
         "/catalog/dump",
         "/catalog/export",
         "/dump",
@@ -614,8 +615,14 @@ class CatalogNotHttpExposedTests(unittest.TestCase):
     def test_volume_stays_process_local_and_separate(self):
         self.assertEqual(shadow.VOLUME_DB, "/data/catalog.sqlite")
         self.assertEqual(history.VOLUME_DB, "/data/live402-history.sqlite")
+        from live402.pq import VOLUME_DB as PQ_LOG_DB
+
+        self.assertEqual(PQ_LOG_DB, "/data/pq-log.sqlite")
         self.assertNotEqual(shadow.VOLUME_DB, history.VOLUME_DB)
+        self.assertNotEqual(PQ_LOG_DB, shadow.VOLUME_DB)
+        self.assertNotEqual(PQ_LOG_DB, history.VOLUME_DB)
         self.assertTrue(is_private_store_path("/data/catalog.sqlite"))
+        self.assertTrue(is_private_store_path("/data/pq-log.sqlite"))
         self.assertTrue(is_private_store_path("/catalog.sqlite"))
         self.assertFalse(is_private_store_path("/catalog"))
         self.assertFalse(is_private_store_path("/preview"))

@@ -83,6 +83,7 @@ If the queue is empty, the refresher takes one COLD generation page.
 - Discovery: `GET /openapi.json`, `GET /mcp.json`, `GET /.well-known/x402`, `GET /.well-known/x402.json`, `GET /robots.txt`, `GET /llms.txt`, `GET /preview`, `GET /rails`. Paid `POST /route` is documented with `x-payment-info` and HTTP 402. MCP bazaar type is `mcp` + `toolName: route`.
 - `POST /validate` (also `GET /validate?url=`) is an unpaid seller probe: is this endpoint agent-ready? Only URLs already in the catalog or fixture are probed (no arbitrary public fetch). Dual-probe + fail-closed SSRF. Does not write `402signal_observed`. Not a `/route` payment bypass. Returns readiness, claimed vs observed, flags. Never a binary `healthy` flag.
 - `GET /attestation` is a public sha256 of canonical JSON of a recent `402signal_observed` probe batch (`batch_id`, `created_at`, `n`, `algo`, `hash`). Not on-chain. No signatures or keys. Optional `?batch_id=`.
+- `GET /pq/log/checkpoint` and `GET /pq/log/tile/*` are an **experimental** C2SP transparency log (tlog-checkpoint@v1.0.0 + tlog-tiles@v0.1.0). Origin `402signal.com/pq/log`. This is product-GO for the log in CI/local. It is **not** MainNet-anchored and not a live Falcon inclusion. Paid `POST /route` may include optional `pq_trust.transparency` `{status: pending|unavailable, log_origin, index, checkpoint_size, receipt}`. `pending` means a durable leaf plus a signed checkpoint. `unavailable` means the log was down (not pending). `payment_authorization.pq_native` is always false. No `/trust` page. No homepage PQ copy. 402security must GO before Fly enablement of a log signing key and before any Falcon spend.
 - `POST /route` is rate-limited in memory (~60/min per IP, higher burst for Coinbase / PayAI / GoPlausible user-agents). `GET /preview` and unpaid MCP `tools/call preview` share a looser limiter (~180/min per IP, at least 2× the route cap). `GET /pulse` and `GET /rails` each have their own ~180/min per-IP limiter (same ballpark as preview, still looser than paid `/route`). `GET /health` stays unlimited `{ok:true}`. `429` when exceeded. Payment headers are redacted in logs. Responses send `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, `Strict-Transport-Security: max-age=31536000` (no includeSubDomains; www is a CNAME and Fly has no extra hostnames), and `Content-Security-Policy: default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'self'; img-src 'self' data:; base-uri 'self'; frame-ancestors 'none'`. script-src stays `'self'` (no CDN, no vendor wallet scripts). connect-src is `'self'` only; homepage Base pay POSTs `/route`. HEAD 200 on `/llms.txt` `/openapi.json` `/mcp.json` `/preview` `/rails` `/pulse`. Payment resource / OpenAPI `servers` / MCP resource are pinned to `https://402signal.com` (Host is not reflected). Probe DNS (`getaddrinfo`) times out in 2s; urllib may re-resolve (TOCTOU). Seller-body tightening and DNS IP-pin are held for 402security.
 
 Clients send v2 `PAYMENT-SIGNATURE` (base64 `PaymentPayload`) or v1 `X-PAYMENT`. Success/settle echo is `PAYMENT-RESPONSE`.
@@ -145,6 +146,10 @@ Base CDP calls need `CDP_API_KEY_ID` + `CDP_API_KEY_SECRET` (or `CDP_ACCESS_TOKE
 | `LIVE402_PROBE_TIMEOUT` | `4` | probe timeout seconds |
 | `LIVE402_HISTORY_DB` | `/data/live402-history.sqlite` on Fly (`/tmp` fallback) | sqlite probe history (WAL, 0600, capped). Observed only. |
 | `LIVE402_CATALOG_DB` | `/data/catalog.sqlite` on Fly (`/tmp` fallback) | sqlite shadow catalog of CDP/PayAI/GoPlausible **claims**. Process-local on the existing `/data` volume. **Not HTTP-exposed** (no dump/download endpoint, not under `static/`, not in OpenAPI). Separate file from history. FTS5. Never a 44k RAM list. |
+| `LIVE402_PQ_LOG_DB` | `/data/pq-log.sqlite` on Fly (`/tmp` fallback) | Experimental C2SP log. Separate file from catalog and history. **Not HTTP-exposed** as a sqlite dump; read API is `/pq/log/*` only. |
+| `LIVE402_PQ_LOG_VKEY` | unset | Ed25519 log verifier key (public). Never a private key. |
+| `LIVE402_PQ_FALCON_ADDRESS` | unset | Algorand address for constructed (not broadcast) Falcon anchors. |
+| `LIVE402_PQ_LOG` | unset | `0` forces transparency `unavailable` even if a signer is configured. |
 | `LIVE402_HOT_REFRESH_S` | `600` (clamped 300–900) | Stale-claim threshold for the information-value refresh queue |
 | `LIVE402_WARM_REFRESH_S` | `7200` (clamped 3600–10800) | WARM refresh interval (legacy due_warm helper) |
 | `LIVE402_COLD_SWEEP_S` | `64800` (clamped 12–24h) | COLD rolling generation sweep cadence |
@@ -192,6 +197,7 @@ live402/hydrate.py   finalist claimed-contract cache (bounded, TTL, gzip). Not 4
 live402/policy.py    NL → structured constraints. Engine uses structured values only.
 live402/reputation.py transparent components + documented V1 score + scoring-model hash.
 live402/economics.py  rail economics with provenance. Same model for Base / Solana / Algorand.
+live402/pq/         experimental C2SP log (RFC 9162 Merkle + tiles + receipts). Not MainNet.
 live402/static/     GET / homepage (app.js, styles, dashboard.js)
 live402/algod.py    pinned algod suggestedParams for the unpaid Algorand 402 extra
 live402/data/       fixture catalog

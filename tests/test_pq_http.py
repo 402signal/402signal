@@ -14,8 +14,10 @@ os.environ.setdefault("LIVE402_FIXTURE", "1")
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
+from live402 import discover
 from live402.pq import events, receipt, store
 from live402.server import Handler, is_private_store_path
+from pathlib import Path
 
 
 def _serve():
@@ -106,6 +108,21 @@ class C2SPHttpTests(unittest.TestCase):
         self.assertEqual(status, 404)
         status, raw, _hdrs = self._get("/pq/log")
         self.assertEqual(status, 404)
+
+    def test_docs_say_experimental_not_mainnet(self):
+        spec = json.dumps(discover.openapi_spec())
+        self.assertIn("/pq/log/checkpoint", spec)
+        self.assertIn("experimental", spec.lower())
+        self.assertIn("not mainnet-anchored", spec.lower())
+        self.assertNotIn("pq_secure", spec)
+        self.assertIn("GET /pq/log/checkpoint", discover.LLMS_TXT)
+        self.assertIn("Not MainNet-anchored", discover.LLMS_TXT)
+        home = (Path(__file__).resolve().parent.parent / "live402" / "static" / "index.html").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn("PQ Trust", home)
+        self.assertNotIn("post-quantum", home.lower())
+        self.assertNotIn("/pq/log", home)
 
 
 if __name__ == "__main__":
