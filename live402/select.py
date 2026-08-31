@@ -10,6 +10,12 @@ OBJECTIVES = ("best", "cheapest", "fastest", "most_reliable")
 RAILS = frozenset(("base", "solana", "algorand"))
 WEAK_MIN_N = 3
 MATURE_N = 10
+# Not measured in this slice. If the caller sets one, fail closed.
+UNMEASURED_CONSTRAINTS = (
+    "min_observed_success",
+    "min_reputation_score",
+    "max_settlement_latency_ms",
+)
 
 
 def parse_objective(raw) -> str:
@@ -104,8 +110,24 @@ def _parse_rails(raw):
     return frozenset(rails)
 
 
+def _caller_set(src: dict, key: str) -> bool:
+    if key not in src:
+        return False
+    val = src.get(key)
+    if val is None or val == "":
+        return False
+    return True
+
+
 def parse_constraints(body: dict) -> dict:
-    """Normalize caller constraints. Invalid numeric bounds → unconstrained (None)."""
+    """Normalize caller constraints. Invalid numeric bounds → unconstrained (None).
+
+    max_latency_ms is a compatibility alias for max_probe_latency_ms (this
+    request's probe RTT). max_service_latency_ms is historical p50 only —
+    never mixed with probe latency. Unknown measured values fail closed
+    when the caller set the bound. Unmeasured keys (reputation, settlement
+    success rate) fail closed if the caller set them.
+    """
     src = body if isinstance(body, dict) else {}
     networks = src.get("networks")
     if networks is None:
@@ -113,12 +135,21 @@ def parse_constraints(body: dict) -> dict:
     max_usd = _as_float(src.get("max_price_usd"))
     if max_usd is not None and max_usd < 0:
         max_usd = None
+    max_lat = _nonneg_int(src.get("max_latency_ms"))
+    max_probe = _nonneg_int(src.get("max_probe_latency_ms"))
+    if max_probe is None:
+        max_probe = max_lat
+    unmeasured = tuple(key for key in UNMEASURED_CONSTRAINTS if _caller_set(src, key))
     return {
         "max_amount_atomic": _nonneg_int(src.get("max_amount_atomic")),
         "max_price_usd": max_usd,
-        "max_latency_ms": _nonneg_int(src.get("max_latency_ms")),
+        "max_latency_ms": max_lat if max_lat is not None else max_probe,
+        "max_probe_latency_ms": max_probe,
+        "max_service_latency_ms": _nonneg_int(src.get("max_service_latency_ms")),
         "require_invocable": _truthy(src.get("require_invocable"), False),
         "rails": _parse_rails(networks),
+        "min_observations": _nonneg_int(src.get("min_observations")),
+        "unmeasured": unmeasured,
     }
 
 
@@ -213,6 +244,7 @@ def _options_for_constraints(result, cons) -> list[dict]:
 
 
 def latency_ms(result) -> int | None:
+    """This-request probe RTT. Not historical service latency."""
     if not isinstance(result, dict):
         return None
     n = _as_int(result.get("latency_ms"))
@@ -220,6 +252,27 @@ def latency_ms(result) -> int | None:
         return n
     health = result.get("health") if isinstance(result.get("health"), dict) else {}
     return _as_int(health.get("latency_ms"))
+
+
+def service_latency_ms(result) -> int | None:
+    """Historical p50 from 402signal_observed. Unknown if never measured."""
+    if not isinstance(result, dict):
+        return None
+    hist = result.get("history") if isinstance(result.get("history"), dict) else {}
+    return _as_int(hist.get("p50_latency_ms"))
+
+
+def observation_count(result) -> int | None:
+    """n_7d observations. None if history is missing so a bound can fail closed."""
+    if not isinstance(result, dict):
+        return None
+    hist = result.get("history") if isinstance(result.get("history"), dict) else None
+    if not isinstance(hist, dict):
+        return None
+    n = _as_int(hist.get("n_7d"))
+    if n is None:
+        return 0
+    return n if n >= 0 else 0
 
 
 def _reliability_window(result) -> tuple[int, float | None]:
@@ -311,6 +364,8 @@ def passes_constraints(result, constraints) -> bool:
     if not _is_payable(result):
         return False
     cons = constraints if isinstance(constraints, dict) else {}
+    if cons.get("unmeasured"):
+        return False
     rails = cons.get("rails")
     if isinstance(rails, frozenset):
         if _result_rails(result).isdisjoint(rails):
@@ -319,10 +374,22 @@ def passes_constraints(result, constraints) -> bool:
         # Unknown or cross-asset atomic cannot apply the bound — drop the candidate.
         if not _options_for_constraints(result, cons):
             return False
-    max_lat = cons.get("max_latency_ms")
-    if max_lat is not None:
+    max_probe = cons.get("max_probe_latency_ms")
+    if max_probe is None:
+        max_probe = cons.get("max_latency_ms")
+    if max_probe is not None:
         lat = latency_ms(result)
-        if lat is None or lat > max_lat:
+        if lat is None or lat > max_probe:
+            return False
+    max_service = cons.get("max_service_latency_ms")
+    if max_service is not None:
+        svc = service_latency_ms(result)
+        if svc is None or svc > max_service:
+            return False
+    min_obs = cons.get("min_observations")
+    if min_obs is not None:
+        n = observation_count(result)
+        if n is None or n < min_obs:
             return False
     if cons.get("require_invocable") and not result.get("invocable"):
         return False

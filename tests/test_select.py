@@ -98,8 +98,12 @@ class ParseTests(unittest.TestCase):
         self.assertIsNone(empty["max_amount_atomic"])
         self.assertIsNone(empty["max_price_usd"])
         self.assertIsNone(empty["max_latency_ms"])
+        self.assertIsNone(empty["max_probe_latency_ms"])
+        self.assertIsNone(empty["max_service_latency_ms"])
+        self.assertIsNone(empty["min_observations"])
         self.assertFalse(empty["require_invocable"])
         self.assertIsNone(empty["rails"])
+        self.assertEqual(empty["unmeasured"], ())
         bad = select.parse_constraints(
             {"max_amount_atomic": -1, "max_latency_ms": "nope", "networks": [], "max_price_usd": -1}
         )
@@ -119,8 +123,20 @@ class ParseTests(unittest.TestCase):
         self.assertEqual(ok["max_amount_atomic"], 10000)
         self.assertAlmostEqual(ok["max_price_usd"], 0.05)
         self.assertEqual(ok["max_latency_ms"], 50)
+        self.assertEqual(ok["max_probe_latency_ms"], 50)
         self.assertTrue(ok["require_invocable"])
         self.assertEqual(ok["rails"], frozenset({"solana", "base"}))
+
+    def test_max_latency_ms_maps_to_probe_latency(self):
+        cons = select.parse_constraints({"max_latency_ms": 300})
+        self.assertEqual(cons["max_latency_ms"], 300)
+        self.assertEqual(cons["max_probe_latency_ms"], 300)
+        self.assertIsNone(cons["max_service_latency_ms"])
+        explicit = select.parse_constraints(
+            {"max_latency_ms": 900, "max_probe_latency_ms": 120}
+        )
+        self.assertEqual(explicit["max_probe_latency_ms"], 120)
+        self.assertEqual(explicit["max_latency_ms"], 900)
 
 
 class ObjectivePickTests(unittest.TestCase):
@@ -298,6 +314,67 @@ class ConstraintTests(unittest.TestCase):
         flipped = _hit(url="https://flip.example/x", payTo_changed=True, risk=["payTo_changed"])
         self.assertTrue(select.passes_constraints(flipped, {}))
         self.assertIs(select.pick_winner([flipped], "best", None), flipped)
+
+    def test_unknown_probe_latency_fails_closed(self):
+        unknown = _hit(url="https://unk-lat.example/x", latency=None)
+        unknown.pop("latency_ms", None)
+        known = _hit(url="https://ok-lat.example/x", latency=40)
+        cons = select.parse_constraints({"max_probe_latency_ms": 100})
+        self.assertIsNone(select.latency_ms(unknown))
+        self.assertFalse(select.passes_constraints(unknown, cons))
+        self.assertTrue(select.passes_constraints(known, cons))
+
+    def test_service_latency_does_not_use_probe_rtt(self):
+        fast_probe = _hit(
+            url="https://fast-probe.example/x",
+            latency=5,
+            history=_hist(),
+        )
+        fast_probe["history"]["p50_latency_ms"] = None
+        measured = _hit(
+            url="https://svc.example/x",
+            latency=80,
+            history=_hist(n_7d=10, success_7d=0.9),
+        )
+        measured["history"]["p50_latency_ms"] = 40
+        cons = select.parse_constraints({"max_service_latency_ms": 50})
+        self.assertIsNone(select.service_latency_ms(fast_probe))
+        self.assertEqual(select.latency_ms(fast_probe), 5)
+        self.assertFalse(select.passes_constraints(fast_probe, cons))
+        self.assertTrue(select.passes_constraints(measured, cons))
+        too_slow = _hit(
+            url="https://slow-svc.example/x",
+            latency=5,
+            history=_hist(n_7d=10, success_7d=0.9),
+        )
+        too_slow["history"]["p50_latency_ms"] = 90
+        self.assertFalse(select.passes_constraints(too_slow, cons))
+
+    def test_min_observations_unknown_fails_closed(self):
+        none = _hit(url="https://none-obs.example/x", history=None)
+        none["history"] = None
+        zero = _hit(url="https://zero-obs.example/x", history=_hist())
+        enough = _hit(
+            url="https://enough-obs.example/x",
+            history=_hist(n_7d=12, success_7d=0.8),
+        )
+        cons = select.parse_constraints({"min_observations": 10})
+        self.assertFalse(select.passes_constraints(none, cons))
+        self.assertFalse(select.passes_constraints(zero, cons))
+        self.assertTrue(select.passes_constraints(enough, cons))
+
+    def test_unmeasured_constraints_fail_closed(self):
+        hit = _hit(url="https://rep.example/x", history=_hist(n_7d=40, success_7d=0.99))
+        self.assertTrue(select.passes_constraints(hit, select.parse_constraints({})))
+        for key in (
+            "min_observed_success",
+            "min_reputation_score",
+            "max_settlement_latency_ms",
+        ):
+            cons = select.parse_constraints({key: 1})
+            self.assertEqual(cons["unmeasured"], (key,))
+            self.assertFalse(select.passes_constraints(hit, cons))
+            self.assertIsNone(select.pick_winner([hit], "best", cons))
 
 
 class ComparisonTests(unittest.TestCase):
