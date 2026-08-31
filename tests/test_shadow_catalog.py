@@ -282,7 +282,9 @@ class FederatedWorkingSetTests(_IsolatedCatalog):
         self.assertTrue(all("api.cdp.coinbase.com" in u for u in calls))
         self.assertFalse(any("page=" in u or "cursor=" in u for u in calls))
 
-        with patch("live402.probe._fetch_catalog_payload") as fetch:
+        with patch("live402.catalog.fixtures.fixture_mode", return_value=False), patch(
+            "live402.probe._fetch_catalog_payload"
+        ) as fetch:
             bad = catalog.ingest_one_page("evil")
             fetch.assert_not_called()
         self.assertEqual(bad.get("error"), "unknown_source")
