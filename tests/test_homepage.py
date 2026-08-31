@@ -1,7 +1,8 @@
-"""Homepage product-site tests. Frontend + copy only."""
+"""Human-page IA tests. Frontend + copy only."""
 
 import json
 import os
+import re
 import unittest
 from html.parser import HTMLParser
 from http.client import HTTPConnection
@@ -16,6 +17,59 @@ from live402.server import Handler
 
 
 STATIC = Path(__file__).resolve().parent.parent / "live402" / "static"
+
+NAV_LABELS = ("Catalog", "How it works", "Developers", "GitHub")
+LISTED_ON = (
+    ("Glama", "https://glama.ai/mcp/servers/402signal/402signal"),
+    ("MCP Registry", "https://registry.modelcontextprotocol.io/?q=402signal"),
+    ("Gold-402", "https://github.com/Haustorium12/gold-402/blob/main/directory/aggregators.md"),
+    ("Smithery", "https://smithery.ai/servers/live402/signal"),
+    ("Agentic Market", "https://agentic.market/services/402signal-com"),
+    ("x402-dev", "https://github.com/michielpost/x402-dev/blob/master/Projects.md"),
+)
+BANNED = (
+    "Where it fits",
+    "At the intersection of",
+    "Powerful",
+    "Seamless",
+    "Robust",
+    "Unlock",
+    "Next-generation",
+    "Revolutionary",
+    "Game-changing",
+    "The real value",
+    "The key difference",
+    "The important thing is",
+    "This is where",
+    "In today's",
+    "In an increasingly",
+    "Designed to",
+    "Built to empower",
+    "Bridge the gap",
+    "Route + evidence",
+    "UNKNOWN is better than a guess",
+    "Honest miss",
+)
+OLD_HOME_SECTIONS = (
+    "Works means the payment interface was ready when we checked.",
+    "Directories tell an agent what is listed.",
+    "Search the x402 catalog",
+    "Free catalog search",
+    "Where it fits",
+    "What gets checked",
+    "How agents use it",
+    "Catalog claims and 402Signal observations",
+    "Quickstart",
+    "<h2>Rails</h2>",
+    "Building an x402 API?",
+    "Machine-readable",
+    "Need→Candidates",
+    "id=\"search-form\"",
+    "id=\"copy-curl\"",
+    "miss_reason",
+    "PAYMENT-SIGNATURE",
+    "accepts[]",
+)
 
 
 def _serve():
@@ -37,41 +91,74 @@ def _get_full(port, path, extra_headers=None):
     return res.status, raw.decode("utf-8"), hdrs
 
 
-class _LinkParser(HTMLParser):
+class _DocParser(HTMLParser):
     def __init__(self):
         super().__init__()
         self.links = []
+        self.h1 = []
+        self.nav_links = []
         self._href = None
         self._parts = []
         self._in_a = False
+        self._in_h1 = False
+        self._h1_parts = []
+        self._in_nav = False
+        self._nav_depth = 0
 
     def handle_starttag(self, tag, attrs):
-        if tag != "a":
-            return
-        href = dict(attrs).get("href")
-        self._href = href
-        self._parts = []
-        self._in_a = True
+        attrs = dict(attrs)
+        if tag == "nav":
+            self._in_nav = True
+            self._nav_depth = 1
+        elif self._in_nav:
+            self._nav_depth += 1
+        if tag == "a":
+            self._href = attrs.get("href")
+            self._parts = []
+            self._in_a = True
+        if tag == "h1":
+            self._in_h1 = True
+            self._h1_parts = []
 
     def handle_data(self, data):
         if self._in_a:
             self._parts.append(data)
+        if self._in_h1:
+            self._h1_parts.append(data)
 
     def handle_endtag(self, tag):
         if tag == "a" and self._in_a:
-            self.links.append(("".join(self._parts).strip(), self._href))
+            text = "".join(self._parts).strip()
+            self.links.append((text, self._href))
+            if self._in_nav:
+                self.nav_links.append((text, self._href))
             self._in_a = False
             self._href = None
+        if tag == "h1" and self._in_h1:
+            self.h1.append("".join(self._h1_parts).strip())
+            self._in_h1 = False
+        if self._in_nav:
+            self._nav_depth -= 1
+            if self._nav_depth <= 0:
+                self._in_nav = False
+
+
+def _parse(html):
+    parser = _DocParser()
+    parser.feed(html)
+    return parser
 
 
 def _links(html):
-    parser = _LinkParser()
-    parser.feed(html)
-    return parser.links
+    return _parse(html).links
 
 
 def _read(name):
     return (STATIC / name).read_text(encoding="utf-8")
+
+
+def _strip_head(html):
+    return re.sub(r"<head\b.*?</head>", "", html, flags=re.I | re.S)
 
 
 class HomepageProductTests(unittest.TestCase):
@@ -80,105 +167,221 @@ class HomepageProductTests(unittest.TestCase):
         os.environ.pop("LOCAL_FREE", None)
         os.environ["LIVE402_FIXTURE"] = "1"
         cls.httpd, cls.host, cls.port = _serve()
-        cls.html = _get_full(cls.port, "/")[1]
+        cls.home = _get_full(cls.port, "/")[1]
+        cls.catalog = _get_full(cls.port, "/catalog")[1]
+        cls.how = _get_full(cls.port, "/how")[1]
+        cls.devs = _get_full(cls.port, "/developers")[1]
         cls.js = _read("app.js")
         cls.css = _read("styles.css")
+        cls.pages = {
+            "/": cls.home,
+            "/catalog": cls.catalog,
+            "/how": cls.how,
+            "/developers": cls.devs,
+        }
 
     @classmethod
     def tearDownClass(cls):
         cls.httpd.shutdown()
         cls.httpd.server_close()
 
-    def test_new_hero_copy_present(self):
-        html = self.html
-        self.assertIn("Find a paid API that works right now.", html)
+    def test_homepage_is_concise_product_landing(self):
+        html = self.home
+        parsed = _parse(html)
+        self.assertEqual(parsed.h1, ["Find a paid API that works right now."])
+        self.assertNotIn("<h1>402Signal</h1>", html)
+        self.assertEqual(html.count("<h1"), 1)
+        self.assertIn("402Signal — Find a paid API that works right now", html)
         self.assertIn(
-            "402Signal searches x402 services across Base, Solana, and Algorand, then checks the endpoint at request time before returning it to your agent.",
+            "402Signal independently checks x402 payment endpoints before an agent relies on them. Base, Solana and Algorand.",
             html,
         )
-        self.assertIn("If we can't verify a usable payment path, we return a miss instead of guessing.", html)
-        self.assertIn("Directories tell an agent what is listed. 402Signal records what the endpoint actually returned.", html)
-        self.assertIn("Works means the payment interface was ready when we checked.", html)
-        self.assertIn("does not mean 402Signal paid the seller", html)
-        self.assertIn('href="#try"', html)
-        self.assertIn('href="#integrate"', html)
-        self.assertIn("Search services", html)
-        self.assertIn("Integrate 402Signal", html)
-        self.assertIn("402Signal - Find a paid API that works right now", html)
-        self.assertIn("independently checks payment endpoints", html)
+        self.assertIn(
+            "402Signal checks x402 services immediately before an agent uses them. It keeps catalog claims separate from what the endpoint actually returns, then gives the agent a route or a clear miss.",
+            html,
+        )
+        self.assertIn("Base · Solana · Algorand", html)
+        self.assertIn("Browse catalog", html)
+        self.assertIn("Developer docs", html)
+        self.assertIn('href="/catalog"', html)
+        self.assertIn('href="/developers"', html)
+        self.assertIn("402Signal recommends the route. Your agent keeps the wallet.", html)
+        self.assertIn("What sellers say is available", html)
+        self.assertIn("Check it now", html)
+        self.assertIn("Decide whether to spend", html)
+        self.assertIn("If the check does not pass, 402Signal returns a miss instead of quietly substituting an unverified service.", html)
+        self.assertIn("The live routing check costs $0.01 USDC. 402Signal does not hold your keys or pay the selected seller for you.", html)
+        self.assertIn("Browse the catalog", html)
+        self.assertIn("Use 402Signal in an agent", html)
+        self.assertNotIn("<pre", html)
+        self.assertNotIn("<code>", html)
 
-    def test_old_hero_slogans_gone(self):
-        html = self.html
-        self.assertNotIn("Check before your agent pays", html)
-        self.assertNotIn("Catalog said X. We observed Y.", html)
-        self.assertNotIn("How you'd use this", html)
-        self.assertNotIn("Front of a larger process", html)
-        self.assertIn("How agents use it", html)
-        self.assertNotIn(">Shared<", html)
-        self.assertNotIn("Honest miss", html)
-        self.assertNotIn("not_probed", html)
+    def test_old_one_page_sections_gone_from_home(self):
+        html = self.home
+        for snippet in OLD_HOME_SECTIONS:
+            self.assertNotIn(snippet, html, snippet)
+        self.assertNotIn(">Product<", html)
+        self.assertNotIn(">Try it<", html)
+        self.assertNotIn(">Integrate<", html)
+        self.assertNotIn(">Pulse<", html)
+        self.assertNotIn('href="/pulse"', html)
 
-    def test_probe_and_wallet_absent(self):
-        html = self.html
-        js = self.js
-        self.assertNotIn("Probe live", html)
-        self.assertNotIn('id="probe-btn"', html)
-        self.assertNotIn('id="pay-base"', html)
-        self.assertNotIn("pay-base", html)
-        self.assertNotIn("Pay $0.01 on Base", html)
-        self.assertNotIn("injected wallet", html.lower())
-        self.assertNotIn("window.ethereum", js)
-        self.assertNotIn("payBase", js)
-        self.assertNotIn("eth_signTypedData_v4", js)
-        self.assertNotIn("wallet_switchEthereumChain", js)
-        self.assertNotIn("eip155:8453", js)
-        self.assertNotIn("Pay $0.01 on Base", js)
+    def test_exactly_one_h1_per_human_page(self):
+        expected = {
+            "/": "Find a paid API that works right now.",
+            "/catalog": "Browse x402 services",
+            "/how": "Why check an API that's already listed?",
+            "/developers": "Use 402Signal from an agent",
+        }
+        for path, title in expected.items():
+            parsed = _parse(self.pages[path])
+            self.assertEqual(parsed.h1, [title], path)
 
-    def test_free_catalog_search_uses_preview(self):
+    def test_primary_nav_on_every_page(self):
+        for path, html in self.pages.items():
+            parsed = _parse(html)
+            labels = [text for text, _href in parsed.nav_links]
+            self.assertEqual(labels, list(NAV_LABELS), path)
+            hrefs = [href for _text, href in parsed.nav_links]
+            self.assertEqual(
+                hrefs,
+                [
+                    "/catalog",
+                    "/how",
+                    "/developers",
+                    "https://github.com/402signal/402signal",
+                ],
+                path,
+            )
+            self.assertIn('class="mark"', html)
+            self.assertIn('class="brand-name"', html)
+            self.assertIn(">402Signal<", html)
+            self.assertNotIn(">Product<", html)
+            self.assertNotIn(">Pulse<", html)
+            self.assertNotIn('class="sep"', html)
+            self.assertNotIn(" | ", _parse(html).nav_links[0][0] if parsed.nav_links else "")
+
+    def test_github_link_works(self):
+        for path, html in self.pages.items():
+            self.assertIn('href="https://github.com/402signal/402signal"', html, path)
+
+    def test_catalog_page_search_uses_preview(self):
+        html = self.catalog
+        self.assertIn("Browse x402 services", html)
+        self.assertIn("Search catalog listings across Base, Solana and Algorand.", html)
+        self.assertIn("These are discovery records, not fresh 402Signal checks.", html)
+        self.assertIn("What does your agent need?", html)
+        self.assertIn('id="search-form"', html)
+        self.assertIn('id="search-btn"', html)
+        self.assertIn(">Search<", html)
+        self.assertIn('data-need="web search"', html)
+        self.assertIn('data-need="weather"', html)
+        self.assertIn('data-need="token risk"', html)
+        self.assertIn('data-need="LLM inference"', html)
+        self.assertIn('data-need="wallet balance"', html)
+        self.assertEqual(html.lower().count("free catalog search"), 0)
+        self.assertIn("x402 API Catalog — 402Signal", html)
         status, raw, _hdrs = _get_full(self.port, "/preview?need=weather")
         self.assertEqual(status, 200)
         body = json.loads(raw)
         self.assertTrue(body.get("not_probed"))
         self.assertIn("hits", body)
         self.assertIn('fetch("/preview', self.js)
-        self.assertIn('id="search-btn"', self.html)
-        self.assertIn("Search the x402 catalog", self.html)
-        self.assertIn("What does your agent need?", self.html)
-        self.assertIn(">Search<", self.html)
-        self.assertNotIn(">Preview<", self.html)
-        self.assertIn("Results have not been live-probed unless explicitly marked otherwise.", self.html)
 
-    def test_catalog_results_not_labeled_verified_or_recommended(self):
+    def test_catalog_results_are_compact_catalog_only(self):
         js = self.js
-        html = self.html
-        self.assertIn("Catalog match", js)
-        self.assertIn("Not live-verified", js)
-        self.assertNotIn("Recommended", js)
-        self.assertNotIn("Recommended", html)
-        self.assertNotIn("Payable now", js)
-        self.assertNotIn("Payable now", html)
-        self.assertNotIn("Verified", js.replace("Not live-verified", ""))
+        self.assertIn("result-row", js)
         self.assertIn("Listed price", js)
-        self.assertIn("Catalog payTo", js)
         self.assertIn("Schema listed", js)
+        self.assertNotIn("Catalog match", js)
+        self.assertNotIn("Not live-verified", js)
+        self.assertNotIn("Recommended", js)
+        self.assertNotIn("Payable now", js)
+        self.assertNotIn("Verified", js)
+        self.assertNotIn("Observed", js)
+        self.assertNotIn("independentlyObserved", js)
+        self.assertNotIn("402signal_observed", js)
+        self.assertNotIn("observed.payTo || parsed.payTo", js)
+        self.assertNotIn("parsed.payTo ||", js)
+        self.assertNotIn("target.inputSchema", js)
+        self.assertNotIn("parsed.invocable === true", js)
         self.assertIn("No catalog matches found. Try a broader capability.", js)
         self.assertIn("Catalog data is refreshing. Try again shortly.", js)
+        self.assertNotIn("claimed-vs-observed", self.catalog)
+        self.assertNotIn("Catalog claims", self.catalog)
 
-    def test_post_endpoints_not_misleading_get_links(self):
-        html = self.html
+    def test_how_page_renders(self):
+        html = self.how
+        self.assertIn("Why check an API that's already listed?", html)
+        self.assertIn("Directory data can outlive the service it describes.", html)
+        self.assertIn("402Signal keeps the listing and the runtime observation separate.", html)
+        self.assertIn("What a live check can establish", html)
+        self.assertIn("Did the endpoint return a valid, parseable x402 challenge?", html)
+        self.assertIn(">Readiness<", html)
+        self.assertIn("Found in supported discovery infrastructure.", html)
+        self.assertIn("402Signal stops before seller execution", html)
+        self.assertIn("402Signal recommends a route.", html)
+        self.assertIn("How 402Signal Works", html)
+        self.assertNotIn("Where it fits", html)
+        self.assertNotIn("HEALTHY", html)
+
+    def test_developers_page_renders(self):
+        html = self.devs
+        self.assertIn("Use 402Signal from an agent", html)
+        self.assertIn("Send the capability you need. Pay $0.01 USDC for the live routing check.", html)
+        self.assertIn(">HTTP<", html)
+        self.assertIn(">MCP<", html)
+        self.assertIn("<code>POST /route</code>", html)
+        self.assertIn("id=\"copy-curl\"", html)
+        self.assertIn("curl -sS -D - https://402signal.com/route", html)
+        self.assertIn("<code>https://402signal.com/mcp</code>", html)
+        self.assertIn("402Signal Developer API", html)
+        self.assertIn('href="/openapi.json"', html)
+        self.assertIn('href="/llms.txt"', html)
+        self.assertIn('href="/mcp.json"', html)
+        self.assertIn('href="/.well-known/x402.json"', html)
+        self.assertIn('href="/rails"', html)
+        self.assertIn('href="/attestation"', html)
+        self.assertIn('href="/pulse"', html)
         hrefs = [href or "" for _text, href in _links(html)]
         for href in hrefs:
             self.assertFalse(href.rstrip("/").endswith("/route"), href)
             self.assertFalse(href.rstrip("/").endswith("/validate"), href)
             self.assertFalse(href.rstrip("/") == "https://402signal.com/mcp", href)
             self.assertFalse(href.rstrip("/") == "/mcp", href)
-        self.assertIn("<code>POST /route</code>", html)
-        self.assertIn("<code>POST /validate</code>", html)
-        self.assertIn("<code>https://402signal.com/mcp</code>", html)
-        self.assertNotIn('href="https://402signal.com/route"', html)
-        self.assertNotIn('href="/route"', html)
-        self.assertNotIn('href="/validate"', html)
-        self.assertNotIn('href="https://402signal.com/mcp"', html)
+        self.assertNotIn("cheapest", html)
+        self.assertNotIn("most_reliable", html)
+        self.assertNotIn("compared", html)
+        self.assertNotIn("fastest", html)
+
+    def test_listed_on_footer_verified_only(self):
+        forbidden = (
+            "facilitator.goplausible.xyz/dashboard/merchants",
+            "x402scan.com/recipient",
+            "Merchant record",
+            "GoPlausible",
+        )
+        for path, html in self.pages.items():
+            self.assertIn("Listed on", html, path)
+            for label, href in LISTED_ON:
+                self.assertIn(href, html, path)
+                self.assertIn(label, html, path)
+            for blob in forbidden:
+                self.assertNotIn(blob, html, path)
+            self.assertIn("mailto:402signal@gmail.com", html, path)
+            self.assertIn(">Contact<", html, path)
+            self.assertIn("https://x.com/402Signal", html, path)
+
+    def test_probe_and_wallet_absent(self):
+        for name in ("index.html", "catalog.html", "how.html", "developers.html", "app.js"):
+            text = _read(name)
+            self.assertNotIn("Probe live", text)
+            self.assertNotIn('id="probe-btn"', text)
+            self.assertNotIn("Pay $0.01 on Base", text)
+            self.assertNotIn("injected wallet", text.lower())
+            self.assertNotIn("window.ethereum", text)
+            self.assertNotIn("LOCAL_FREE", text)
+            self.assertNotIn("mnemonic", text.lower())
 
     def test_inline_link_styling_consistent(self):
         css = self.css
@@ -192,53 +395,36 @@ class HomepageProductTests(unittest.TestCase):
         self.assertIn("var(--teal)", css)
         self.assertNotIn(".trust { color: var(--accent);", css)
 
-    def test_provenance_ui_does_not_fallback_catalog_as_observed(self):
-        js = self.js
-        self.assertIn("function independentlyObserved", js)
-        self.assertIn("402signal_observed", js)
-        self.assertNotIn("observed.payTo || parsed.payTo", js)
-        self.assertNotIn("parsed.payTo ||", js)
-        self.assertNotIn("parsed.target && parsed.target.inputSchema", js)
-        self.assertNotIn("target.inputSchema", js)
-        self.assertNotIn("parsed.invocable === true", js)
-        self.assertNotIn("parsed.status", js)
-        self.assertNotIn("parsed.latency_ms", js)
-        self.assertIn("observedField", js)
-        self.assertIn("hasOwnProperty.call(obs, key)", js)
+    def test_mobile_no_horizontal_overflow(self):
+        css = self.css
+        self.assertIn("overflow-x: hidden", css)
+        self.assertIn("@media (max-width: 720px)", css)
+        self.assertIn("grid-template-columns: 1fr", css)
+        for html in self.pages.values():
+            self.assertIn('name="viewport"', html)
+            self.assertIn("width=device-width", html)
 
-    def test_unknown_preserved(self):
-        js = self.js
-        self.assertIn('return "Unknown"', js)
-        self.assertIn('return "unknown"', js)
-        self.assertIn("schema_present: Unknown", js)
-        html = self.html
-        self.assertIn("Missing evidence is UNKNOWN, not no.", html)
-        self.assertIn("UNKNOWN is better than a guess.", html)
+    def test_banned_marketing_language(self):
+        for path, html in self.pages.items():
+            for phrase in BANNED:
+                self.assertNotIn(phrase, html, f"{path}: {phrase}")
+            body = _strip_head(html)
+            self.assertNotIn("\N{EM DASH}", body, path)
 
-    def test_pulse_section_hidden_when_not_useful(self):
-        html = self.html
-        js = self.js
-        self.assertNotIn("<h2>Pulse</h2>", html)
-        self.assertNotIn('id="pulse"', html)
-        self.assertNotIn('id="nav-pulse"', html)
-        self.assertNotIn('href="#pulse"', html)
-        self.assertNotIn(">Pulse<", html)
-        self.assertIn('href="/pulse"', html)
-        self.assertIn("/pulse", html)
-        self.assertNotIn("Index pending", html)
-        self.assertNotIn("Index is filling", html)
-        self.assertNotIn("Pulse counts are 0", html)
-        self.assertNotIn("function pulseUseful", js)
-        self.assertNotIn("function pulseCatalogCounts", js)
-        self.assertNotIn("function loadPulse", js)
-        self.assertIn('fetch("/pulse"', js)
-        self.assertNotIn("healthy", js)
-        self.assertNotIn("executable_now_rate", js)
-        self.assertNotIn("success_7d", js)
-        self.assertNotIn("n_7d", js)
-        self.assertNotIn("7d reliability", html)
-        self.assertNotIn("healthy", html)
-        self.assertNotIn("Executable Now Rate", html)
+    def test_human_pages_are_static_html_same_csp(self):
+        for path in ("/", "/catalog", "/how", "/developers"):
+            status, raw, hdrs = _get_full(self.port, path)
+            self.assertEqual(status, 200, path)
+            self.assertIn("text/html", hdrs.get("content-type", ""), path)
+            self.assertTrue(raw.strip(), path)
+            csp = hdrs.get("content-security-policy") or ""
+            self.assertEqual(
+                csp,
+                "default-src 'none'; script-src 'self'; "
+                "connect-src 'self'; "
+                "style-src 'self'; img-src 'self' data:; base-uri 'self'; "
+                "frame-ancestors 'none'",
+            )
 
     def test_no_preview_route_mcp_openapi_regression(self):
         for path in (
@@ -247,11 +433,14 @@ class HomepageProductTests(unittest.TestCase):
             "/mcp.json",
             "/.well-known/x402.json",
             "/rails",
+            "/pulse",
             "/llms.txt",
         ):
             status, raw, hdrs = _get_full(self.port, path)
             self.assertEqual(status, 200, path)
             self.assertTrue(raw.strip(), path)
+        att_status, _att_raw, _att_hdrs = _get_full(self.port, "/attestation")
+        self.assertIn(att_status, (200, 404))
         status, raw, _hdrs = _get_full(self.port, "/preview?need=weather")
         body = json.loads(raw)
         self.assertTrue(body.get("not_probed"))
@@ -280,33 +469,11 @@ class HomepageProductTests(unittest.TestCase):
         route_body = json.loads(route_raw.decode("utf-8"))
         self.assertIn("accepts", route_body)
 
-    def test_nav_and_ia(self):
-        html = self.html
-        self.assertIn(">Product<", html)
-        self.assertIn(">Try it<", html)
-        self.assertIn(">Integrate<", html)
-        self.assertIn(">GitHub<", html)
-        self.assertNotIn("class=\"sep\"", html)
-        self.assertIn("Search the x402 catalog", html)
-        self.assertIn("Where it fits", html)
-        self.assertIn("What gets checked", html)
-        self.assertIn("How agents use it", html)
-        self.assertIn("Catalog claims and 402Signal observations", html)
-        self.assertIn("Quickstart", html)
-        self.assertIn("<h2>Rails</h2>", html)
-        self.assertIn("id=\"copy-curl\"", html)
-        self.assertIn("aria-live=\"polite\"", html)
-        self.assertIn("Building an x402 API? Check whether your endpoint is agent-ready.", html)
-        self.assertIn("compared candidates", html)
-        self.assertIn("no qualifying endpoint was verified", html)
-        self.assertNotIn("x402scan lists Solana", html)
-        self.assertNotIn("skips Algorand", html)
-
-    def test_no_wallet_or_local_free(self):
-        for name in ("index.html", "app.js", "styles.css"):
-            text = _read(name)
-            self.assertNotIn("LOCAL_FREE", text)
-            self.assertNotIn("mnemonic", text.lower())
+    def test_seo_titles(self):
+        self.assertIn("<title>402Signal — Find a paid API that works right now</title>", self.home)
+        self.assertIn("<title>x402 API Catalog — 402Signal</title>", self.catalog)
+        self.assertIn("<title>How 402Signal Works</title>", self.how)
+        self.assertIn("<title>402Signal Developer API</title>", self.devs)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>How 402Signal Works</title>
+  <meta name="description" content="402Signal keeps the listing and the runtime observation separate, then returns a route or a miss." />
+  <link rel="canonical" href="https://402signal.com/how" />
+  <meta property="og:title" content="How 402Signal Works" />
+  <meta property="og:description" content="402Signal keeps the listing and the runtime observation separate, then returns a route or a miss." />
+  <meta property="og:url" content="https://402signal.com/how" />
+  <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="402Signal" />
+  <meta name="twitter:card" content="summary" />
+  <meta name="twitter:title" content="How 402Signal Works" />
+  <meta name="twitter:description" content="402Signal keeps the listing and the runtime observation separate, then returns a route or a miss." />
+  <meta name="twitter:site" content="@402Signal" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="page">
+    <header class="site">
+      <a class="brand" href="/">
+        <span class="mark">402</span>
+        <span class="brand-name">402Signal</span>
+      </a>
+      <nav class="nav" aria-label="Primary">
+        <a href="/catalog">Catalog</a>
+        <a href="/how" aria-current="page">How it works</a>
+        <a href="/developers">Developers</a>
+        <a href="https://github.com/402signal/402signal" rel="noopener noreferrer">GitHub</a>
+      </nav>
+    </header>
+
+    <main>
+      <section class="hero compact">
+        <h1>Why check an API that's already listed?</h1>
+        <p class="lede">Directory data can outlive the service it describes. An endpoint can disappear, stop returning a valid 402, change its payment destination or price, or lack enough information for an agent to construct the call.</p>
+        <p class="lede">402Signal keeps the listing and the runtime observation separate.</p>
+      </section>
+
+      <div class="flow" role="img" aria-label="Discovery to 402Signal to your agent">
+        <div class="flow-box">
+          <p class="flow-kicker">DISCOVERY</p>
+          <p class="flow-title">What sellers say is available</p>
+          <p class="flow-detail">Catalogs, directories, and seller metadata. A listing can remain after the endpoint has changed.</p>
+        </div>
+        <div class="flow-conn" aria-hidden="true"></div>
+        <div class="flow-box flow-emphasis">
+          <p class="flow-kicker">402SIGNAL</p>
+          <p class="flow-title">Check it now</p>
+          <p class="flow-detail">Valid x402? Payment terms? Invocation info? Fresh observation? The listing is not treated as the answer.</p>
+        </div>
+        <div class="flow-conn" aria-hidden="true"></div>
+        <div class="flow-box">
+          <p class="flow-kicker">YOUR AGENT</p>
+          <p class="flow-title">Decide whether to spend</p>
+          <p class="flow-detail">Own wallet. Sign the seller payment. Pay the seller. Call the API.</p>
+        </div>
+      </div>
+
+      <section class="block">
+        <h2>What a live check can establish</h2>
+        <dl class="checks compact">
+          <div>
+            <dt>Payment</dt>
+            <dd>Did the endpoint return a valid, parseable x402 challenge?</dd>
+          </div>
+          <div>
+            <dt>Payment terms</dt>
+            <dd>What payTo, amount, asset and network did the endpoint return?</dd>
+          </div>
+          <div>
+            <dt>Invocation</dt>
+            <dd>Is there enough request information for an agent to construct the call?</dd>
+          </div>
+          <div>
+            <dt>Freshness</dt>
+            <dd>When did 402Signal make the observation?</dd>
+          </div>
+        </dl>
+      </section>
+
+      <section class="block">
+        <h2>Readiness</h2>
+        <dl class="checks compact">
+          <div>
+            <dt>Discovered</dt>
+            <dd>Found in supported discovery infrastructure.</dd>
+          </div>
+          <div>
+            <dt>Payable</dt>
+            <dd>Valid HTTP 402, parseable payment requirements and usable payTo.</dd>
+          </div>
+          <div>
+            <dt>Invocable</dt>
+            <dd>Enough request/schema information exists for an autonomous agent to construct the call.</dd>
+          </div>
+          <div>
+            <dt>Recently verified</dt>
+            <dd>Passed a sufficiently fresh independent check.</dd>
+          </div>
+        </dl>
+        <p class="note">Health and reliability only appear when there is enough history to support them.</p>
+      </section>
+
+      <section class="block">
+        <h2>402Signal stops before seller execution</h2>
+        <p>402Signal recommends a route. The caller keeps its wallet, signs the seller payment and executes the seller request.</p>
+        <p>The $0.01 routing check pays 402Signal for the check itself. It is separate from whatever the selected seller charges.</p>
+      </section>
+    </main>
+
+    <footer class="foot">
+      <p class="listed-on">
+        Listed on
+        <a href="https://glama.ai/mcp/servers/402signal/402signal" rel="noopener noreferrer">Glama</a>
+        <a href="https://registry.modelcontextprotocol.io/?q=402signal" rel="noopener noreferrer">MCP Registry</a>
+        <a href="https://github.com/Haustorium12/gold-402/blob/main/directory/aggregators.md" rel="noopener noreferrer">Gold-402</a>
+        <a href="https://smithery.ai/servers/live402/signal" rel="noopener noreferrer">Smithery</a>
+        <a href="https://agentic.market/services/402signal-com" rel="noopener noreferrer">Agentic Market</a>
+        <a href="https://github.com/michielpost/x402-dev/blob/master/Projects.md" rel="noopener noreferrer">x402-dev</a>
+      </p>
+      <p>
+        <a href="https://github.com/402signal/402signal" rel="noopener noreferrer">GitHub</a>
+        <a href="https://x.com/402Signal" rel="noopener noreferrer">@402Signal</a>
+        <a href="/openapi.json">OpenAPI</a>
+        <a href="mailto:402signal@gmail.com">Contact</a>
+      </p>
+    </footer>
+  </div>
+</body>
+</html>

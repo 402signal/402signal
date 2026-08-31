@@ -17,6 +17,18 @@ from live402 import discover, history, mcp, payment, pulse, rails, validate
 from live402.route import handle_route
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+# Human pages served as static HTML from STATIC_DIR. Same CSP as GET /.
+HUMAN_PAGES = {
+    "/": "index.html",
+    "/index.html": "index.html",
+    "/catalog": "catalog.html",
+    "/catalog.html": "catalog.html",
+    "/how": "how.html",
+    "/how.html": "how.html",
+    "/developers": "developers.html",
+    "/developers.html": "developers.html",
+}
+STATIC_FILES = {"/styles.css", "/app.js", "/dashboard.js"}
 MAX_BODY = 64_000
 DEFAULT_ROUTE_RPM = 60
 DEFAULT_PREVIEW_RPM = 180
@@ -263,6 +275,14 @@ class Handler(SimpleHTTPRequestHandler):
         self.end_headers()
 
 
+    def _rewrite_static_path(self) -> bool:
+        parsed = urlparse(self.path)
+        page = HUMAN_PAGES.get(parsed.path)
+        if page:
+            self.path = "/" + page
+            return True
+        return parsed.path in STATIC_FILES
+
     def do_HEAD(self) -> None:
         parsed = urlparse(self.path)
         head_ok = {
@@ -274,8 +294,7 @@ class Handler(SimpleHTTPRequestHandler):
             "/pulse",
             "/attestation",
         }
-        static_ok = {"/", "/index.html", "/styles.css", "/app.js", "/dashboard.js"}
-        if parsed.path in static_ok:
+        if self._rewrite_static_path():
             return SimpleHTTPRequestHandler.do_HEAD(self)
         if parsed.path in head_ok:
             self._omit_body = True
@@ -291,9 +310,8 @@ class Handler(SimpleHTTPRequestHandler):
 
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
-        if parsed.path in {"/", "/index.html"}:
-            return SimpleHTTPRequestHandler.do_GET(self)
-        if parsed.path in {"/styles.css", "/app.js", "/dashboard.js"}:
+        if parsed.path in HUMAN_PAGES or parsed.path in STATIC_FILES:
+            self._rewrite_static_path()
             return SimpleHTTPRequestHandler.do_GET(self)
         if parsed.path == "/route":
             allow = {"Allow": "GET, POST, OPTIONS"}

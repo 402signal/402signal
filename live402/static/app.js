@@ -4,8 +4,6 @@
   const searchBtn = document.getElementById("search-btn");
   const status = document.getElementById("search-status");
   const results = document.getElementById("search-results");
-  const claimsCard = document.getElementById("claims-example");
-  const claimsBody = document.getElementById("claims-example-body");
   const copyBtn = document.getElementById("copy-curl");
   const curlEl = document.getElementById("curl-route");
 
@@ -18,11 +16,6 @@
 
   function syncSearch() {
     if (searchBtn) searchBtn.disabled = !hasContent();
-  }
-
-  function unknown(v) {
-    if (v === null || v === undefined || v === "") return "Unknown";
-    return String(v);
   }
 
   function hostOf(url) {
@@ -51,75 +44,47 @@
   }
 
   function railOf(hit) {
-    if (!hit || typeof hit !== "object") return "Unknown";
+    if (!hit || typeof hit !== "object") return "";
     const net = hit.chain || hit.rail || hit.network;
-    if (!net) return "Unknown";
+    if (!net) return "";
     const key = String(net).toLowerCase();
     return RAIL_NAMES[key] || String(net);
   }
 
   function listedPrice(hit) {
-    if (!hit || typeof hit !== "object") return "Unknown";
-    const claimed = hit.claimed && typeof hit.claimed === "object" ? hit.claimed : {};
+    if (!hit || typeof hit !== "object") return "";
     if (hit.price != null && hit.price !== "") return String(hit.price);
+    const claimed = hit.claimed && typeof hit.claimed === "object" ? hit.claimed : {};
     if (claimed.amount != null && claimed.amount !== "") return String(claimed.amount);
-    return "Unknown";
-  }
-
-  function catalogPayTo(hit) {
-    if (!hit || typeof hit !== "object") return null;
-    const claimed = hit.claimed && typeof hit.claimed === "object" ? hit.claimed : null;
-    if (claimed && claimed.payTo) return String(claimed.payTo);
-    return null;
+    return "";
   }
 
   function schemaListed(hit) {
-    if (!hit || typeof hit !== "object") return "unknown";
+    if (!hit || typeof hit !== "object") return "";
     if (typeof hit.inputSchema_present === "boolean") {
-      return hit.inputSchema_present ? "yes" : "no";
+      return hit.inputSchema_present ? "Yes" : "No";
     }
     const claimed = hit.claimed && typeof hit.claimed === "object" ? hit.claimed : null;
     if (claimed && typeof claimed.schema_present === "boolean") {
-      return claimed.schema_present ? "yes" : "no";
+      return claimed.schema_present ? "Yes" : "No";
     }
-    if (claimed && (claimed.schema_present === 1 || claimed.schema_present === 0)) {
-      return claimed.schema_present === 1 ? "yes" : "no";
-    }
-    return "unknown";
+    return "";
   }
 
   function catalogSource(hit) {
-    if (!hit || typeof hit !== "object") return null;
-    if (typeof hit.source === "string" && hit.source) return hit.source;
+    if (!hit || typeof hit !== "object") return "";
+    if (typeof hit.source === "string" && hit.source.trim()) return hit.source.trim();
     const claimed = hit.claimed && typeof hit.claimed === "object" ? hit.claimed : null;
-    if (claimed && typeof claimed.source === "string" && claimed.source) return claimed.source;
-    return null;
-  }
-
-  function independentlyObserved(parsed) {
-    if (!parsed || typeof parsed !== "object") return null;
-    const obs = parsed.observed;
-    if (!obs || typeof obs !== "object") return null;
-    if (obs.source && obs.source !== "402signal_observed") return null;
-    const keys = Object.keys(obs).filter(function (key) {
-      if (key === "source") return false;
-      return obs[key] !== null && obs[key] !== undefined && obs[key] !== "";
-    });
-    if (!keys.length) return null;
-    return obs;
-  }
-
-  function observedField(obs, key) {
-    if (!obs || !Object.prototype.hasOwnProperty.call(obs, key)) return undefined;
-    const value = obs[key];
-    if (value === null || value === undefined || value === "") return undefined;
-    return value;
+    if (claimed && typeof claimed.source === "string" && claimed.source.trim()) {
+      return claimed.source.trim();
+    }
+    return "";
   }
 
   function isRefreshingPulse(pulse) {
     if (!pulse || typeof pulse !== "object") return false;
-    const status = String(pulse.index_status || "").toLowerCase();
-    return status === "pending" || status === "refreshing";
+    const statusText = String(pulse.index_status || "").toLowerCase();
+    return statusText === "pending" || statusText === "refreshing";
   }
 
   function safeLabel(hit) {
@@ -129,38 +94,21 @@
     return String(name);
   }
 
-  function appendMeta(dl, label, value) {
-    if (value == null || value === "") return;
-    const row = document.createElement("div");
-    const dt = document.createElement("dt");
-    const dd = document.createElement("dd");
-    dt.textContent = label;
-    dd.textContent = value;
-    row.appendChild(dt);
-    row.appendChild(dd);
-    dl.appendChild(row);
+  function appendBit(row, value) {
+    if (!value) return;
+    const span = document.createElement("span");
+    span.textContent = value;
+    row.appendChild(span);
   }
 
   function renderHit(hit) {
     const article = document.createElement("article");
-    article.className = "result-card";
+    article.className = "result-row";
 
-    const title = document.createElement("h3");
-    title.textContent = safeLabel(hit);
-    article.appendChild(title);
-
-    const tags = document.createElement("p");
-    tags.className = "result-tags";
-    const match = document.createElement("span");
-    match.className = "tag";
-    match.textContent = "Catalog match";
-    const unverified = document.createElement("span");
-    unverified.className = "tag";
-    unverified.textContent = "Not live-verified";
-    tags.appendChild(match);
-    tags.appendChild(document.createTextNode(" "));
-    tags.appendChild(unverified);
-    article.appendChild(tags);
+    const name = document.createElement("p");
+    name.className = "result-name";
+    name.textContent = safeLabel(hit);
+    article.appendChild(name);
 
     if (hit.url) {
       const urlP = document.createElement("p");
@@ -169,20 +117,16 @@
       article.appendChild(urlP);
     }
 
-    const dl = document.createElement("dl");
-    dl.className = "result-meta";
-    appendMeta(dl, "Listed price", listedPrice(hit));
-    const payTo = catalogPayTo(hit);
-    if (payTo) appendMeta(dl, "Catalog payTo", payTo);
-    appendMeta(dl, "Schema listed", schemaListed(hit));
+    const bits = document.createElement("p");
+    bits.className = "result-bits";
+    appendBit(bits, railOf(hit));
+    const price = listedPrice(hit);
+    if (price) appendBit(bits, "Listed price " + price);
+    const schema = schemaListed(hit);
+    if (schema) appendBit(bits, "Schema listed: " + schema);
     const source = catalogSource(hit);
-    if (source) appendMeta(dl, "Source", source);
-    appendMeta(dl, "Rail", railOf(hit));
-    const also = hit.also_on;
-    if (Array.isArray(also) && also.length) {
-      appendMeta(dl, "Also listed on", also.join(", "));
-    }
-    article.appendChild(dl);
+    if (source) appendBit(bits, source);
+    if (bits.childNodes.length) article.appendChild(bits);
     return article;
   }
 
@@ -196,48 +140,6 @@
     results.appendChild(p);
   }
 
-  function renderClaimsExample(parsed, hit) {
-    if (!claimsCard || !claimsBody) return;
-    if (!hit && !independentlyObserved(parsed)) {
-      claimsCard.hidden = true;
-      claimsBody.textContent = "";
-      return;
-    }
-    const lines = [];
-    if (hit) {
-      lines.push("Catalog (this result)");
-      lines.push("Listed price: " + listedPrice(hit));
-      const payTo = catalogPayTo(hit);
-      if (payTo) lines.push("Catalog payTo: " + payTo);
-      else lines.push("Catalog payTo: omitted (not in this payload)");
-      lines.push("Schema listed: " + schemaListed(hit));
-      const source = catalogSource(hit);
-      if (source) lines.push("Source: " + source);
-      lines.push("Rail: " + railOf(hit));
-    }
-    const obs = independentlyObserved(parsed);
-    if (obs) {
-      lines.push("402Signal observed");
-      const httpStatus = observedField(obs, "http_status");
-      const obsPay = observedField(obs, "payTo");
-      const schema = observedField(obs, "schema_present");
-      const latency = observedField(obs, "latency_ms");
-      if (httpStatus !== undefined) lines.push("HTTP status: " + unknown(httpStatus));
-      if (obsPay !== undefined) lines.push("payTo: " + unknown(obsPay));
-      if (schema !== undefined) {
-        const schemaLabel = schema === 1 || schema === true ? "yes" : schema === 0 || schema === false ? "no" : "Unknown";
-        lines.push("schema_present: " + schemaLabel);
-      } else {
-        lines.push("schema_present: Unknown");
-      }
-      if (latency !== undefined) lines.push("latency_ms: " + unknown(latency));
-    } else {
-      lines.push("402Signal observed: not in this response. Catalog search is not a live probe.");
-    }
-    claimsBody.textContent = lines.join("\n");
-    claimsCard.hidden = false;
-  }
-
   function renderResults(parsed, pulse) {
     if (!results) return;
     results.textContent = "";
@@ -248,17 +150,15 @@
       } else {
         showMessage("No catalog matches found. Try a broader capability.");
       }
-      renderClaimsExample(parsed, null);
       return;
     }
-    const heading = document.createElement("h3");
+    const heading = document.createElement("p");
     heading.className = "results-heading";
     heading.textContent = hits.length === 1 ? "1 catalog match" : hits.length + " catalog matches";
     results.appendChild(heading);
     hits.forEach(function (hit) {
       results.appendChild(renderHit(hit));
     });
-    renderClaimsExample(parsed, hits[0]);
   }
 
   async function runSearch() {
@@ -268,7 +168,6 @@
     }
     setStatus("Searching catalog...");
     if (results) results.textContent = "";
-    if (claimsCard) claimsCard.hidden = true;
     let pulse = null;
     try {
       const pulseRes = await fetch("/pulse", { cache: "no-store" });
@@ -324,6 +223,29 @@
     }
   }
 
+  function bindTabs() {
+    const list = document.querySelector(".seg");
+    if (!list) return;
+    const buttons = Array.prototype.slice.call(list.querySelectorAll("[data-tab]"));
+    function show(name) {
+      buttons.forEach(function (btn) {
+        const on = btn.getAttribute("data-tab") === name;
+        btn.classList.toggle("is-active", on);
+        btn.setAttribute("aria-selected", on ? "true" : "false");
+      });
+      document.querySelectorAll(".tab-panel").forEach(function (panel) {
+        const on = panel.id === "panel-" + name;
+        if (on) panel.removeAttribute("hidden");
+        else panel.setAttribute("hidden", "");
+      });
+    }
+    list.addEventListener("click", function (ev) {
+      const btn = ev.target.closest("[data-tab]");
+      if (!btn) return;
+      show(btn.getAttribute("data-tab") || "http");
+    });
+  }
+
   if (form) {
     form.addEventListener("submit", function (ev) {
       ev.preventDefault();
@@ -351,6 +273,7 @@
       copyCurl();
     });
   }
+  bindTabs();
 
   try {
     const q = new URLSearchParams(window.location.search);

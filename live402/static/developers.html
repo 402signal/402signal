@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>402Signal Developer API</title>
+  <meta name="description" content="Call 402Signal through HTTP or MCP. Pay $0.01 USDC for a live routing check." />
+  <link rel="canonical" href="https://402signal.com/developers" />
+  <meta property="og:title" content="402Signal Developer API" />
+  <meta property="og:description" content="Call 402Signal through HTTP or MCP. Pay $0.01 USDC for a live routing check." />
+  <meta property="og:url" content="https://402signal.com/developers" />
+  <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="402Signal" />
+  <meta name="twitter:card" content="summary" />
+  <meta name="twitter:title" content="402Signal Developer API" />
+  <meta name="twitter:description" content="Call 402Signal through HTTP or MCP. Pay $0.01 USDC for a live routing check." />
+  <meta name="twitter:site" content="@402Signal" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="page">
+    <header class="site">
+      <a class="brand" href="/">
+        <span class="mark">402</span>
+        <span class="brand-name">402Signal</span>
+      </a>
+      <nav class="nav" aria-label="Primary">
+        <a href="/catalog">Catalog</a>
+        <a href="/how">How it works</a>
+        <a href="/developers" aria-current="page">Developers</a>
+        <a href="https://github.com/402signal/402signal" rel="noopener noreferrer">GitHub</a>
+      </nav>
+    </header>
+
+    <main>
+      <section class="hero compact">
+        <h1>Use 402Signal from an agent</h1>
+        <p class="lede">Send the capability you need. Pay $0.01 USDC for the live routing check. Get a route with evidence, or a typed miss.</p>
+      </section>
+
+      <div class="seg" role="tablist" aria-label="Integration">
+        <button type="button" class="seg-btn is-active" role="tab" id="tab-http" aria-selected="true" aria-controls="panel-http" data-tab="http">HTTP</button>
+        <button type="button" class="seg-btn" role="tab" id="tab-mcp" aria-selected="false" aria-controls="panel-mcp" data-tab="mcp">MCP</button>
+      </div>
+
+      <section id="panel-http" class="block tab-panel" role="tabpanel" aria-labelledby="tab-http">
+        <p>Send <code>POST /route</code> with the capability your agent needs. The unpaid request returns an x402 payment challenge. Sign a matching $0.01 USDC option and retry the request.</p>
+        <div class="code-card">
+          <div class="code-toolbar">
+            <span>Unpaid <code>POST /route</code></span>
+            <button type="button" class="btn secondary" id="copy-curl">Copy</button>
+          </div>
+          <pre class="code" id="curl-route">curl -sS -D - https://402signal.com/route -H 'Content-Type: application/json' -d '{"need":"weather"}'</pre>
+        </div>
+        <p>A paid check returns HTTP 200 with a route and evidence (<code>live</code>, <code>url</code>, <code>invocable</code>, <code>target</code>), or HTTP 503 with a typed <code>miss_reason</code>.</p>
+      </section>
+
+      <section id="panel-mcp" class="block tab-panel" role="tabpanel" aria-labelledby="tab-mcp" hidden>
+        <p>MCP endpoint: <code>https://402signal.com/mcp</code>. Tools: <code>route</code> (paid live check) and <code>preview</code> (free catalog search).</p>
+        <div class="code-card">
+          <div class="code-toolbar">
+            <span>MCP server URL</span>
+          </div>
+          <pre class="code">https://402signal.com/mcp</pre>
+        </div>
+        <p>Point your MCP client at that URL. Call <code>route</code> with <code>need</code> when you want a request-time check. An unpaid <code>route</code> call returns HTTP 402; retry with a matching $0.01 USDC signature.</p>
+      </section>
+
+      <section class="block">
+        <h2>Docs</h2>
+        <p class="link-row">
+          <a href="/openapi.json">OpenAPI</a>
+          <a href="/llms.txt">llms.txt</a>
+          <a href="https://github.com/402signal/402signal" rel="noopener noreferrer">GitHub</a>
+          <a href="/mcp.json">MCP tool definition</a>
+        </p>
+      </section>
+
+      <section class="block quiet">
+        <h2>Reference</h2>
+        <p class="link-row">
+          <a href="/.well-known/x402.json">/.well-known/x402.json</a>
+          <a href="/rails">/rails</a>
+          <a href="/attestation">/attestation</a>
+          <a href="/pulse">/pulse</a>
+        </p>
+      </section>
+    </main>
+
+    <footer class="foot">
+      <p class="listed-on">
+        Listed on
+        <a href="https://glama.ai/mcp/servers/402signal/402signal" rel="noopener noreferrer">Glama</a>
+        <a href="https://registry.modelcontextprotocol.io/?q=402signal" rel="noopener noreferrer">MCP Registry</a>
+        <a href="https://github.com/Haustorium12/gold-402/blob/main/directory/aggregators.md" rel="noopener noreferrer">Gold-402</a>
+        <a href="https://smithery.ai/servers/live402/signal" rel="noopener noreferrer">Smithery</a>
+        <a href="https://agentic.market/services/402signal-com" rel="noopener noreferrer">Agentic Market</a>
+        <a href="https://github.com/michielpost/x402-dev/blob/master/Projects.md" rel="noopener noreferrer">x402-dev</a>
+      </p>
+      <p>
+        <a href="https://github.com/402signal/402signal" rel="noopener noreferrer">GitHub</a>
+        <a href="https://x.com/402Signal" rel="noopener noreferrer">@402Signal</a>
+        <a href="/openapi.json">OpenAPI</a>
+        <a href="mailto:402signal@gmail.com">Contact</a>
+      </p>
+    </footer>
+  </div>
+  <script src="/app.js"></script>
+</body>
+</html>
