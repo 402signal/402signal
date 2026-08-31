@@ -263,13 +263,17 @@ class TransparencyPageTests(unittest.TestCase):
         self.assertIn(algo_anchor.TESTNET_EXPLORER_TX_URL + _TX_B, html)
         self.assertIn("growth-chart", html)
         self.assertIn("joins those observations", html)
-        self.assertIn("2 newer log entries exist after the latest confirmed anchor.", html)
-        self.assertIn("2 newer log entries since the latest confirmed anchor", html)
+        self.assertIn("Caught up", html)
+        self.assertIn("The latest log checkpoint is anchored.", html)
         model = pq_view.page_model()
         sizes = [row["size"] for row in model["history"]]
         self.assertEqual(sizes, [3, 1])
         self.assertEqual(model["history"][0]["delta"], 2)
         self.assertEqual(model["history"][1]["delta"], 1)
+        store.append(b"four")
+        grown, _ = self._html()
+        self.assertIn("1 newer log entries exist after the latest confirmed anchor.", grown)
+        self.assertIn("1 newer log entries since the latest confirmed anchor", grown)
 
     def test_pq1_decode_and_origin_hash(self):
         store.append(b"one")
