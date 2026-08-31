@@ -9,7 +9,6 @@
 
   const RAIL_NAMES = { base: "Base", solana: "Solana", algorand: "Algorand" };
   const FORBIDDEN_RESULT_LABELS = /^(recommended|verified|live|payable now|best for)$/i;
-  const MIN_RELIABILITY_N = 10;
 
   function hasContent() {
     return Boolean(((need && need.value) || "").trim());
@@ -161,13 +160,7 @@
     }
     const n7 = Number(obs.n_7d);
     if (Number.isFinite(n7) && n7 > 0) {
-      if (n7 >= MIN_RELIABILITY_N && obs.success_7d != null && obs.success_7d !== "") {
-        const pct = Math.round(Number(obs.success_7d) * 100);
-        if (Number.isFinite(pct)) appendBit(bits, n7 + " in 7d · " + pct + "%");
-        else appendBit(bits, n7 + " in 7d");
-      } else {
-        appendBit(bits, n7 + " in 7d");
-      }
+      appendBit(bits, n7 + (n7 === 1 ? " observation in 7d" : " observations in 7d"));
     }
     side.appendChild(bits);
     return side;

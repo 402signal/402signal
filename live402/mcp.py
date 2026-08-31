@@ -64,7 +64,30 @@ OUTPUT_SCHEMA = {
     "properties": {
         "live": {"type": "boolean"},
         "url": {"type": ["string", "null"]},
+        "challenge_observed": {"type": "boolean"},
+        "payable": {"type": "boolean"},
         "invocable": {"type": "boolean"},
+        "selected_payment": {
+            "type": ["object", "null"],
+            "properties": {
+                "rail": {"type": ["string", "null"]},
+                "network": {"type": ["string", "null"]},
+                "asset": {"type": ["string", "null"]},
+                "amount_atomic": {"type": ["integer", "null"]},
+                "display_amount": {"type": ["string", "null"]},
+                "normalized_usd": {"type": ["number", "null"]},
+                "payTo": {"type": ["string", "null"]},
+                "facilitator": {"type": ["string", "null"]},
+            },
+        },
+        "changes": {
+            "type": "object",
+            "properties": {
+                "payTo_changed_at": {"type": ["string", "integer", "null"]},
+                "price_changed_at": {"type": ["string", "integer", "null"]},
+                "schema_changed_at": {"type": ["string", "integer", "null"]},
+            },
+        },
         "target": {
             "type": ["object", "null"],
             "properties": {

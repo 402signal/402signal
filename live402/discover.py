@@ -134,7 +134,34 @@ def openapi_spec(resource_url: str = ROUTE) -> dict:
         "type": "object",
         "properties": {
             "live": {"type": "boolean"},
+            "challenge_observed": {"type": "boolean"},
+            "payable": {"type": "boolean"},
             "invocable": {"type": "boolean"},
+            "selected_payment": {
+                "type": ["object", "null"],
+                "description": (
+                    "Exact CURRENT OBSERVED payment option that won this route. "
+                    "Never a catalog-only rail."
+                ),
+                "properties": {
+                    "rail": {"type": ["string", "null"]},
+                    "network": {"type": ["string", "null"]},
+                    "asset": {"type": ["string", "null"]},
+                    "amount_atomic": {"type": ["integer", "null"]},
+                    "display_amount": {"type": ["string", "null"]},
+                    "normalized_usd": {"type": ["number", "null"]},
+                    "payTo": {"type": ["string", "null"]},
+                    "facilitator": {"type": ["string", "null"]},
+                },
+            },
+            "changes": {
+                "type": "object",
+                "properties": {
+                    "payTo_changed_at": {"type": ["string", "integer", "null"]},
+                    "price_changed_at": {"type": ["string", "integer", "null"]},
+                    "schema_changed_at": {"type": ["string", "integer", "null"]},
+                },
+            },
             "url": {"type": ["string", "null"]},
             "status": {"type": ["integer", "null"]},
             "latency_ms": {"type": ["integer", "null"]},
@@ -223,6 +250,7 @@ def openapi_spec(resource_url: str = ROUTE) -> dict:
                         "live": {"type": "boolean"},
                         "invocable": {"type": "boolean"},
                         "selected": {"type": "boolean"},
+                        "selected_payment": {"type": ["object", "null"]},
                     },
                 },
             },
@@ -887,7 +915,9 @@ HTTP 200 = live URL plus target contract. HTTP 503 = typed miss_reason.
 - Agents that intend to pay should POST /route, not GET.
 - GET /route with Accept: application/json (or no Accept) returns HTTP 402 so crawlers can index payment. Browsers that send Accept: text/html get a human page.
 - Unpaid → HTTP 402 (amount 10000 atomic = $0.01, 6 decimals)
-- Paid live hit → HTTP 200 + URL that 402s with a payment envelope + target {method,inputSchema,outputSchema,accepts,facilitator,amountAtomic,displayAmount,timeoutSeconds}
+- Paid live hit → HTTP 200 + URL that 402s with a payment envelope + target {method,inputSchema,outputSchema,accepts,facilitator,amountAtomic,displayAmount,timeoutSeconds} + selected_payment {rail,network,asset,amount_atomic,display_amount,normalized_usd,payTo,facilitator}. target.accepts and selected_payment are CURRENT observed 402 options only. Catalog rails stay on claimed.payment_options and are never selected.
+- 402Signal settles the $0.01 routing payment; it does not pay the selected merchant.
+- payable requires a complete observed option (rail/network, amount, asset, payTo). invocable is payable + input schema. challenge_observed is HTTP 402 + parseable x402.
 - If inputSchema is missing: live may be true, invocable false, miss_reason no_input_schema
 - Paid miss → HTTP 503 {live:false, miss_reason}
 - miss_reason enum: no_candidates, no_402_envelope, no_payto, reachable_200, probe_timeout, quote_expired, invalid_need, upstream_5xx, ssrf, no_input_schema, constraints_unmet, probe_budget_exhausted, probe_limit_reached
