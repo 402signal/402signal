@@ -1,8 +1,8 @@
 """402Signal PQ1 transparency log (C2SP tiles + RFC 9162 Merkle).
 
 Product-GO for the log in CI/local. Not MainNet GO.
-Falcon submit is TestNet-gated on the single app process. Isolated
-signing is in-process (unsigned txn in, pqsig out via callback).
+Falcon submit is TestNet-gated. Isolated signer is a separate Fly
+process (~$2/mo shared-cpu-1x 256MB). Unsigned txn in, pqsig out.
 402security must approve before LIVE402_PQ_FALCON_BROADCAST=1, any
 Falcon SK, or homepage PQ copy.
 """

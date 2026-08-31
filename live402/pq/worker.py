@@ -1,4 +1,4 @@
-"""In-process PQ1 anchor worker on the single app process.
+"""PQ1 anchor worker on the HTTP app process.
 
 Queue unsigned checkpoint requests. Build a PaymentTxn only when the SLA
 fires. Idle: do not even build an anchor if tree size is unchanged.
@@ -8,7 +8,8 @@ only when every TestNet gate passes (including
 LIVE402_PQ_FALCON_BROADCAST=1 plus SK/callback). Otherwise it does not
 build or send.
 
-Isolated signing is in-process: unsigned txn in, pqsig out via callback.
+Isolated signing is IPC to the Fly falcon process: unsigned txn in,
+pqsig out. Fail closed if that process is down (no send).
 """
 
 from __future__ import annotations
@@ -131,7 +132,12 @@ def maybe_submit(
     p["genesisID"] = algo_anchor.TESTNET_GENESIS_ID
     if not (p.get("genesisHash") or p.get("genesis_hash")):
         p["genesisHash"] = algo_anchor.TESTNET_GENESIS_HASH
-    if not algo_anchor.submit_allowed(signer_callback=signer_callback, sender=addr, params=p):
+    cb = signer_callback
+    if not callable(cb):
+        from live402.pq import isolated_signer
+
+        cb = isolated_signer.request_pqsig
+    if not algo_anchor.submit_allowed(signer_callback=cb, sender=addr, params=p):
         return None
     if send_fn is None:
         from live402 import fixtures
@@ -149,10 +155,10 @@ def maybe_submit(
     txn = algo_anchor.build_payment_txn(addr, note, p)
     if str(txn.get("gen") or "") != algo_anchor.TESTNET_GENESIS_ID:
         return None
-    cb = signer_callback
-    if not callable(cb):
+    try:
+        pqsig = algo_anchor.isolated_sign(txn, cb, pk=algo_anchor.current_falcon_sk())
+    except Exception:
         return None
-    pqsig = algo_anchor.isolated_sign(txn, cb, pk=algo_anchor.current_falcon_sk())
     txid = algo_anchor.send_if_allowed(txn, pqsig, send_fn=send_fn, sender=addr)
     if not txid:
         return None

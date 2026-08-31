@@ -365,16 +365,33 @@ class TestNetSubmitTests(unittest.TestCase):
         self.assertIsNone(out)
         self.assertEqual(posted, [])
 
-    def test_fly_toml_is_single_app_process(self):
+    def test_fly_toml_falcon_process_is_isolated(self):
         text = Path(__file__).resolve().parent.parent.joinpath("fly.toml").read_text(encoding="utf-8")
         vm_lines = [ln for ln in text.splitlines() if ln.strip() == "[[vm]]"]
-        self.assertEqual(len(vm_lines), 1)
-        self.assertFalse(any(ln.strip() == "[processes]" for ln in text.splitlines()))
-        self.assertNotIn("falcon =", text)
+        self.assertEqual(len(vm_lines), 2)
+        self.assertIn("[processes]", text)
+        self.assertIn('falcon = "python3 -m live402.pq.isolated_signer"', text)
+        self.assertIn('app = "python3 -m live402', text)
         self.assertIn('processes = ["app"]', text)
-        self.assertIn("No extra machines in this PR", text)
-        self.assertIn("separate PR", text)
-        self.assertIn("does not provision or declare a second machine", text)
+        self.assertIn('processes = ["falcon"]', text)
+        http = text.split("[http_service]", 1)[1].split("[[vm]]", 1)[0]
+        self.assertIn('processes = ["app"]', http)
+        self.assertNotIn("falcon", http)
+        self.assertIn("256mb", text)
+        self.assertIn("1gb", text)
+        self.assertIn("~$2/mo", text)
+        self.assertIn("do not fly scale", text.lower())
+        self.assertIn("do not deploy", text.lower())
+        self.assertNotIn("LIVE402_PQ_FALCON_SK", text)
+        self.assertNotIn("LIVE402_PQ_FALCON_BROADCAST", text)
+        self.assertIn("LIVE402_PQ_FALCON_NETWORK = \"testnet\"", text)
+        self.assertIn("OBHYXCUVOLSTZVBN5JUFIYBD4X4ZFIAFZMWMU2P45VBYGWT26MV34IFFIU", text)
+        mounts = text.split("[[mounts]]", 1)[1]
+        self.assertIn('processes = ["app"]', mounts)
+        self.assertNotIn("falcon", mounts.split("[env]", 1)[0])
+        dockerfile = Path(__file__).resolve().parent.parent.joinpath("Dockerfile").read_text(encoding="utf-8")
+        self.assertNotIn("LIVE402_PQ_FALCON_BROADCAST", dockerfile)
+        self.assertNotIn("LIVE402_PQ_FALCON_SK", dockerfile)
 
     def test_trust_root_not_mainnet_go_stays_true(self):
         from live402.pq import trust

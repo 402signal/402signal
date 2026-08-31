@@ -38,6 +38,7 @@ class FalconSkEnvTests(unittest.TestCase):
         os.environ.pop("LIVE402_PQ_FALCON_NETWORK", None)
         os.environ.pop("LIVE402_PQ_FALCON_BROADCAST", None)
         os.environ.pop("LIVE402_PQ_FALCON_ADDRESS", None)
+        os.environ.pop("FLY_PROCESS_GROUP", None)
         # Ephemeral test SK only. Never committed, never printed.
         self.sk = os.urandom(algo_anchor.FALCON_SK_LEN)
         self.hex_sk = self.sk.hex()
@@ -53,6 +54,7 @@ class FalconSkEnvTests(unittest.TestCase):
         os.environ.pop("LIVE402_PQ_FALCON_NETWORK", None)
         os.environ.pop("LIVE402_PQ_FALCON_BROADCAST", None)
         os.environ.pop("LIVE402_PQ_FALCON_ADDRESS", None)
+        os.environ.pop("FLY_PROCESS_GROUP", None)
         os.environ.pop("LIVE402_PQ_LOG_DB", None)
         os.environ.pop("LOCAL_FREE", None)
         self.tmp.cleanup()
@@ -210,9 +212,14 @@ class FalconSkEnvTests(unittest.TestCase):
     def test_http_app_does_not_load_falcon_sk(self):
         src = inspect.getsource(server.main)
         self.assertNotIn("boot_optional_falcon_sk", src)
-        self.assertIn("boot_optional_log_signer", src)
-        self.assertNotIn("falcon process", src)
-        self.assertNotIn("FLY_PROCESS_GROUP", src)
+        self.assertNotIn("load_falcon_sk_from_env", src)
+        self.assertIn("boot_http_process", src)
+
+        os.environ["LIVE402_PQ_FALCON_SK"] = self.hex_sk
+        os.environ["FLY_PROCESS_GROUP"] = "app"
+        algo_anchor.configure_falcon_sk(None)
+        server.boot_http_process()
+        self.assertIsNone(algo_anchor.current_falcon_sk())
 
         from live402.pq import isolated_signer
 
@@ -222,6 +229,10 @@ class FalconSkEnvTests(unittest.TestCase):
         self.assertNotIn("boot_optional_log_signer", iso_src)
         self.assertNotIn("ThreadingHTTPServer", iso_src)
         self.assertNotIn("/route", iso_src)
+        self.assertIn("FLY_PROCESS_GROUP", inspect.getsource(isolated_signer))
+        falcon_boot = inspect.getsource(isolated_signer.boot)
+        self.assertIn("load_falcon_sk_from_env", falcon_boot)
+        self.assertNotIn("load_signer_from_env", falcon_boot)
 
 
 if __name__ == "__main__":

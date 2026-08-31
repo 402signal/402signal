@@ -149,8 +149,8 @@ Base CDP calls need `CDP_API_KEY_ID` + `CDP_API_KEY_SECRET` (or `CDP_ACCESS_TOKE
 | `LIVE402_PQ_LOG_DB` | `/data/pq-log.sqlite` on Fly (`/tmp` fallback) | Experimental C2SP log. Separate file from catalog and history. **Not HTTP-exposed** as a sqlite dump; read API is `/pq/log/*` only. |
 | `LIVE402_PQ_LOG_VKEY` | unset | Ed25519 log verifier key (public). Set on boot from the public half of `LIVE402_PQ_LOG_SK` when that secret loads. Never a private key. |
 | `LIVE402_PQ_LOG_SK` | unset | Optional Ed25519 log signing seed: raw 32-byte seed as hex, or PKCS8 PEM. Fly secret only — never commit, never paste into chat. If unset (or `LIVE402_PQ_LOG=0`), receipts stay `transparency.status=unavailable`. Malformed value fails closed (no random key; `/route` still serves). Boot never generates a key. Ross/402QA sets `fly secrets set LIVE402_PQ_LOG_SK=…`; 402dev never holds it. 402security must GO before this secret is set. |
-| `LIVE402_PQ_FALCON_ADDRESS` | unset | Public Algorand address for Falcon anchors. Never a private key. |
-| `LIVE402_PQ_FALCON_NETWORK` | unset | Must be `testnet` for any submit path. MainNet is rejected. |
+| `LIVE402_PQ_FALCON_ADDRESS` | fly.toml (public TestNet address) | Public Algorand address for Falcon anchors. Never a private key. |
+| `LIVE402_PQ_FALCON_NETWORK` | `testnet` in fly.toml | Must be `testnet` for any submit path. MainNet is rejected. |
 | `LIVE402_PQ_FALCON_BROADCAST` | unset | `1` allows the TestNet submit helper to call algod send after every other gate passes. Default remains `send_forbidden`. 402security must GO before this is set. |
 | `LIVE402_PQ_FALCON_SK` | unset | Optional det Falcon-1024 (`f1`, not NIST FN-DSA) private key: 2305-byte hex or standard base64. Fly secret only — never commit, never paste into chat. Unset = construction only. Malformed fails closed (no autogen). Ross generates the key out of band (not Pera, not the Ed25519 `LIVE402_PQ_LOG_SK` hex). 402dev never holds it. 402security must GO before this secret is set. |
 | `LIVE402_PQ_LOG` | unset | `0` forces transparency `unavailable` even if a signer is configured. |
@@ -174,16 +174,16 @@ fly launch --ha=false --name 402signal --no-deploy
 fly secrets set CDP_API_KEY_ID=… CDP_API_KEY_SECRET=…
 # After 402security GO only. Ross/402QA sets these; never paste values into chat. 402dev never holds them.
 # fly secrets set LIVE402_PQ_LOG_SK=…
-# Falcon TestNet only (not MainNet). 402security GO before BROADCAST=1 or LIVE402_PQ_FALCON_SK.
+# Falcon TestNet only (not MainNet). Public address + network are fly.toml [env].
+# 402security GO before BROADCAST=1 or LIVE402_PQ_FALCON_SK.
 # Ross generates Falcon-1024 out of band (not Pera, not the Ed25519 log hex).
-# fly secrets set LIVE402_PQ_FALCON_ADDRESS=… LIVE402_PQ_FALCON_NETWORK=testnet
 # fly secrets set LIVE402_PQ_FALCON_SK=…
 # LIVE402_PQ_FALCON_BROADCAST=1
 fly deploy
 fly ips list
 ```
 
-`fly.toml` already sets `app = "402signal"`, `internal_port = 8080`, `auto_stop_machines = "off"`, `min_machines_running = 1`, one VM. This SHA has one app process and does not provision or declare a second machine. Ross spend-GO'd ~$2/mo shared-cpu-1x later; that is a **separate PR** after this SHA GOs. Do not deploy from this PR. `send_forbidden` stays the default. TestNet broadcast still requires `LIVE402_PQ_FALCON_NETWORK=testnet`, `LIVE402_PQ_FALCON_BROADCAST=1`, and the other submit gates.
+`fly.toml` sets `app = "402signal"`, `internal_port = 8080`, `auto_stop_machines = "off"`, `min_machines_running = 1` on the **app** HTTP process (shared-cpu-1x 1GB). A second process group `falcon` is the isolated signer only (`python3 -m live402.pq.isolated_signer`; unsigned txn in, pqsig out). It does not serve HTTP `/route` and does not load `LIVE402_PQ_LOG_SK`. Ross spend-GO'd that machine: **shared-cpu-1x 256MB, about $2/mo**. Do not deploy, `fly scale`, or set secrets from this PR. The app process still defaults to `send_forbidden`. TestNet broadcast still requires `LIVE402_PQ_FALCON_NETWORK=testnet`, `LIVE402_PQ_FALCON_BROADCAST=1`, and the other submit gates.
 
 ## Namecheap BasicDNS (do not change until deploy)
 
@@ -214,5 +214,5 @@ live402/algod.py    pinned algod suggestedParams for the unpaid Algorand 402 ext
 live402/data/       fixture catalog
 tests/              unittest
 Dockerfile          Python 3.12-slim, 0.0.0.0:$PORT
-fly.toml            app 402signal, internal_port 8080, one machine
+fly.toml            app 402signal; HTTP app 1GB; isolated signer 256MB (~$2/mo)
 ```
