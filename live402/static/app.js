@@ -6,9 +6,6 @@
   const results = document.getElementById("search-results");
   const claimsCard = document.getElementById("claims-example");
   const claimsBody = document.getElementById("claims-example-body");
-  const pulseSection = document.getElementById("pulse");
-  const pulseTeaser = document.getElementById("pulse-teaser");
-  const navPulse = document.getElementById("nav-pulse");
   const copyBtn = document.getElementById("copy-curl");
   const curlEl = document.getElementById("curl-route");
 
@@ -123,36 +120,6 @@
     if (!pulse || typeof pulse !== "object") return false;
     const status = String(pulse.index_status || "").toLowerCase();
     return status === "pending" || status === "refreshing";
-  }
-
-  function pulseCatalogCounts(pulse) {
-    if (!pulse || typeof pulse !== "object") return null;
-    if (pulse.ok === false) return null;
-    const status = String(pulse.index_status || "ready").toLowerCase();
-    if (status !== "ready") return null;
-    const chains = pulse.chains;
-    if (!chains || typeof chains !== "object") return null;
-    const out = [];
-    ["base", "solana", "algorand"].forEach(function (name) {
-      const row = chains[name];
-      if (!row || typeof row !== "object") return;
-      const count = row.count;
-      if (typeof count !== "number" || !isFinite(count) || count <= 0) return;
-      out.push({ name: name, label: RAIL_NAMES[name] || name, count: count });
-    });
-    return out.length ? out : null;
-  }
-
-  function pulseUseful(pulse) {
-    return Boolean(pulseCatalogCounts(pulse));
-  }
-
-  function formatCount(n) {
-    try {
-      return Number(n).toLocaleString("en-US");
-    } catch (e) {
-      return String(n);
-    }
   }
 
   function safeLabel(hit) {
@@ -333,33 +300,6 @@
     }
   }
 
-  async function loadPulse() {
-    if (!pulseSection || !pulseTeaser) return;
-    try {
-      const res = await fetch("/pulse", { cache: "no-store" });
-      if (!res.ok) {
-        pulseSection.hidden = true;
-        if (navPulse) navPulse.hidden = true;
-        return;
-      }
-      const parsed = await res.json();
-      const counts = pulseCatalogCounts(parsed);
-      if (!counts) {
-        pulseSection.hidden = true;
-        if (navPulse) navPulse.hidden = true;
-        return;
-      }
-      pulseTeaser.textContent = counts.map(function (row) {
-        return row.label + " " + formatCount(row.count);
-      }).join(" · ");
-      pulseSection.hidden = false;
-      if (navPulse) navPulse.hidden = false;
-    } catch (e) {
-      pulseSection.hidden = true;
-      if (navPulse) navPulse.hidden = true;
-    }
-  }
-
   async function copyCurl() {
     if (!curlEl) return;
     const value = curlEl.textContent || "";
@@ -423,5 +363,4 @@
   } catch (e) {}
 
   syncSearch();
-  loadPulse();
 })();

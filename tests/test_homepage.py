@@ -215,19 +215,22 @@ class HomepageProductTests(unittest.TestCase):
         self.assertIn("Missing evidence is UNKNOWN, not no.", html)
         self.assertIn("UNKNOWN is better than a guess.", html)
 
-    def test_pulse_shown_or_hidden_per_usefulness(self):
+    def test_pulse_section_hidden_when_not_useful(self):
         html = self.html
         js = self.js
-        self.assertIn('id="pulse"', html)
-        self.assertRegex(html, r'id="pulse"[^>]*\bhidden\b')
-        self.assertIn('id="nav-pulse"', html)
-        self.assertRegex(html, r'id="nav-pulse"[^>]*\bhidden\b')
-        self.assertIn("function pulseUseful", js)
-        self.assertIn("function pulseCatalogCounts", js)
-        self.assertIn("index_status", js)
-        self.assertIn("pending", js)
-        self.assertIn("refreshing", js)
-        self.assertIn('status !== "ready"', js)
+        self.assertNotIn("<h2>Pulse</h2>", html)
+        self.assertNotIn('id="pulse"', html)
+        self.assertNotIn('id="nav-pulse"', html)
+        self.assertNotIn('href="#pulse"', html)
+        self.assertNotIn(">Pulse<", html)
+        self.assertIn('href="/pulse"', html)
+        self.assertIn("/pulse", html)
+        self.assertNotIn("Index pending", html)
+        self.assertNotIn("Index is filling", html)
+        self.assertNotIn("Pulse counts are 0", html)
+        self.assertNotIn("function pulseUseful", js)
+        self.assertNotIn("function pulseCatalogCounts", js)
+        self.assertNotIn("function loadPulse", js)
         self.assertIn('fetch("/pulse"', js)
         self.assertNotIn("healthy", js)
         self.assertNotIn("executable_now_rate", js)
@@ -236,7 +239,6 @@ class HomepageProductTests(unittest.TestCase):
         self.assertNotIn("7d reliability", html)
         self.assertNotIn("healthy", html)
         self.assertNotIn("Executable Now Rate", html)
-        self.assertIn("catalog listings, not 402Signal observations", html)
 
     def test_no_preview_route_mcp_openapi_regression(self):
         for path in (

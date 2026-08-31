@@ -28,7 +28,6 @@
         <a href="#product">Product</a>
         <a href="#try">Try it</a>
         <a href="#integrate">Integrate</a>
-        <a href="#pulse" id="nav-pulse" hidden>Pulse</a>
         <a href="https://github.com/402signal/402signal" rel="noopener noreferrer">GitHub</a>
       </nav>
     </header>
@@ -139,7 +138,7 @@
         <h3 class="subhead">MCP</h3>
         <p>Endpoint <code>https://402signal.com/mcp</code>. Tools: <code>route</code> (paid) and <code>preview</code> (free). See <a href="/mcp.json">MCP tool list</a> and <a href="/llms.txt">llms.txt</a>.</p>
         <p>Docs: <a href="/openapi.json">OpenAPI</a>, <a href="/mcp.json">MCP</a>, <a href="/llms.txt">llms.txt</a>, <a href="https://github.com/402signal/402signal" rel="noopener noreferrer">GitHub</a>.</p>
-        <p>Machine-readable: <a href="/.well-known/x402.json">/.well-known/x402.json</a>, <a href="/rails">/rails</a>, <a href="/attestation">/attestation</a>.</p>
+        <p>Machine-readable: <a href="/.well-known/x402.json">/.well-known/x402.json</a>, <a href="/rails">/rails</a>, <a href="/attestation">/attestation</a>, <a href="/pulse">/pulse</a>.</p>
       </section>
 
       <section id="rails" class="block">
@@ -149,12 +148,6 @@
           <li>Solana</li>
           <li>Algorand</li>
         </ul>
-      </section>
-
-      <section id="pulse" class="block" hidden>
-        <h2>Pulse</h2>
-        <p id="pulse-teaser" class="note"></p>
-        <p><a href="/pulse">GET /pulse</a> is the machine snapshot. Counts below are catalog listings, not 402Signal observations.</p>
       </section>
 
       <p class="validate-line">Building an x402 API? Check whether your endpoint is agent-ready. See unpaid <code>GET</code> / <code>POST /validate</code> in the <a href="/openapi.json">OpenAPI</a>.</p>
