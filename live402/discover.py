@@ -30,7 +30,7 @@ GUIDANCE = (
     "If inputSchema is missing, live may still be true with invocable:false and miss_reason no_input_schema. "
     "GET /mcp.json lists the MCP route tool (type mcp, toolName route); "
     "POST /mcp initialize and tools/list need no payment; tools/call route is the paid probe. "
-    "GET /preview?need= is a cached preflight (not_probed:true). Optional prefer_network=base|solana|algorand. GET /rails lists pay-in rails. "
+    "GET /preview?need= is a free request-time catalog search (not_probed:true). Optional prefer_network=base|solana|algorand. GET /rails lists pay-in rails. "
     "GET /pulse and GET /dashboard are sample lookups. GET /health is {ok:true} only. "
     "POST /validate {url} (or GET /validate?url=) is an unpaid seller probe: agent-ready? Fail-closed SSRF, not a /route paywall bypass. "
     "GET /attestation is a public sha256 of a recent 402signal_observed probe batch (not on-chain). "
@@ -446,14 +446,14 @@ def openapi_spec(resource_url: str = ROUTE) -> dict:
                     "operationId": "previewNeed",
                     "tags": ["Public"],
                     "summary": "Preview cached catalog hits without probing",
-                    "description": "Unpaid preflight from /pulse cache. Returns hits, prices, freshness, not_probed:true. Does not probe and does not charge. Paid POST /route remains the fail-closed 402 probe.",
+                    "description": "Unpaid request-time catalog search. Returns hits, prices, freshness, not_probed:true. Does not probe and does not charge. Paid POST /route remains the fail-closed 402 probe.",
                     "parameters": [
                         {
                             "in": "query",
                             "name": "need",
                             "required": True,
                             "schema": {"type": "string", "example": "weather"},
-                            "description": "Plain-English lookup to match against cached samples.",
+                            "description": "Plain-English lookup to search allowlisted catalogs.",
                         },
                         {
                             "in": "query",
@@ -827,7 +827,7 @@ HTTP 200 = live URL plus target contract. HTTP 503 = typed miss_reason.
 - GET /  human homepage
 - GET /dashboard  sample lookups per chain (Base / Solana / Algorand)
 - GET /pulse  same snapshot as JSON, including samples[]
-- GET /preview?need=weather  cached hits + prices + freshness + not_probed:true (does not probe, does not charge). Optional prefer_network=base|solana|algorand. HEAD 200 on /llms.txt /openapi.json /mcp.json /preview /rails /pulse.
+- GET /preview?need=weather  request-time catalog search + prices + freshness + not_probed:true (does not probe, does not charge). Optional prefer_network=base|solana|algorand. HEAD 200 on /llms.txt /openapi.json /mcp.json /preview /rails /pulse.
 - POST /validate {"url":"https://seller.example/x402"}  unpaid dual-probe: is this seller agent-ready? Also GET /validate?url=. Fail-closed SSRF. Not a /route paywall bypass. Readiness + claimed vs observed + flags. healthy omitted unless n_7d >= 10 observed.
 - GET /attestation  public sha256 of a recent 402signal_observed probe batch (batch_id, created_at, n, algo, hash). Not on-chain. Optional ?batch_id=.
 - GET /rails  three pay-in networks, asset, amountAtomic, facilitators, feePayers, maxTimeoutSeconds, per-rail up+latency

@@ -475,7 +475,7 @@ def catalog_url_allowed(url: str) -> bool:
 
 
 def pulse_catalogs() -> tuple[tuple[str, str], ...]:
-    """Same allowlisted hosts as CATALOGS. Pagination lives in catalog.py."""
+    """Same allowlisted hosts as CATALOGS. Request-time query lives in catalog.py."""
     return CATALOGS
 
 
@@ -1369,15 +1369,18 @@ def _fetch_one_catalog(rail: str, url: str, timeout: float) -> list[dict]:
     return out
 
 
-def fetch_discovery(limit: int = 20) -> list[dict]:
-    if fixtures.fixture_mode():
-        rows = fixtures.load_resources()
-        for row in rows:
-            row.setdefault("_rail", "fixture")
-        return rows
+def fetch_discovery(
+    need: str = "",
+    prefer_network: str | None = None,
+    limit: int = 20,
+) -> list[dict]:
+    """Need-scoped discovery. Never loads a 44k in-process index.
+
+    limit is kept for compat and is not a world-catalog page size.
+    """
+    _ = limit
     from live402 import catalog as catalog_mod
-    # limit kept for compat; do not truncate the paginated index.
-    return list(catalog_mod.get_index().get("items") or [])
+    return list(catalog_mod.query_for_need(need, prefer_network).get("items") or [])
 
 
 def _discovery_unavailable_miss(objective: str) -> dict:
@@ -1435,7 +1438,7 @@ def route_need(
     obj = select.parse_objective(objective)
     cons = constraints if isinstance(constraints, dict) else {}
     try:
-        items = fetch_discovery()
+        items = fetch_discovery(need, prefer_network=prefer)
     except Exception:
         return _discovery_unavailable_miss(obj)
     ranked = rank_resources(need, items, prefer_network=prefer)

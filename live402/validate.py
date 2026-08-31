@@ -16,17 +16,9 @@ def catalog_item_for(url: str) -> dict | None:
     if item:
         return item
     try:
-        idx = catalog.peek_index()
+        return catalog.item_for_url(raw)
     except Exception:
-        idx = None
-    if not isinstance(idx, dict):
         return None
-    for row in idx.get("items") or []:
-        if not isinstance(row, dict):
-            continue
-        if probe._resource_url(row) == raw:
-            return row
-    return None
 
 
 def _ssrf_body(url: str) -> dict:

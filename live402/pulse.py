@@ -748,8 +748,27 @@ def _chain_payload(chain: str, items: list[dict], source: dict) -> dict:
     return payload
 
 
-def _pending_chains(error: str) -> dict[str, dict]:
-    """Last-good / pending rows. No catalog walk. No theme rebuild."""
+def _upstream_chain(chain: str, url: str) -> dict:
+    """Honest unknown totals. Do not invent a local 14k from a missing mirror."""
+    host = (urlparse(url).hostname or "").lower()
+    label = CHAIN_LABELS.get(chain, chain)
+    return {
+        "count": None,
+        "source": {
+            "ok": True,
+            "host": host or "upstream",
+            "catalog": "upstream",
+        },
+        "themes": [],
+        "insight": (
+            f"{label} catalog is queried at request time; "
+            "402signal does not store a local index."
+        ),
+        "samples": [],
+    }
+
+
+def _upstream_chains() -> dict[str, dict]:
     chains: dict[str, dict] = {}
     for rail, url in probe.pulse_catalogs():
         if rail not in CHAINS:
@@ -757,7 +776,7 @@ def _pending_chains(error: str) -> dict[str, dict]:
         if not probe.catalog_url_allowed(url):
             chains[rail] = _stale_chain(rail, "not_allowlisted")
             continue
-        chains[rail] = _stale_chain(rail, error)
+        chains[rail] = _upstream_chain(rail, url)
     for chain in CHAINS:
         if chain not in chains:
             chains[chain] = _stale_chain(chain, "missing")
@@ -786,32 +805,22 @@ def _observed_for_pulse() -> dict:
     return observed
 
 
-def _placeholder_payload(error: str) -> dict:
-    """Explicit in-progress / pending snapshot. Never calls get_index or refresh."""
-    status = "refreshing" if error == "index_refreshing" else "pending"
-    chains = _pending_chains(error)
+def _upstream_payload() -> dict:
+    """Observed-only pulse. No local catalog totals. Never waits on discovery."""
+    chains = _upstream_chains()
     return {
         "ok": True,
         "updated_at": probe.now_iso(),
         "cached_s": CACHE_TTL,
-        "index_status": status,
+        "index_status": "upstream",
         "chains": chains,
         "samples": _mixed_samples(chains),
         "observed": _observed_for_pulse(),
     }
 
 
-def _index_status_for(idx, refreshing: bool) -> str:
-    if refreshing or (isinstance(idx, dict) and idx.get("in_progress")):
-        return "refreshing"
-    if idx is None:
-        return "pending"
-    return "ready"
-
-
 def _collect() -> dict:
     chains: dict[str, dict] = {}
-    index_status = "ready"
     if fixtures.fixture_mode():
         by_chain: dict[str, list[dict]] = {c: [] for c in CHAINS}
         for item in fixtures.load_resources():
@@ -827,109 +836,48 @@ def _collect() -> dict:
             )
             chains[chain] = payload
             _remember(chain, payload)
-    else:
-        # Never get_index()/refresh() — those block the ThreadingHTTPServer thread.
-        refreshing = False
-        try:
-            refreshing = catalog.refresh_in_progress()
-        except Exception:
-            refreshing = False
-        idx = catalog.peek_index()
-        index_status = _index_status_for(idx, refreshing)
-        if index_status != "ready":
-            error = "index_refreshing" if index_status == "refreshing" else "index_pending"
-            chains = _pending_chains(error)
-        else:
-            by_rail = idx.get("by_rail") or {}
-            errors = idx.get("errors") or {}
-            for rail, url in probe.pulse_catalogs():
-                if rail not in CHAINS:
-                    continue
-                if not probe.catalog_url_allowed(url):
-                    chains[rail] = _stale_chain(rail, "not_allowlisted")
-                    continue
-                host = (urlparse(url).hostname or "").lower()
-                items = list(by_rail.get(rail) or [])
-                err = errors.get(rail)
-                if not items and err:
-                    chains[rail] = _stale_chain(rail, "fetch_failed")
-                    continue
-                payload = _chain_payload(
-                    rail,
-                    items,
-                    {"ok": True, "host": host},
-                )
-                chains[rail] = payload
-                _remember(rail, payload)
-            for chain in CHAINS:
-                if chain not in chains:
-                    chains[chain] = _stale_chain(chain, "missing")
-
-    samples = _mixed_samples(chains)
-    return {
-        "ok": True,
-        "updated_at": probe.now_iso(),
-        "cached_s": CACHE_TTL,
-        "index_status": index_status,
-        "chains": chains,
-        "samples": samples,
-        "observed": _observed_for_pulse(),
-    }
-
-
-def _is_placeholder(payload) -> bool:
-    return isinstance(payload, dict) and payload.get("index_status") in ("pending", "refreshing")
+        samples = _mixed_samples(chains)
+        return {
+            "ok": True,
+            "updated_at": probe.now_iso(),
+            "cached_s": CACHE_TTL,
+            "index_status": "fixture",
+            "chains": chains,
+            "samples": samples,
+            "observed": _observed_for_pulse(),
+        }
+    return _upstream_payload()
 
 
 def get_pulse() -> dict:
     """In-memory cache ~15s. Query strings are never read here.
 
     Single-flight: one in-flight _collect. Waiters return last-good immediately
-    (or a cheap in-progress/pending payload). During a catalog crawl, never
-    rebuild themes from the full index and never call refresh()/get_index().
+    (or a cheap upstream payload). Never calls get_index/refresh/query_for_need.
+    Never invents local catalog totals.
     """
     global _collecting
     now = time.monotonic()
     with _lock:
         payload = _cache.get("payload")
-        if (
-            payload is not None
-            and (now - _cache["at"]) < CACHE_TTL
-            and not _is_placeholder(payload)
-        ):
+        if payload is not None and (now - _cache["at"]) < CACHE_TTL:
             return payload
 
-    refreshing = False
-    try:
-        refreshing = catalog.refresh_in_progress()
-    except Exception:
-        refreshing = False
-
-    cheap_error = None
+    cheap = False
     with _lock:
         payload = _cache.get("payload")
         now = time.monotonic()
-        if (
-            payload is not None
-            and (now - _cache["at"]) < CACHE_TTL
-            and not _is_placeholder(payload)
-        ):
+        if payload is not None and (now - _cache["at"]) < CACHE_TTL:
             return payload
-        if payload is not None and not _is_placeholder(payload) and (refreshing or _collecting):
+        if payload is not None and _collecting:
             return payload
         if _collecting:
-            # Another thread is in the expensive collect. Do not start a second
-            # theme rebuild and do not wait on it.
-            cheap_error = "index_refreshing" if refreshing else "index_pending"
-        elif refreshing:
-            # Crawl in flight: cheap pending only. Do not mark _collecting —
-            # placeholders are cheap and must not block a later real collect.
-            cheap_error = "index_refreshing"
+            cheap = True
         else:
             _collecting = True
 
-    if cheap_error is not None:
-        return _placeholder_payload(cheap_error)
+    if cheap:
+        return _upstream_payload()
 
     try:
         built = _collect()
@@ -938,88 +886,83 @@ def get_pulse() -> dict:
             _collecting = False
         raise
     with _lock:
-        if not _is_placeholder(built):
-            _cache["at"] = time.monotonic()
-            _cache["payload"] = built
+        _cache["at"] = time.monotonic()
+        _cache["payload"] = built
         _collecting = False
     return built
 
 
 def preview_need(need: str, prefer_network: str | None = None) -> dict:
-    """Cached catalog preflight. Never probes. Never charges."""
+    """Free request-time catalog search. Never probes. Never charges."""
     raw = (need or "").strip()
-    pulse = get_pulse()
-    freshness = pulse.get("updated_at")
-    cached_s = pulse.get("cached_s")
+    freshness = probe.now_iso()
     if not raw:
         return {
             "need": "",
             "not_probed": True,
             "freshness": freshness,
-            "cached_s": cached_s,
+            "cached_s": None,
             "hits": [],
             "miss_reason": "invalid_need",
         }
-    q = probe._tokens(raw)
     prefer = probe.normalize_prefer_network(prefer_network)
     named = prefer or named_chain(raw)
-    hits: list[dict] = []
-    seen: set[tuple[str, str]] = set()
-    samples = list(pulse.get("samples") or [])
-    chains = pulse.get("chains") or {}
-    for chain in CHAINS:
-        samples.extend(list((chains.get(chain) or {}).get("samples") or []))
+    try:
+        working = catalog.query_for_need(raw, prefer_network=named)
+    except Exception:
+        working = {"items": []}
+    items = list(working.get("items") or [])
+    ranked = probe.rank_resources(raw, items, prefer_network=named)
     rails_up = _rails_up_map()
     by_need_chains: dict[str, set[str]] = {}
-    scored: list[tuple[int, int, dict]] = []
-    for sample in samples:
-        if not isinstance(sample, dict):
+    for item in items:
+        if not isinstance(item, dict):
             continue
-        url = str(sample.get("url") or "").strip()
-        if probe.skip_candidate_url(url):
-            continue
-        chain = str(sample.get("chain") or "")
-        need_key = str(sample.get("need") or sample.get("label") or "").strip().lower()
-        if need_key and chain:
+        url = probe._resource_url(item)
+        chain = probe._item_rail(item)
+        need_key = (sample_need_for(item, url) or raw).strip().lower()
+        if need_key and chain in CHAINS:
             by_need_chains.setdefault(need_key, set()).add(chain)
+    hits: list[dict] = []
+    scored: list[tuple[int, int, dict]] = []
+    seen: set[str] = set()
+    for idx, item in enumerate(ranked):
+        if not isinstance(item, dict):
+            continue
+        url = probe._resource_url(item)
+        if not url or probe.skip_candidate_url(url):
+            continue
+        if url in seen:
+            continue
+        seen.add(url)
+        chain = probe._item_rail(item)
+        if chain not in CHAINS:
+            chain = ""
         if named and chain != named:
             continue
-        key = (need_key, url)
-        if key in seen:
+        href = _https_href(url) or (
+            url if fixtures.fixture_mode() and str(url).startswith("https://") else ""
+        )
+        if not href:
             continue
-        seen.add(key)
-        blob = " ".join([str(sample.get("need") or ""), str(sample.get("label") or ""), url])
-        hay = probe._tokens(blob)
-        score = len(q & hay) * 10 if q else 0
-        low = blob.lower()
-        need_l = raw.lower()
-        if need_l and need_l in low:
-            score += 20
-        for tok in q:
-            if tok in low:
-                score += 2
-        if score <= 0:
-            continue
-        # Ranking/selection only. Do not mark live — preview is unpaid cache, not a probe.
-        algo_lead = 0 if (named is None and chain == "algorand") else 1
-        fac = sample.get("facilitator")
-        if isinstance(fac, str) and fac.strip().startswith("https://"):
-            fac_url = fac.strip()
-        else:
-            fac_url = None
+        label = sample_need_for(item, url) or raw
+        fac = _item_facilitator(item)
         row = {
-            "need": sample.get("need") or sample.get("label"),
-            "label": sample.get("label") or sample.get("need"),
-            "url": url,
-            "price": sample.get("price"),
+            "need": label,
+            "label": label,
+            "url": href,
+            "price": _item_price_label(item),
             "chain": chain or None,
-            "facilitator": fac_url,
-            "method": sample.get("method") or "POST",
-            "inputSchema_present": bool(sample.get("inputSchema_present")),
+            "facilitator": fac,
+            "method": probe.extract_method(item),
+            "inputSchema_present": bool(
+                item.get("_input_schema_present") or probe.extract_input_schema(item)
+            ),
             "rails_up": rails_up.get(chain) if chain else None,
         }
-        scored.append((algo_lead, -score, row))
-    scored.sort()
+        algo_lead = 0 if (named is None and chain == "algorand") else 1
+        scored.append((algo_lead, idx, row))
+    scored.sort(key=lambda pair: (pair[0], pair[1]))
     for _lead, _neg, row in scored[:8]:
         need_key = str(row.get("need") or "").strip().lower()
         chain = str(row.get("chain") or "")
@@ -1031,7 +974,7 @@ def preview_need(need: str, prefer_network: str | None = None) -> dict:
         "need": raw,
         "not_probed": True,
         "freshness": freshness,
-        "cached_s": cached_s,
+        "cached_s": None,
         "hits": hits,
     }
 
