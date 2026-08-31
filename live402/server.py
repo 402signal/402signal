@@ -43,6 +43,10 @@ _VOLUME_DUMP_PATHS = frozenset(
         "/data/live402-history.sqlite",
         "/data/live402-history.sqlite-wal",
         "/data/live402-history.sqlite-shm",
+        "/data/pq-log.sqlite",
+        "/data/pq-log.sqlite-wal",
+        "/data/pq-log.sqlite-shm",
+        "/pq-log.sqlite",
         "/live402-history.sqlite",
         "/catalog/dump",
         "/catalog/export",
@@ -262,6 +266,19 @@ class Handler(SimpleHTTPRequestHandler):
         if not getattr(self, "_omit_body", False):
             self.wfile.write(body)
 
+    def _bytes(self, code: int, body: bytes, content_type: str, extra_headers: dict | None = None) -> None:
+        headers = {"Cache-Control": "no-store"}
+        headers.update(extra_headers or {})
+        self.send_response(code)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self._cors()
+        for key, val in headers.items():
+            self.send_header(key, val)
+        self.end_headers()
+        if not getattr(self, "_omit_body", False):
+            self.wfile.write(body)
+
     def _text(self, code: int, body: str, content_type: str = "text/plain; charset=utf-8") -> None:
         data = body.encode("utf-8")
         self.send_response(code)
@@ -357,7 +374,7 @@ class Handler(SimpleHTTPRequestHandler):
         }
         if self._rewrite_static_path():
             return SimpleHTTPRequestHandler.do_HEAD(self)
-        if parsed.path in head_ok:
+        if parsed.path in head_ok or parsed.path.startswith("/pq/log/"):
             self._omit_body = True
             try:
                 return self.do_GET()
@@ -419,6 +436,13 @@ class Handler(SimpleHTTPRequestHandler):
                 pulse.get_pulse(),
                 extra_headers={"Cache-Control": "no-store"},
             )
+        if parsed.path == "/pq/log" or parsed.path.startswith("/pq/log/"):
+            if not self._public_allowed("pqlog"):
+                return self._json(429, {"error": "rate limit"})
+            from live402.pq import http as pq_http
+
+            code, body, ctype, extra = pq_http.handle(parsed.path)
+            return self._bytes(code, body, ctype, extra)
         if parsed.path == "/attestation":
             if not self._public_allowed("attestation"):
                 return self._json(429, {"error": "rate limit"})
