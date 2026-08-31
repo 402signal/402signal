@@ -3,7 +3,8 @@
 Product-GO for the log in CI/local. Not MainNet GO.
 Falcon SK is not on this app. Router 6PN client is fail-closed unless
 LIVE402_PQ_SIGNER_TOKEN is set. Homepage PQ copy renders only when
-last_confirmed has a real TestNet txid.
+last_confirmed has a real TestNet txid. GET /transparency is the first-party
+read page. Homepage PQ card is injected only when last_confirmed.size > 0.
 """
 
 from __future__ import annotations

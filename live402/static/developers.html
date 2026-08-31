@@ -179,14 +179,19 @@
         <h2>Validate and attestation</h2>
         <p><code>POST /validate</code> returns readiness, claimed vs observed, and flags. Never a binary healthy flag. Unpaid probes are GET first, then POST empty JSON only if GET was not a live 402 and POST is justified. Catalog-declared seller bodies are never POSTed. Required-body misses are <code>unsafe_to_probe</code>. DNS is resolved once and the TCP/TLS connection is pinned to those SSRF-checked public IPs with TLS SNI and HTTP Host set to the original hostname.</p>
         <p><code>GET /attestation</code> is a public sha256 of a recent 402signal_observed probe batch. It is a hash of that batch, not an on-chain proof.</p>
-        <p><code>GET /pq/log/checkpoint</code> and <code>/pq/log/tile/*</code> are an experimental C2SP transparency log. They are not MainNet-anchored. TestNet Falcon broadcast is off unless explicitly enabled. Paid <code>/route</code> does not wait for chain inclusion. Falcon authorizes a checkpoint transaction, not a merchant payment. Paid <code>/route</code> may include <code>pq_trust.transparency</code> with status <code>pending</code> or <code>unavailable</code>. <code>payment_authorization.pq_native</code> is false. There is no <code>/trust</code> page.</p>
+        <p>402Signal maintains a public append-only transparency log at <code>/pq/log/checkpoint</code> and <code>/pq/log/tile/*</code>.</p>
+        <p>Confirmed checkpoints are currently anchored to Algorand TestNet using native Falcon-1024 (f1) authorization.</p>
+        <p>The Algorand transaction authorizes a transparency-log checkpoint. It is not a merchant payment, and paid <code>/route</code> does not wait for blockchain confirmation.</p>
+        <p>The human-readable transparency view is available at <a href="/transparency">/transparency</a>.</p>
+        <p>Paid <code>/route</code> may include <code>pq_trust.transparency</code> with status <code>pending</code> or <code>unavailable</code>. <code>payment_authorization.pq_native</code> is false. There is no <code>/trust</code> page.</p>
       </section>
 
       <section class="block">
         <h2>Public endpoints</h2>
         <p>These match the OpenAPI surface. Paid paths are named as code, not links, so a browser click does not hit a paywall.</p>
         <p><code>POST /route</code> · <code>GET /route</code> · <code>POST /mcp</code> tools/call route · <a href="/mcp.json">GET /mcp.json</a> · <a href="/preview?need=YOUR_NEED">GET /preview</a> · <a href="/rails">GET /rails</a> · <code>GET /health</code> · <a href="/pulse">GET /pulse</a> · <code>POST /validate</code> · <a href="/attestation">GET /attestation</a> · <a href="/openapi.json">GET /openapi.json</a> · <a href="/.well-known/x402.json">GET /.well-known/x402.json</a> · <a href="/llms.txt">GET /llms.txt</a></p>
-        <p class="note">The human explanation lives on <a href="/how">How it works</a>. This page is the integration guide.</p>
+        <p>Human pages: <a href="/how">How it works</a> · <a href="/transparency">Transparency</a></p>
+        <p class="note">The human explanation lives on <a href="/how">How it works</a>. Machine log interfaces stay at <code>/pq/log/checkpoint</code> and <code>/pq/log/tile/*</code>. This page is the integration guide.</p>
       </section>
 
       <section class="block">
@@ -194,6 +199,7 @@
         <p class="link-row">
           <a href="/openapi.json">OpenAPI</a>
           <a href="/llms.txt">llms.txt</a>
+          <a href="/transparency">Transparency</a>
           <a href="https://github.com/402signal/402signal" rel="noopener noreferrer">GitHub</a>
           <a href="/mcp.json">MCP tool definition</a>
         </p>
@@ -206,6 +212,7 @@
           <a href="/rails">/rails</a>
           <a href="/attestation">/attestation</a>
           <a href="/pulse">/pulse</a>
+          <a href="/transparency">/transparency</a>
         </p>
       </section>
     </main>
@@ -225,6 +232,7 @@
         <a href="https://github.com/402signal/402signal" rel="noopener noreferrer">GitHub</a>
         <a href="https://x.com/402Signal" rel="noopener noreferrer">@402Signal</a>
         <a href="/openapi.json">OpenAPI</a>
+        <a href="/transparency">Transparency</a>
         <a href="mailto:402signal@gmail.com">Contact</a>
       </p>
     </footer>

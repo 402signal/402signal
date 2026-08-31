@@ -799,3 +799,26 @@ def save_confirmed_checkpoint(
         conn.commit()
         _chmod_db_files(_conn_path or db_path())
         return last_confirmed_checkpoint()
+
+
+def list_confirmed_anchors() -> list[dict]:
+    """Persisted confirmed rows, newest first. Read-only. Does not invent rows."""
+    with _lock:
+        conn = _connect()
+        cur = conn.execute(
+            "SELECT tree_size, origin, root, txid, confirmed_round, at "
+            "FROM confirmed_anchors ORDER BY at DESC, tree_size DESC"
+        )
+        rows = []
+        for tree_size, origin, root, txid, confirmed_round, at in cur.fetchall():
+            rows.append(
+                {
+                    "size": int(tree_size or 0),
+                    "origin": str(origin or ""),
+                    "root": str(root or ""),
+                    "txid": str(txid or ""),
+                    "round": int(confirmed_round or 0),
+                    "at": int(at or 0),
+                }
+            )
+        return rows

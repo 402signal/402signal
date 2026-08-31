@@ -28,7 +28,9 @@ HUMAN_PAGES = {
     "/developers": "developers.html",
     "/developers.html": "developers.html",
 }
-STATIC_FILES = {"/styles.css", "/app.js", "/dashboard.js"}
+# Server-rendered human pages. Intercept before static rewrite. Not STATIC_DIR files.
+HUMAN_DYNAMIC_PATHS = frozenset({"/transparency", "/transparency.html"})
+STATIC_FILES = {"/styles.css", "/app.js", "/dashboard.js", "/transparency.js"}
 # Process-local volume files. Never HTTP-download, never static, never OpenAPI.
 _VOLUME_DUMP_PATHS = frozenset(
     {
@@ -372,6 +374,12 @@ class Handler(SimpleHTTPRequestHandler):
             "/pulse",
             "/attestation",
         }
+        if parsed.path in HUMAN_DYNAMIC_PATHS:
+            self._omit_body = True
+            try:
+                return self._html(200, self._transparency_html(), {"Cache-Control": "no-store"})
+            finally:
+                self._omit_body = False
         injected = self._homepage_html()
         if injected is not None:
             self._omit_body = True
@@ -394,7 +402,7 @@ class Handler(SimpleHTTPRequestHandler):
         self.end_headers()
 
     def _homepage_html(self) -> str | None:
-        """Static homepage plus optional TestNet PQ section when last_confirmed exists."""
+        """Inject homepage PQ card only when last_confirmed.size > 0."""
         parsed = urlparse(self.path)
         if parsed.path not in ("/", "/index.html"):
             return None
@@ -412,10 +420,17 @@ class Handler(SimpleHTTPRequestHandler):
             return html
         return html.replace(marker, section + "    </main>", 1)
 
+    def _transparency_html(self) -> str:
+        from live402.pq import transparency as pq_view
+
+        return pq_view.render_html()
+
     def do_GET(self) -> None:
         if self._deny_private_store():
             return
         parsed = urlparse(self.path)
+        if parsed.path in HUMAN_DYNAMIC_PATHS:
+            return self._html(200, self._transparency_html(), {"Cache-Control": "no-store"})
         if parsed.path in HUMAN_PAGES or parsed.path in STATIC_FILES:
             injected = self._homepage_html()
             if injected is not None:

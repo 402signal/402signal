@@ -35,11 +35,11 @@
     <main>
       <section class="hero compact">
         <h1>Browse x402 services</h1>
-        <p class="lede">Search discovery listings across Base, Solana and Algorand. Catalog rows are not currently live.</p>
+        <p class="lede">Search discovery listings across Base, Solana and Algorand.</p>
       </section>
 
       <form id="search-form">
-        <p class="note persist">These are discovery records, not fresh 402Signal checks. DISCOVERED listings are catalog rows, not live-probed routes. OBSERVED is prior 402Signal history when it exists. Shown counts are discovery display only and are not verified or live-probed. Agents pay POST /route for a ROUTED live check.</p>
+        <p class="note persist">These are discovery listings, not fresh checks. OBSERVED means prior 402Signal history when it exists. Before an agent spends, use the paid /route check for a current observation.</p>
         <label class="label" for="need">What does your agent need?</label>
         <input id="need" class="editable" type="text" value="" placeholder="weather, token risk, web search..." autocomplete="off" spellcheck="false" />
         <div class="chips" id="need-chips">
@@ -72,6 +72,7 @@
         <a href="https://github.com/402signal/402signal" rel="noopener noreferrer">GitHub</a>
         <a href="https://x.com/402Signal" rel="noopener noreferrer">@402Signal</a>
         <a href="/openapi.json">OpenAPI</a>
+        <a href="/transparency">Transparency</a>
         <a href="mailto:402signal@gmail.com">Contact</a>
       </p>
     </footer>

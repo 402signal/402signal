@@ -116,7 +116,7 @@
     side.className = "result-side claim";
     const label = document.createElement("p");
     label.className = "result-side-label";
-    label.textContent = "DISCOVERED · discovery claim";
+    label.textContent = "DISCOVERED · catalog listing";
     side.appendChild(label);
     const bits = document.createElement("p");
     bits.className = "result-bits";
@@ -138,7 +138,7 @@
     side.className = "result-side observation";
     const label = document.createElement("p");
     label.className = "result-side-label";
-    label.textContent = "OBSERVED · 402Signal observation";
+    label.textContent = "OBSERVED · prior 402Signal check";
     side.appendChild(label);
     const bits = document.createElement("p");
     bits.className = "result-bits";

@@ -100,27 +100,10 @@ def public_anchor() -> dict | None:
 
 
 def homepage_pq_html() -> str:
-    """TestNet PQ section. Empty unless last_confirmed has a real txid."""
-    import html as html_mod
+    """Homepage PQ card. Empty unless last_confirmed.size > 0 with a real txid."""
+    from live402.pq import transparency as pq_view
 
-    conf = public_anchor()
-    if not conf:
-        return ""
-    txid = html_mod.escape(str(conf["txid"]), quote=True)
-    explorer = html_mod.escape(str(conf["explorer"]), quote=True)
-    return (
-        '      <section class="pq-testnet" id="pq-testnet">\n'
-        '        <p class="pq-badge">PQ transparency · TestNet</p>\n'
-        "        <p>Paid POST /route independently checks a seller. Catalog listings "
-        "are claimed. The observation is what the endpoint returned.</p>\n"
-        "        <p>Free GET /preview does not probe. The independent check is the "
-        "paid /route call.</p>\n"
-        "        <p>This TestNet transaction authorizes a log checkpoint. It is not a "
-        "merchant payment. Routing does not wait for chain inclusion.</p>\n"
-        '        <p><a class="btn secondary" href="%s" rel="noopener noreferrer">'
-        "View TestNet transaction</a></p>\n"
-        '      </section>\n'
-    ) % (explorer,)
+    return pq_view.homepage_pq_html()
 
 
 def save_anchor(size: int, at: int) -> None:

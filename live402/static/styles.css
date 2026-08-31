@@ -589,8 +589,129 @@ a.lookup:link, a.lookup:visited { color: var(--ink); text-decoration: none; }
   padding: 4px 10px;
   margin: 0 0 12px;
 }
+.pq-testnet h2 {
+  margin: 0 0 10px;
+  font-size: 22px;
+}
 .pq-testnet p { color: var(--muted); }
+.pq-testnet .pq-evidence {
+  color: var(--ink);
+  font-size: 14px;
+}
 .pq-testnet .btn { margin-top: 8px; }
+
+.pq-status {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin: 0 0 36px;
+  padding: 16px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+.pq-kicker {
+  margin: 0 0 4px;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+.confirm-card .pq-kicker { margin-top: 12px; }
+.pq-stat { margin: 0; color: var(--ink); font-size: 15px; }
+.flow-four {
+  grid-template-columns: minmax(0, 1fr) 20px minmax(0, 1fr) 20px minmax(0, 1fr) 20px minmax(0, 1fr);
+}
+.confirm-card .mono-copy,
+.verify-copies .mono-copy {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.mono, code.mono {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.mono.wrap { overflow-wrap: anywhere; word-break: break-word; }
+.scroll-block {
+  overflow-x: auto;
+  max-width: 100%;
+  background: var(--input);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 10px 12px;
+  margin: 8px 0 14px;
+}
+.scroll-block .mono, .scroll-block .code {
+  white-space: pre;
+  word-break: normal;
+  overflow-wrap: normal;
+  margin: 0;
+}
+.ext-hint { color: var(--muted); font-size: 12px; }
+.copy-status {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+}
+.history-cards { display: none; }
+.copy-btn {
+  font: 650 13px/1 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: var(--input);
+  color: var(--accent);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 8px 10px;
+  min-height: 36px;
+  cursor: pointer;
+}
+.copy-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.pq-decode { margin: 12px 0 0; }
+.pq-decode > div {
+  display: grid;
+  grid-template-columns: 9rem 1fr;
+  gap: 4px 12px;
+  margin: 0 0 8px;
+}
+.pq-decode dt { color: var(--muted); font-size: 12px; letter-spacing: 0.04em; }
+.pq-decode dd { margin: 0; }
+.table-wrap { overflow-x: auto; max-width: 100%; }
+.anchor-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.anchor-table th, .anchor-table td {
+  text-align: left;
+  padding: 8px 10px 8px 0;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+.anchor-table th { color: var(--muted); font-weight: 650; letter-spacing: 0.04em; }
+.growth-chart { margin: 16px 0 0; }
+.growth-chart figcaption { color: var(--muted); font-size: 13px; margin: 0 0 8px; }
+.growth-chart svg { width: 100%; max-width: 360px; height: auto; display: block; }
+.tech-details {
+  margin: 0 0 36px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--panel);
+}
+.tech-details summary {
+  cursor: pointer;
+  color: var(--ink);
+  min-height: 32px;
+}
+.tech-body { margin-top: 12px; }
+.verify-list, .verify-copies { padding-left: 1.2rem; }
+.verify-copies li { margin: 0 0 8px; }
+.pq-decoder { margin-top: 20px; }
 
 .destinations {
   display: grid;
@@ -685,9 +806,13 @@ a.lookup:link, a.lookup:visited { color: var(--ink); text-decoration: none; }
 
 @media (max-width: 720px) {
   .result-sides { grid-template-columns: 1fr; }
-  .flow {
+  .flow,
+  .flow-four {
     grid-template-columns: 1fr;
     grid-template-rows: auto 22px auto 22px auto;
+  }
+  .flow-four {
+    grid-template-rows: auto 22px auto 22px auto 22px auto;
   }
   .flow-conn {
     width: 2px;
@@ -725,4 +850,17 @@ a.lookup:link, a.lookup:visited { color: var(--ink); text-decoration: none; }
   .code-card { padding: 10px 10px 12px; }
   .seg { width: 100%; }
   .seg-btn { flex: 1 1 auto; }
+  .pq-status { grid-template-columns: 1fr; padding: 14px 12px; }
+  .pq-decode > div { grid-template-columns: 1fr; }
+  .pq-testnet { padding: 16px 14px 14px; }
+  .confirm-card { padding: 16px 14px 14px; }
+  .history-table { display: none; }
+  .history-cards { display: grid; gap: 10px; }
+  .history-card {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 12px;
+  }
+  .history-card p { margin: 0 0 6px; }
 }

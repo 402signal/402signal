@@ -1153,26 +1153,54 @@ def dashboard_html(payload: dict | None = None) -> str:
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Examples</title>
+  <title>Example lookups · 402Signal</title>
+  <meta name="description" content="Example lookups from public x402 discovery sources. Candidates, not current verification." />
+  <link rel="canonical" href="https://402signal.com/dashboard" />
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
   <div class="page wide">
-    <header class="mast">
-      <div class="brand-row">
-        <div class="mark">402</div>
-        <h1>Lookups we can try</h1>
-      </div>
-      <p class="sub">These came from public Base / Solana / Algorand catalogs. We still probe before you pay.</p>
-      <nav class="nav"><a href="/">Home</a> · <a href="/dashboard">Examples</a> · <a href="/pulse">JSON</a></nav>
+    <header class="site">
+      <a class="brand" href="/">
+        <span class="mark">402</span>
+        <span class="brand-name">402Signal</span>
+      </a>
+      <nav class="nav" aria-label="Primary">
+        <a href="/catalog">Catalog</a>
+        <a href="/how">How it works</a>
+        <a href="/developers">Developers</a>
+        <a href="https://github.com/402signal/402signal" rel="noopener noreferrer">GitHub</a>
+      </nav>
     </header>
-    <p class="muted">Last updated <time id="updated-at">{updated}</time> · refreshes about every 20s</p>
-    <div class="board" id="board">
-      {"".join(cols)}
-    </div>
-    <p class="ours-note">402Signal itself: <a href="https://402signal.com/route" rel="noopener noreferrer">402signal.com/route</a>. Pay $0.01 USDC for a live payable URL or an honest miss.</p>
+    <main>
+      <section class="hero compact">
+        <h1>Lookups 402Signal can try</h1>
+        <p class="lede">These examples come from public x402 discovery sources. They are candidates, not current verification. 402Signal still probes before an agent relies on one.</p>
+      </section>
+      <p class="muted">Last updated <time id="updated-at">{updated}</time> · refreshes about every 20s · <a href="/pulse">/pulse JSON</a></p>
+      <p class="note">The paid routing check is POST /route for $0.01 USDC. Examples on this page are not current verification.</p>
+      <div class="board" id="board">
+        {"".join(cols)}
+      </div>
+    </main>
     <footer class="foot">
-      <p><a href="https://402signal.com">402signal.com</a> · <a href="https://x.com/402Signal" rel="noopener noreferrer">@402Signal</a></p>
+      <p class="listed-on">
+        Listed on
+        <a href="https://glama.ai/mcp/servers/402signal/402signal" rel="noopener noreferrer">Glama</a>
+        <a href="https://registry.modelcontextprotocol.io/?q=402signal" rel="noopener noreferrer">MCP Registry</a>
+        <a href="https://github.com/Haustorium12/gold-402/blob/main/directory/aggregators.md" rel="noopener noreferrer">Gold-402</a>
+        <a href="https://smithery.ai/servers/live402/signal" rel="noopener noreferrer">Smithery</a>
+        <a href="https://agentic.market/services/402signal-com" rel="noopener noreferrer">Agentic Market</a>
+        <a href="https://github.com/michielpost/x402-dev/blob/master/Projects.md" rel="noopener noreferrer">x402-dev</a>
+        <a href="https://facilitator.goplausible.xyz/dashboard/bazaar?q=402signal" rel="noopener noreferrer">GoPlausible</a>
+      </p>
+      <p>
+        <a href="https://github.com/402signal/402signal" rel="noopener noreferrer">GitHub</a>
+        <a href="https://x.com/402Signal" rel="noopener noreferrer">@402Signal</a>
+        <a href="/openapi.json">OpenAPI</a>
+        <a href="/transparency">Transparency</a>
+        <a href="mailto:402signal@gmail.com">Contact</a>
+      </p>
     </footer>
   </div>
   <script src="/dashboard.js"></script>

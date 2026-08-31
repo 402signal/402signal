@@ -3,6 +3,7 @@
 import json
 import os
 import re
+import tempfile
 import unittest
 from html.parser import HTMLParser
 from http.client import HTTPConnection
@@ -185,11 +186,17 @@ class HomepageProductTests(unittest.TestCase):
     def setUpClass(cls):
         os.environ.pop("LOCAL_FREE", None)
         os.environ["LIVE402_FIXTURE"] = "1"
+        cls._pq_tmp = tempfile.TemporaryDirectory()
+        os.environ["LIVE402_PQ_LOG_DB"] = os.path.join(cls._pq_tmp.name, "pq-log.sqlite")
+        from live402.pq import store as pq_store
+
+        pq_store.reset()
         cls.httpd, cls.host, cls.port = _serve()
         cls.home = _get_full(cls.port, "/")[1]
         cls.catalog = _get_full(cls.port, "/catalog")[1]
         cls.how = _get_full(cls.port, "/how")[1]
         cls.devs = _get_full(cls.port, "/developers")[1]
+        cls.transparency = _get_full(cls.port, "/transparency")[1]
         cls.js = _read("app.js")
         cls.css = _read("styles.css")
         cls.pages = {
@@ -197,12 +204,18 @@ class HomepageProductTests(unittest.TestCase):
             "/catalog": cls.catalog,
             "/how": cls.how,
             "/developers": cls.devs,
+            "/transparency": cls.transparency,
         }
 
     @classmethod
     def tearDownClass(cls):
         cls.httpd.shutdown()
         cls.httpd.server_close()
+        from live402.pq import store as pq_store
+
+        pq_store.reset()
+        os.environ.pop("LIVE402_PQ_LOG_DB", None)
+        cls._pq_tmp.cleanup()
 
     def test_homepage_is_concise_product_landing(self):
         html = self.home
@@ -225,7 +238,7 @@ class HomepageProductTests(unittest.TestCase):
         self.assertIn('href="/catalog"', html)
         self.assertIn('href="/developers"', html)
         self.assertIn("402Signal recommends the route. Your agent keeps the wallet.", html)
-        self.assertIn("What sellers say is available", html)
+        self.assertIn("What discovery sources say is available", html)
         self.assertIn("Check it now", html)
         self.assertIn("Decide whether to spend", html)
         self.assertIn("If the check does not pass, 402Signal returns a miss instead of quietly substituting an unverified service.", html)
@@ -251,6 +264,7 @@ class HomepageProductTests(unittest.TestCase):
             "/catalog": "Browse x402 services",
             "/how": "Why check an API that's already listed?",
             "/developers": "Use 402Signal from an agent",
+            "/transparency": "Verify 402Signal’s history.",
         }
         for path, title in expected.items():
             parsed = _parse(self.pages[path])
@@ -288,10 +302,9 @@ class HomepageProductTests(unittest.TestCase):
         html = self.catalog
         self.assertIn("Browse x402 services", html)
         self.assertIn("Search discovery listings across Base, Solana and Algorand.", html)
-        self.assertIn("These are discovery records, not fresh 402Signal checks.", html)
-        self.assertIn("Catalog rows are not currently live.", html)
-        self.assertIn("DISCOVERED listings are catalog rows, not live-probed routes.", html)
-        self.assertIn("Shown counts are discovery display only", html)
+        self.assertIn("These are discovery listings, not fresh checks.", html)
+        self.assertIn("OBSERVED means prior 402Signal history when it exists.", html)
+        self.assertIn("Before an agent spends, use the paid /route check for a current observation.", html)
         self.assertIn("What does your agent need?", html)
         self.assertIn('id="search-form"', html)
         self.assertIn('id="search-btn"', html)
@@ -319,8 +332,8 @@ class HomepageProductTests(unittest.TestCase):
         self.assertIn("discovery matches", js)
         self.assertIn("matches returned by discovery", js)
         self.assertIn(" shown", js)
-        self.assertIn("DISCOVERED · discovery claim", js)
-        self.assertIn("OBSERVED · 402Signal observation", js)
+        self.assertIn("DISCOVERED · catalog listing", js)
+        self.assertIn("OBSERVED · prior 402Signal check", js)
         self.assertIn("Not yet observed", js)
         self.assertNotIn("Catalog match", js)
         self.assertNotIn("Not live-verified", js)
@@ -360,6 +373,9 @@ class HomepageProductTests(unittest.TestCase):
         self.assertIn("Found in supported discovery infrastructure.", html)
         self.assertIn("402Signal stops before seller execution", html)
         self.assertIn("402Signal recommends a route.", html)
+        self.assertIn("A check should leave a trail", html)
+        self.assertIn("See the transparency log", html)
+        self.assertIn('href="/transparency"', html)
         self.assertIn("How 402Signal Works", html)
         self.assertNotIn("Where it fits", html)
         self.assertNotIn("HEALTHY", html)
@@ -397,6 +413,11 @@ class HomepageProductTests(unittest.TestCase):
         self.assertNotIn("PQ Trust", html)
         self.assertNotIn("post-quantum", html.lower())
         self.assertNotIn("algo_bonus", html)
+        self.assertNotIn("TestNet Falcon broadcast is off unless explicitly enabled.", html)
+        self.assertIn("402Signal maintains a public append-only transparency log", html)
+        self.assertIn("Confirmed checkpoints are currently anchored to Algorand TestNet", html)
+        self.assertIn("The human-readable transparency view is available at", html)
+        self.assertIn('href="/transparency"', html)
 
     def test_listed_on_footer_verified_only(self):
         forbidden = (
@@ -420,9 +441,11 @@ class HomepageProductTests(unittest.TestCase):
             self.assertIn("mailto:402signal@gmail.com", html, path)
             self.assertIn(">Contact<", html, path)
             self.assertIn("https://x.com/402Signal", html, path)
+            self.assertIn('href="/transparency"', html, path)
+            self.assertIn(">Transparency<", html, path)
 
     def test_probe_and_wallet_absent(self):
-        for name in ("index.html", "catalog.html", "how.html", "developers.html", "app.js"):
+        for name in ("index.html", "catalog.html", "how.html", "developers.html", "app.js", "transparency.js"):
             text = _read(name)
             self.assertNotIn("Probe live", text)
             self.assertNotIn('id="probe-btn"', text)
@@ -459,10 +482,11 @@ class HomepageProductTests(unittest.TestCase):
             for phrase in BANNED:
                 self.assertNotIn(phrase, html, f"{path}: {phrase}")
             body = _strip_head(html)
-            self.assertNotIn("\N{EM DASH}", body, path)
+            if path != "/transparency":
+                self.assertNotIn("\N{EM DASH}", body, path)
 
     def test_human_pages_are_static_html_same_csp(self):
-        for path in ("/", "/catalog", "/how", "/developers"):
+        for path in ("/", "/catalog", "/how", "/developers", "/transparency"):
             status, raw, hdrs = _get_full(self.port, path)
             self.assertEqual(status, 200, path)
             self.assertIn("text/html", hdrs.get("content-type", ""), path)
@@ -524,6 +548,7 @@ class HomepageProductTests(unittest.TestCase):
         self.assertIn("<title>x402 API Catalog — 402Signal</title>", self.catalog)
         self.assertIn("<title>How 402Signal Works</title>", self.how)
         self.assertIn("<title>402Signal Developer API</title>", self.devs)
+        self.assertIn("<title>402Signal Transparency — Verify the routing history</title>", self.transparency)
 
 
 if __name__ == "__main__":
