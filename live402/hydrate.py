@@ -152,7 +152,8 @@ def extract_claimed_contract(item: dict | None) -> dict | None:
     existing = item.get("_claimed_contract")
     if isinstance(existing, dict) and existing.get("origin") == ORIGIN_CLAIMED:
         return dict(existing)
-    in_schema, in_n, in_trunc = _bounded_schema(probe.extract_input_schema(item))
+    raw_in, in_source = probe.extract_input_schema_source(item)
+    in_schema, in_n, in_trunc = _bounded_schema(raw_in)
     out_schema, out_n, out_trunc = _bounded_schema(probe.extract_output_schema(item))
     method = None
     try:
@@ -175,6 +176,7 @@ def extract_claimed_contract(item: dict | None) -> dict | None:
         "type": kind,
         "input_schema": in_schema,
         "output_schema": out_schema,
+        "input_schema_source": in_source,
         "schema_bytes": schema_bytes,
         "truncated": truncated,
     }
@@ -229,12 +231,17 @@ def apply_contract(item: dict, contract: dict | None) -> dict:
         "truncated": bool(contract.get("truncated")),
     }
     in_schema = contract.get("input_schema")
+    source = contract.get("input_schema_source")
     if isinstance(in_schema, dict) and in_schema:
-        item["inputSchema"] = in_schema
-        item["_input_schema_present"] = True
+        if source == "bazaar":
+            item["_input_schema_present"] = True
+        else:
+            item["inputSchema"] = in_schema
+            item["_input_schema_present"] = True
     out_schema = contract.get("output_schema")
     if isinstance(out_schema, dict) and out_schema:
-        item["outputSchema"] = out_schema
+        if source != "bazaar":
+            item["outputSchema"] = out_schema
         item["_output_schema_present"] = True
     if contract.get("tool_name") and not item.get("toolName"):
         item["toolName"] = contract["tool_name"]
@@ -260,6 +267,13 @@ def apply_contract(item: dict, contract: dict | None) -> dict:
         inp.setdefault("toolName", contract["tool_name"])
     if contract.get("type"):
         inp.setdefault("type", contract["type"])
+    if source == "bazaar" and isinstance(in_schema, dict) and in_schema:
+        inp["inputSchema"] = in_schema
+    if source == "bazaar" and isinstance(out_schema, dict) and out_schema:
+        out = info.get("output") if isinstance(info.get("output"), dict) else {}
+        out = dict(out)
+        out.setdefault("schema", out_schema)
+        info["output"] = out
     return item
 
 
