@@ -98,7 +98,7 @@ Base CDP calls need `CDP_API_KEY_ID` + `CDP_API_KEY_SECRET` (or `CDP_ACCESS_TOKE
 | `LIVE402_FIXTURE` | unset | `1` uses local JSON, no network |
 | `LIVE402_PROBE_TIMEOUT` | `4` | probe timeout seconds |
 | `LIVE402_HISTORY_DB` | `/data/live402-history.sqlite` on Fly (`/tmp` fallback) | sqlite probe history (WAL, 0600, capped). Observed only. |
-| `LIVE402_CATALOG_DB` | `/data/catalog.sqlite` on Fly (`/tmp` fallback) | sqlite shadow catalog of CDP/PayAI/GoPlausible **claims**. Separate file from history. FTS5. Never a 44k RAM list. |
+| `LIVE402_CATALOG_DB` | `/data/catalog.sqlite` on Fly (`/tmp` fallback) | sqlite shadow catalog of CDP/PayAI/GoPlausible **claims**. Process-local on the existing `/data` volume. **Not HTTP-exposed** (no dump/download endpoint, not under `static/`, not in OpenAPI). Separate file from history. FTS5. Never a 44k RAM list. |
 | `LIVE402_HOT_REFRESH_S` | `600` (clamped 300–900) | HOT refresh for recently searched/routed URLs |
 | `LIVE402_WARM_REFRESH_S` | `7200` (clamped 3600–10800) | WARM refresh interval |
 | `LIVE402_COLD_SWEEP_S` | `64800` (clamped 12–24h) | COLD rolling generation sweep cadence |

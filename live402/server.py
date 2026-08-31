@@ -29,6 +29,27 @@ HUMAN_PAGES = {
     "/developers.html": "developers.html",
 }
 STATIC_FILES = {"/styles.css", "/app.js", "/dashboard.js"}
+# Process-local volume files. Never HTTP-download, never static, never OpenAPI.
+_VOLUME_DUMP_PATHS = frozenset(
+    {
+        "/catalog.sqlite",
+        "/catalog.sqlite-wal",
+        "/catalog.sqlite-shm",
+        "/data",
+        "/data/",
+        "/data/catalog.sqlite",
+        "/data/catalog.sqlite-wal",
+        "/data/catalog.sqlite-shm",
+        "/data/live402-history.sqlite",
+        "/data/live402-history.sqlite-wal",
+        "/data/live402-history.sqlite-shm",
+        "/live402-history.sqlite",
+        "/catalog/dump",
+        "/catalog/export",
+        "/dump",
+        "/download/catalog",
+    }
+)
 MAX_BODY = 64_000
 DEFAULT_ROUTE_RPM = 60
 DEFAULT_PREVIEW_RPM = 180
@@ -156,9 +177,47 @@ def client_ip(handler: SimpleHTTPRequestHandler) -> str:
     return handler.client_address[0] if handler.client_address else "unknown"
 
 
+def is_private_store_path(path: str) -> bool:
+    """True for volume sqlite / dump URLs. Those stay process-local."""
+    raw = (path or "").split("?", 1)[0].split("#", 1)[0]
+    try:
+        raw = urlparse(raw).path or raw
+    except Exception:
+        pass
+    low = raw.lower().rstrip()
+    if low in _VOLUME_DUMP_PATHS:
+        return True
+    if low.startswith("/data/"):
+        return True
+    if low.endswith(".sqlite") or low.endswith(".sqlite-wal") or low.endswith(".sqlite-shm"):
+        return True
+    return False
+
+
 class Handler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(STATIC_DIR), **kwargs)
+
+    def translate_path(self, path: str) -> str:
+        """Never map a request onto /data or a sqlite file."""
+        check = (path or "").split("?", 1)[0].split("#", 1)[0]
+        if is_private_store_path(check):
+            return str(STATIC_DIR / ".__denied__")
+        return SimpleHTTPRequestHandler.translate_path(self, path)
+
+    def _deny_private_store(self) -> bool:
+        parsed = urlparse(self.path)
+        if not is_private_store_path(parsed.path):
+            return False
+        if getattr(self, "_omit_body", False) or getattr(self, "command", "") == "HEAD":
+            self.send_response(404)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", "0")
+            self._cors()
+            self.end_headers()
+            return True
+        self._json(404, {"error": "not found"})
+        return True
 
     def log_message(self, fmt: str, *args) -> None:
         try:
@@ -284,6 +343,8 @@ class Handler(SimpleHTTPRequestHandler):
         return parsed.path in STATIC_FILES
 
     def do_HEAD(self) -> None:
+        if self._deny_private_store():
+            return
         parsed = urlparse(self.path)
         head_ok = {
             "/llms.txt",
@@ -309,6 +370,8 @@ class Handler(SimpleHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self) -> None:
+        if self._deny_private_store():
+            return
         parsed = urlparse(self.path)
         if parsed.path in HUMAN_PAGES or parsed.path in STATIC_FILES:
             self._rewrite_static_path()
@@ -407,6 +470,8 @@ class Handler(SimpleHTTPRequestHandler):
         return self._json(404, {"error": "not found"})
 
     def do_POST(self) -> None:
+        if self._deny_private_store():
+            return
         parsed = urlparse(self.path)
         if parsed.path in {"/mcp", "/mcp.json"}:
             return self._post_mcp()

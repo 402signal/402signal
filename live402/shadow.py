@@ -1,6 +1,8 @@
 """On-disk shadow catalog. Claims only. Never the 44k RAM world index.
 
-catalog.sqlite is physically separate from 402signal_observed (history.py).
+catalog.sqlite is process-local on the Fly /data volume (or /tmp fallback).
+It is not an HTTP download, not under static/, and not in OpenAPI.
+Physically separate from 402signal_observed (history.py).
 Ingest is page → normalize → upsert → commit → discard. No full-world list.
 """
 

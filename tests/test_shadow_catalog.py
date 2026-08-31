@@ -2,17 +2,23 @@
 
 from __future__ import annotations
 
+import json
 import os
 import resource
 import tempfile
+import threading
 import time
 import unittest
+from http.client import HTTPConnection
+from http.server import ThreadingHTTPServer
+from pathlib import Path
 from unittest.mock import patch
 from urllib.parse import urlparse
 
 os.environ.setdefault("LIVE402_FIXTURE", "1")
 
-from live402 import catalog, fixtures, history, payment, probe, pulse, select, shadow
+from live402 import catalog, discover, fixtures, history, payment, probe, pulse, select, shadow
+from live402.server import STATIC_DIR, Handler, is_private_store_path
 
 
 CATALOG_BASE_PAYTO = "0xabcabcabcabcabcabcabcabcabcabcabcabcabca"
@@ -514,5 +520,104 @@ class CatalogBenchTests(_IsolatedCatalog):
         self.assertLess(report["extrapolated_44k_mb"], 1024)
 
 
+class CatalogNotHttpExposedTests(unittest.TestCase):
+    """402security: /data sqlite is process-local. No dump endpoint."""
+
+    DUMP_PATHS = (
+        "/catalog.sqlite",
+        "/data/catalog.sqlite",
+        "/data/catalog.sqlite-wal",
+        "/data/live402-history.sqlite",
+        "/catalog/dump",
+        "/catalog/export",
+        "/dump",
+        "/download/catalog",
+    )
+
+    @classmethod
+    def setUpClass(cls):
+        cls.httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=cls.httpd.serve_forever, daemon=True)
+        thread.start()
+        cls.port = cls.httpd.server_address[1]
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.httpd.shutdown()
+        cls.httpd.server_close()
+
+    def _get(self, path):
+        conn = HTTPConnection("127.0.0.1", self.port, timeout=5)
+        conn.request("GET", path)
+        res = conn.getresponse()
+        raw = res.read()
+        ctype = res.getheader("Content-Type") or ""
+        conn.close()
+        return res.status, raw, ctype
+
+    def _head(self, path):
+        conn = HTTPConnection("127.0.0.1", self.port, timeout=5)
+        conn.request("HEAD", path)
+        res = conn.getresponse()
+        raw = res.read()
+        conn.close()
+        return res.status, raw
+
+    def test_dump_and_volume_paths_are_404_not_sqlite(self):
+        for path in self.DUMP_PATHS:
+            status, raw, ctype = self._get(path)
+            self.assertEqual(status, 404, path)
+            self.assertFalse(raw.startswith(b"SQLite format 3"), path)
+            self.assertNotIn(b"SQLite format 3", raw)
+            self.assertIn("json", ctype.lower())
+            body = json.loads(raw.decode("utf-8"))
+            self.assertEqual(body.get("error"), "not found")
+            head_status, head_raw = self._head(path)
+            self.assertEqual(head_status, 404, "HEAD %s" % path)
+            self.assertEqual(head_raw, b"")
+
+    def test_human_catalog_page_is_not_the_sqlite_file(self):
+        status, raw, ctype = self._get("/catalog")
+        self.assertEqual(status, 200)
+        self.assertIn("text/html", ctype.lower())
+        self.assertFalse(raw.startswith(b"SQLite format 3"))
+        self.assertNotIn(b"SQLite format 3", raw)
+
+    def test_static_dir_has_no_sqlite(self):
+        root = Path(STATIC_DIR)
+        sqlite_files = [
+            p for p in root.rglob("*") if p.suffix in {".sqlite", ".sqlite-wal", ".sqlite-shm"}
+        ]
+        self.assertEqual(sqlite_files, [])
+        self.assertNotIn("catalog.sqlite", {p.name for p in root.iterdir() if p.is_file()})
+
+    def test_openapi_llms_robots_omit_dump(self):
+        spec = json.dumps(discover.openapi_spec())
+        self.assertNotIn("catalog.sqlite", spec)
+        self.assertNotIn("/catalog/dump", spec)
+        self.assertNotIn("/data/catalog", spec)
+        self.assertNotIn("/download/catalog", spec)
+        paths = (discover.openapi_spec().get("paths") or {})
+        self.assertNotIn("/catalog.sqlite", paths)
+        self.assertNotIn("/dump", paths)
+        llms = discover.LLMS_TXT
+        robots = discover.ROBOTS_TXT
+        for blob in (llms, robots):
+            self.assertNotIn("catalog.sqlite", blob)
+            self.assertNotIn("/catalog/dump", blob)
+            self.assertNotIn("/data/catalog", blob)
+
+    def test_volume_stays_process_local_and_separate(self):
+        self.assertEqual(shadow.VOLUME_DB, "/data/catalog.sqlite")
+        self.assertEqual(history.VOLUME_DB, "/data/live402-history.sqlite")
+        self.assertNotEqual(shadow.VOLUME_DB, history.VOLUME_DB)
+        self.assertTrue(is_private_store_path("/data/catalog.sqlite"))
+        self.assertTrue(is_private_store_path("/catalog.sqlite"))
+        self.assertFalse(is_private_store_path("/catalog"))
+        self.assertFalse(is_private_store_path("/preview"))
+        self.assertFalse(is_private_store_path("/health"))
+
+
 if __name__ == "__main__":
     unittest.main()
+
