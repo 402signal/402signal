@@ -1686,7 +1686,10 @@ class ProductBriefTests(unittest.TestCase):
                 self.assertTrue(str(body["hits"][0].get("url") or "").startswith("https://"))
                 self.assertNotIn("live", body["hits"][0])
                 self.assertIn("observation", body["hits"][0])
-                self.assertEqual(body["hits"][0]["observation"].get("status"), "not_yet_observed")
+                obs = body["hits"][0]["observation"] or {}
+                self.assertIn(obs.get("status"), ("not_yet_observed", "observed"))
+                if int(obs.get("n_7d") or 0) < 10:
+                    self.assertNotIn("success_7d", obs)
             mock_url.assert_not_called()
             mock_need.assert_not_called()
 

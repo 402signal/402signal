@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import os
+import tempfile
 import time
 import unittest
 from unittest.mock import patch
 
 os.environ.setdefault("LIVE402_FIXTURE", "1")
 
-from live402 import probe, select
+from live402 import history, probe, select
 
 
 def _hist(success_7d=None, n_7d=0, success_24h=None, n_24h=0):
@@ -297,6 +298,25 @@ class ComparisonTests(unittest.TestCase):
 class RouteNeedSelectTests(unittest.TestCase):
     """Best-of-N wiring through route_need. Mocked probes, no network."""
 
+    def setUp(self):
+        self._prev_db = os.environ.get("LIVE402_HISTORY_DB")
+        fd, self._db = tempfile.mkstemp(suffix=".sqlite")
+        os.close(fd)
+        os.environ["LIVE402_HISTORY_DB"] = self._db
+        history.reset()
+
+    def tearDown(self):
+        history.reset()
+        if self._prev_db is None:
+            os.environ.pop("LIVE402_HISTORY_DB", None)
+        else:
+            os.environ["LIVE402_HISTORY_DB"] = self._prev_db
+        for path in (self._db, self._db + "-wal", self._db + "-shm"):
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
     def _item(self, url, description="weather forecast", network="base", amount="10000", pay_to="0xabc"):
         return {
             "url": url,
@@ -451,6 +471,44 @@ class RouteNeedSelectTests(unittest.TestCase):
         self.assertFalse(result.get("probe_budget_exhausted"))
         self.assertIsNotNone(result.get("url"))
         self.assertTrue(result.get("live"))
+
+    def test_best_keeps_first_ranked_when_second_returns_first(self):
+        first = self._item("https://first-slow.example/weather")
+        second = self._item("https://second-fast.example/weather")
+
+        def fake_probe(url, catalog_item=None, deadline=None, **kwargs):
+            _ = catalog_item, deadline
+            if "first-slow" in url:
+                time.sleep(0.08)
+            return self._live(url, amount=10000, latency=10)
+
+        result = self._route([first, second], fake_probe)
+        self.assertTrue(result.get("live"))
+        self.assertEqual(result.get("url"), first["url"])
+        self.assertGreaterEqual(result.get("candidates_probed") or 0, 2)
+
+    def test_cheapest_stops_after_two_viable_without_waiting_straggler(self):
+        dear = self._item("https://dear-cmp.example/weather", amount="9000")
+        cheap = self._item("https://cheap-cmp.example/weather", amount="1000")
+        extra = self._item("https://extra-cmp.example/weather", amount="500")
+
+        def fake_probe(url, catalog_item=None, deadline=None, **kwargs):
+            _ = catalog_item, deadline
+            if "extra-cmp" in url:
+                time.sleep(0.4)
+                return self._live(url, amount=500, latency=10)
+            if "dear-cmp" in url:
+                return self._live(url, amount=9000, latency=10)
+            return self._live(url, amount=1000, latency=10)
+
+        t0 = time.monotonic()
+        result = self._route([dear, cheap, extra], fake_probe, objective="cheapest")
+        elapsed = time.monotonic() - t0
+        self.assertTrue(result.get("live"))
+        self.assertEqual(result.get("url"), cheap["url"])
+        self.assertLess(elapsed, 0.3)
+        self.assertLessEqual(result.get("candidates_probed") or 0, 2)
+        self.assertFalse(result.get("probe_budget_exhausted"))
 
     def test_concurrent_tranche_fail_closed_no_unverified_winner(self):
         items = [self._item("https://dead%d.example/weather" % i) for i in range(4)]

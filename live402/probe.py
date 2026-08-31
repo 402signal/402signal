@@ -1545,12 +1545,20 @@ def _probe_tranche(
         return []
     collected: list[dict] = []
 
-    def take(row: dict) -> bool:
+    def pending_items(pending_futs, fut_map) -> list[dict]:
+        return [fut_map[fut] for fut in pending_futs]
+
+    def take(row: dict, still_pending: list[dict] | None = None) -> bool:
         collected.append(row)
-        return bool(should_stop and should_stop(collected))
+        if not should_stop:
+            return False
+        try:
+            return bool(should_stop(collected, still_pending or []))
+        except TypeError:
+            return bool(should_stop(collected))
 
     if len(items) == 1:
-        if take(_probe_one_or_stub(items[0], need, deadline, batch_id)):
+        if take(_probe_one_or_stub(items[0], need, deadline, batch_id), []):
             return collected
         return collected
 
@@ -1566,17 +1574,23 @@ def _probe_tranche(
             if remaining_timeout(deadline) is not None and remaining_timeout(deadline) <= 0:
                 break
             done, pending = wait(pending, timeout=0.05, return_when=FIRST_COMPLETED)
+            rows = []
             for fut in done:
                 item = futs[fut]
                 try:
-                    row = fut.result()
+                    rows.append(fut.result())
                 except Exception:
-                    row = _probe_miss_stub(item, need, "no_402_envelope")
-                if take(row):
-                    for leftover in pending:
-                        leftover.cancel()
-                    pending.clear()
-                    return collected
+                    rows.append(_probe_miss_stub(item, need, "no_402_envelope"))
+            leftover_items = pending_items(pending, futs)
+            stop = False
+            for row in rows:
+                if take(row, leftover_items):
+                    stop = True
+            if stop:
+                for leftover in pending:
+                    leftover.cancel()
+                pending.clear()
+                return collected
         return collected
     finally:
         pool.shutdown(wait=False, cancel_futures=True)
@@ -1613,11 +1627,32 @@ def route_need(
     next_idx = 0
     probe_budget_exhausted = False
 
-    def winner_now():
-        return select.pick_winner(_selection_set(probed), obj, cons)
+    rank_of = {_resource_url(item): idx for idx, item in enumerate(ranked)}
 
-    def should_stop(batch_so_far: list[dict]) -> bool:
-        return select.enough_evidence(probed + batch_so_far, obj, cons)
+    def _by_rank(rows: list) -> list:
+        """Preserve original shortlist order so equal live hits keep first-ranked."""
+        return sorted(
+            rows,
+            key=lambda r: rank_of.get((r or {}).get("url") or "", 10**9),
+        )
+
+    def winner_now():
+        return select.pick_winner(_by_rank(_selection_set(probed)), obj, cons)
+
+    def should_stop(batch_so_far: list[dict], still_pending=None) -> bool:
+        combined = probed + batch_so_far
+        if not select.enough_evidence(combined, obj, cons):
+            return False
+        if obj != "best":
+            return True
+        winner = select.pick_winner(_by_rank(_selection_set(combined)), obj, cons)
+        if not winner:
+            return False
+        wr = rank_of.get(winner.get("url") or "", 10**9)
+        for item in still_pending or []:
+            if rank_of.get(_resource_url(item), 10**9) < wr:
+                return False
+        return True
 
     while next_idx < len(ranked) and len(probed) < MAX_PROBE:
         if _budget_hit(deadline):
