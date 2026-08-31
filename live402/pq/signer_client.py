@@ -309,6 +309,52 @@ def parse_reply(raw: str) -> dict:
     }
 
 
+def _int64_be(value) -> bytes:
+    try:
+        n = int(value)
+    except (TypeError, ValueError) as exc:
+        raise SignerClientError("sign_failed") from exc
+    if n < 0:
+        raise SignerClientError("sign_failed")
+    try:
+        return n.to_bytes(8, "big", signed=False)
+    except OverflowError as exc:
+        raise SignerClientError("sign_failed") from exc
+
+
+def roots_equal(left, right) -> bool:
+    """Canonical root compare. Accepts bytes or hex. Constant-time on equal length."""
+    try:
+        a = bytes.fromhex(_hex_node(left))
+        b = bytes.fromhex(_hex_node(right))
+    except (SignerClientError, ValueError, TypeError):
+        return False
+    if len(a) != len(b):
+        return False
+    return hmac.compare_digest(a, b)
+
+
+def bind_reply(reply: dict, *, tree_size: int, root) -> dict:
+    """Fail closed unless reply.tree_size and reply.root match the request."""
+    if not isinstance(reply, dict):
+        raise SignerClientError("sign_failed")
+    try:
+        have = _int64_be(reply.get("tree_size"))
+        want = _int64_be(tree_size)
+    except SignerClientError:
+        raise
+    except Exception as exc:
+        raise SignerClientError("sign_failed") from exc
+    if not hmac.compare_digest(have, want):
+        raise SignerClientError("sign_failed")
+    if not roots_equal(reply.get("root"), root):
+        raise SignerClientError("sign_failed")
+    signed = reply.get("signed")
+    if not isinstance(signed, (bytes, bytearray)) or not signed:
+        raise SignerClientError("sign_failed")
+    return reply
+
+
 def request_signed(
     *,
     origin: str,
@@ -350,7 +396,9 @@ def request_signed(
         raise
     except Exception as exc:
         raise SignerClientError("unavailable") from exc
-    return parse_reply(raw)
+    data = parse_reply(raw)
+    bind_reply(data, tree_size=tree_size, root=root)
+    return data
 
 
 def request_sign(
@@ -367,7 +415,7 @@ def request_sign(
     timeout: float = IPC_TIMEOUT,
     token: str | None = None,
 ) -> bytes:
-    """Return SignedTxn bytes from reply['signed']. Never returns pqsig as the txn."""
+    """Return SignedTxn bytes only after reply tree_size and root match the request."""
     data = request_signed(
         origin=origin,
         tree_size=tree_size,

@@ -762,6 +762,7 @@ def decode_chain_txn(obj) -> dict:
         pq_auth = _pq_auth_from_obj(txn)
     if pq_auth is None and isinstance(envelope, dict) and envelope is not obj:
         pq_auth = _pq_auth_from_obj(envelope)
+    auth_addr = _auth_addr_field(obj, envelope, txn, pending, unsigned, inner)
     return {
         "txid": txid,
         "confirmed_round": confirmed_round,
@@ -769,6 +770,8 @@ def decode_chain_txn(obj) -> dict:
         "tx_type": tx_type,
         "sender": sender,
         "receiver": receiver,
+        "auth_addr": auth_addr,
+        "authorizer": sender,
         "amount": amount,
         "fee": fee,
         "note": note,
@@ -787,6 +790,20 @@ def decode_chain_txn(obj) -> dict:
     }
 
 
+def _auth_addr_field(*objs):
+    """Codec sgnr or REST/indexer auth-addr / authAddr. Empty if self-authorized."""
+    for obj in objs:
+        if not isinstance(obj, dict):
+            continue
+        for key in ("sgnr", "auth-addr", "authAddr", "auth_addr"):
+            if key not in obj:
+                continue
+            val = obj.get(key)
+            if _nonzero_blob(val):
+                return val
+    return ""
+
+
 def verify_fetched_anchor(
     decoded: dict,
     *,
@@ -796,7 +813,12 @@ def verify_fetched_anchor(
     expected_address: str,
     expected_txid: str | None = None,
 ) -> dict:
-    """Fail closed unless the fetched txn matches PQ1 TestNet construction."""
+    """Fail closed unless the fetched txn matches PQ1 TestNet construction.
+
+    Expected Falcon checkpoint is self-authorized: configured Falcon
+    address == sender == receiver == authorizing account. Any nonempty
+    AuthAddr (codec sgnr, REST auth-addr / authAddr) fails confirmation.
+    """
     if not isinstance(decoded, dict):
         raise AnchorError("invalid chain object")
     pq_auth = decoded.get("pq_auth")
@@ -810,8 +832,13 @@ def verify_fetched_anchor(
     addr = (expected_address or "").strip()
     if not addr:
         raise AnchorError("falcon address required")
+    if _nonzero_blob(decoded.get("auth_addr")):
+        raise AnchorError("auth address forbidden")
     if decoded.get("sender") != addr or decoded.get("receiver") != addr:
         raise AnchorError("sender/receiver mismatch")
+    authorizer = decoded.get("authorizer") or decoded.get("sender")
+    if authorizer != addr:
+        raise AnchorError("authorizer mismatch")
     if int(decoded.get("amount") or 0) != 0:
         raise AnchorError("amount must be 0")
     fee = int(decoded.get("fee") or 0)

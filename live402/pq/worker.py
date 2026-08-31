@@ -8,9 +8,15 @@ Authorized vs confirmed are separate durable records:
   CONFIRMED  — persisted TestNet inclusion after independent fetch+verify
 
 A signer reply advances AUTHORIZED only. last_anchor() / public status
-read CONFIRMED only. should_build is vs CONFIRMED, so signed-but-unbroadcast
-stays retryable. Recover only if size+origin+root+signed-note match.
-Mismatch fail-closes: no re-dial, no old SignedTxn, no overwrite.
+read CONFIRMED only. should_build SLA is vs CONFIRMED, so the same
+signed-but-unbroadcast checkpoint stays retryable. At most one
+unconfirmed authorized checkpoint may exist: if last_authorized.size
+> last_confirmed.size, do not authorize a newer tree size. Recover or
+finish that exact authorization (same tree_size/origin/root/signed-note);
+if it is already submitted, keep polling that txid. Only after it is
+CONFIRMED may a newer size be authorized. Recover only if
+size+origin+root+signed-note match. Mismatch fail-closes: no re-dial,
+no old SignedTxn, no overwrite.
 
 TestNet submit of the signer-approved SignedTxn is gated on
 LIVE402_PQ_FALCON_BROADCAST=1. That env lives on this 402signal
@@ -133,17 +139,30 @@ def save_anchor(size: int, at: int) -> None:
     )
 
 
+def in_flight_authorized() -> dict | None:
+    """Authorized checkpoint strictly ahead of last_confirmed, if any."""
+    auth = last_authorized()
+    if int(auth.get("size") or 0) > int(last_confirmed().get("size") or 0):
+        return auth
+    return None
+
+
 def should_build(now: int | None = None, tree_size: int | None = None) -> bool:
     """SLA vs last CONFIRMED size. Authorized/signed is not an anchor.
 
     15 min with ≥1 new leaf OR 1000 leaves, whichever first.
     If size is unchanged vs confirmed, return False without building.
+    A newer size is not eligible while an older authorization is still
+    unconfirmed (last_authorized.size > last_confirmed.size).
     """
     current = store.size() if tree_size is None else int(tree_size)
     prev = last_confirmed()
     if current == prev["size"]:
         return False
     if current < prev["size"]:
+        return False
+    inflight = in_flight_authorized()
+    if inflight and current > int(inflight["size"]):
         return False
     grown = current - prev["size"]
     if grown >= ANCHOR_SLA_LEAVES:
@@ -315,6 +334,19 @@ def maybe_submit(
     p = dict(params) if isinstance(params, dict) else {}
     gen = str(p.get("genesisID") or p.get("genesis_id") or algo_anchor.TESTNET_GENESIS_ID)
     if gen == algo_anchor.MAINNET_GENESIS_ID or gen != algo_anchor.TESTNET_GENESIS_ID:
+        return None
+    inflight = in_flight_authorized()
+    if inflight:
+        size = int(inflight["size"])
+        origin = store.origin() or ORIGIN
+        root = store.root(size)
+        note = store.checkpoint_at(size) or str(inflight.get("checkpoint") or "")
+        try:
+            recovered = _recover_authorized(size, origin, root.hex(), note)
+        except AuthorizedConflict:
+            return None
+        if recovered:
+            return _maybe_broadcast(recovered, send_fn=send_fn, sender=sender, params=p)
         return None
     size = store.size() if tree_size is None else int(tree_size)
     origin = store.origin() or ORIGIN

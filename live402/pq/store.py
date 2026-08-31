@@ -200,7 +200,12 @@ def _migrate_authorized_confirmed(conn: sqlite3.Connection) -> None:
 
 
 def _migrate_authorized_submit(conn: sqlite3.Connection) -> None:
-    """Add submitted + txid on authorized_anchors. POST success is not confirmed."""
+    """Keep submitted + txid on authorized_anchors. Recover last_authorized from rows.
+
+    Columns already exist from the TestNet submit work. Existing signed rows
+    are not deleted. If last_authorized meta is empty or its size has no
+    signed row, point meta at the latest signed authorized_anchors row.
+    """
     cols = {str(row[1]) for row in conn.execute("PRAGMA table_info(authorized_anchors)")}
     if "submitted" not in cols:
         conn.execute(
@@ -210,6 +215,33 @@ def _migrate_authorized_submit(conn: sqlite3.Connection) -> None:
         conn.execute(
             "ALTER TABLE authorized_anchors ADD COLUMN txid TEXT NOT NULL DEFAULT ''"
         )
+    raw = conn.execute(
+        "SELECT v FROM meta WHERE k = 'last_authorized_checkpoint'"
+    ).fetchone()
+    meta_size = 0
+    if raw and raw[0]:
+        try:
+            parsed = json.loads(raw[0])
+            if isinstance(parsed, dict):
+                meta_size = int(parsed.get("size") or 0)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            meta_size = 0
+    have = _authorized_row(conn, meta_size) if meta_size else None
+    if not have or not have.get("signed"):
+        latest = _latest_authorized_row(conn)
+        if latest and latest.get("signed"):
+            payload = {
+                "size": latest["tree_size"],
+                "at": latest["at"],
+                "request_id": latest["request_id"],
+                "origin": latest["origin"],
+                "root": latest["root"],
+            }
+            conn.execute(
+                "INSERT INTO meta(k, v) VALUES ('last_authorized_checkpoint', ?) "
+                "ON CONFLICT(k) DO UPDATE SET v = excluded.v",
+                (json.dumps(payload),),
+            )
     conn.commit()
 
 
@@ -560,6 +592,18 @@ def authorized_at(tree_size: int) -> dict | None:
         return _authorized_row(_connect(), int(tree_size))
 
 
+def _latest_authorized_row(conn: sqlite3.Connection) -> dict | None:
+    cur = conn.execute(
+        "SELECT tree_size FROM authorized_anchors "
+        "WHERE signed IS NOT NULL AND length(signed) > 0 "
+        "ORDER BY tree_size DESC LIMIT 1"
+    )
+    row = cur.fetchone()
+    if not row:
+        return None
+    return _authorized_row(conn, int(row[0]))
+
+
 def last_authorized_checkpoint() -> dict:
     raw = meta_get("last_authorized_checkpoint")
     data = {}
@@ -580,22 +624,27 @@ def last_authorized_checkpoint() -> dict:
         "submitted": False,
         "txid": "",
     }
-    if size:
-        row = authorized_at(size)
+    row = authorized_at(size) if size else None
+    if (not row or not row.get("signed")):
+        with _lock:
+            row = _latest_authorized_row(_connect())
         if row:
-            out.update(
-                {
-                    "origin": row["origin"] or out["origin"],
-                    "root": row["root"] or out["root"],
-                    "request_id": row["request_id"] or out["request_id"],
-                    "checkpoint": row["checkpoint"],
-                    "signed": row["signed"],
-                    "at": row["at"] or out["at"],
-                    "tree_size": row["tree_size"],
-                    "submitted": bool(row.get("submitted")),
-                    "txid": str(row.get("txid") or ""),
-                }
-            )
+            size = int(row.get("tree_size") or row.get("size") or 0)
+            out["size"] = size
+    if row:
+        out.update(
+            {
+                "origin": row["origin"] or out["origin"],
+                "root": row["root"] or out["root"],
+                "request_id": row["request_id"] or out["request_id"],
+                "checkpoint": row["checkpoint"],
+                "signed": row["signed"],
+                "at": row["at"] or out["at"],
+                "tree_size": row["tree_size"],
+                "submitted": bool(row.get("submitted")),
+                "txid": str(row.get("txid") or ""),
+            }
+        )
     return out
 
 

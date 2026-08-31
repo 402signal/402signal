@@ -429,6 +429,89 @@ class SignerClientProtocolTests(unittest.TestCase):
         self.assertNotIn("txn", received[0])
         self.assertNotIn("fee", received[0])
 
+    def _serve_mismatch(self, *, tree_size=None, root=None):
+        received = []
+
+        def serve(sock):
+            sock.listen(1)
+            sock.settimeout(2)
+            while not self._stop:
+                try:
+                    conn, _addr = sock.accept()
+                except TimeoutError:
+                    continue
+                except OSError:
+                    return
+                try:
+                    raw = b""
+                    while b"\n" not in raw:
+                        chunk = conn.recv(4096)
+                        if not chunk:
+                            break
+                        raw += chunk
+                    data = json.loads(raw.split(b"\n", 1)[0].decode("utf-8"))
+                    received.append(data)
+                    reply_size = data.get("tree_size") if tree_size is None else tree_size
+                    reply_root = data.get("root") if root is None else root
+                    conn.sendall(
+                        (_reply_line(tree_size=reply_size, root=reply_root) + "\n").encode("utf-8")
+                    )
+                finally:
+                    conn.close()
+
+        sock = socket.socket()
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+        self._socks.append(sock)
+        thread = threading.Thread(target=serve, args=(sock,), daemon=True)
+        thread.start()
+        self._threads.append(thread)
+        return port, received
+
+    def test_request_sign_rejects_mismatched_tree_size(self):
+        port, received = self._serve_mismatch(tree_size=2)
+        os.environ["LIVE402_PQ_SIGNER_TOKEN"] = _VECTOR_TOKEN
+        with self.assertRaises(signer_client.SignerClientError):
+            signer_client.request_sign(
+                origin=_VECTOR_ORIGIN,
+                tree_size=1,
+                root=_VECTOR_ROOT,
+                consistency=[],
+                checkpoint=_VECTOR_CHECKPOINT,
+                now=1700000000,
+                request_id="req-vector-1",
+                host="127.0.0.1",
+                port=port,
+            )
+        self.assertEqual(len(received), 1)
+
+    def test_request_sign_rejects_mismatched_root(self):
+        port, received = self._serve_mismatch(root="ff" * 32)
+        os.environ["LIVE402_PQ_SIGNER_TOKEN"] = _VECTOR_TOKEN
+        with self.assertRaises(signer_client.SignerClientError):
+            signer_client.request_sign(
+                origin=_VECTOR_ORIGIN,
+                tree_size=1,
+                root=bytes.fromhex(_VECTOR_ROOT),
+                consistency=[],
+                checkpoint=_VECTOR_CHECKPOINT,
+                now=1700000000,
+                request_id="req-vector-1",
+                host="127.0.0.1",
+                port=port,
+            )
+        self.assertEqual(len(received), 1)
+
+    def test_bind_reply_accepts_hex_or_bytes_root(self):
+        parsed = signer_client.parse_reply(_reply_line(tree_size=1, root=_VECTOR_ROOT))
+        bound = signer_client.bind_reply(parsed, tree_size=1, root=bytes.fromhex(_VECTOR_ROOT))
+        self.assertEqual(bound["signed"], _MOCK_SIGNED_TXN)
+        with self.assertRaises(signer_client.SignerClientError):
+            signer_client.bind_reply(parsed, tree_size=9, root=_VECTOR_ROOT)
+        with self.assertRaises(signer_client.SignerClientError):
+            signer_client.bind_reply(parsed, tree_size=1, root="aa" * 32)
+
     def _serve_reply(self, received):
         def serve(sock):
             sock.listen(1)
@@ -450,7 +533,8 @@ class SignerClientProtocolTests(unittest.TestCase):
                     line = raw.split(b"\n", 1)[0].decode("utf-8")
                     data = json.loads(line)
                     received.append(data)
-                    conn.sendall((_reply_line() + "\n").encode("utf-8"))
+                    echo = _reply_line(tree_size=data.get("tree_size"), root=data.get("root"))
+                    conn.sendall((echo + "\n").encode("utf-8"))
                 finally:
                     conn.close()
 

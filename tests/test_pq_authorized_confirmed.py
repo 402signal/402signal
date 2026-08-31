@@ -30,12 +30,12 @@ _SIGNED_B = b"STXN-authorized-B" + bytes(range(24))
 _TXID = "B" * 52
 
 
-def _reply(signed):
+def _reply(signed, tree_size=1, root=None):
     return json.dumps(
         {
             "ok": True,
-            "tree_size": 1,
-            "root": "00" * 32,
+            "tree_size": int(tree_size),
+            "root": root or "00" * 32,
             "pqsig": "present",
             "signed": signed.hex(),
         },
@@ -97,9 +97,11 @@ class AuthorizedConfirmedTests(unittest.TestCase):
                         if not chunk:
                             break
                         raw += chunk
-                    received.append(json.loads(raw.split(b"\n", 1)[0].decode("utf-8")))
+                    req = json.loads(raw.split(b"\n", 1)[0].decode("utf-8"))
+                    received.append(req)
                     blob = blobs[min(len(received) - 1, len(blobs) - 1)]
-                    conn.sendall((_reply(blob) + "\n").encode("utf-8"))
+                    line = _reply(blob, tree_size=req.get("tree_size"), root=req.get("root"))
+                    conn.sendall((line + "\n").encode("utf-8"))
                 finally:
                     conn.close()
 
