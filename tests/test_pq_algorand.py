@@ -149,7 +149,13 @@ class AlgorandConstructionTests(unittest.TestCase):
 
     def test_idle_does_not_build_when_size_unchanged(self):
         store.append(b"one")
-        worker.save_anchor(1, 1)
+        worker.confirm_testnet_anchor(
+            tree_size=1,
+            txid="A" * 52,
+            confirmed_round=10,
+            root=store.root(1),
+            at=1,
+        )
         built = []
 
         def boom(*_a, **_k):
@@ -163,10 +169,10 @@ class AlgorandConstructionTests(unittest.TestCase):
         self.assertEqual(worker.queued(), [])
 
     def test_sla_1000_leaves_or_15_min(self):
-        worker.save_anchor(0, 1000)
-        self.assertFalse(worker.should_build(now=1000 + 60, tree_size=1))
-        self.assertTrue(worker.should_build(now=1000 + 15 * 60, tree_size=1))
-        self.assertTrue(worker.should_build(now=1001, tree_size=1000))
+        self.assertEqual(worker.last_confirmed()["size"], 0)
+        self.assertFalse(worker.should_build(now=60, tree_size=1))
+        self.assertTrue(worker.should_build(now=15 * 60, tree_size=1))
+        self.assertTrue(worker.should_build(now=1, tree_size=1000))
 
     def test_worker_signs_via_callback_and_never_sends(self):
         store.append(b"one")

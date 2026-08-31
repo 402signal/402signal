@@ -7,12 +7,21 @@ entry_bundles (uint16 BE length + bytes)
 meta origin/vkey/size/checkpoint
 optional checkpoints(size PK, note TEXT)
 
+Anchor state is split:
+  last_authorized_checkpoint — signer returned a SignedTxn (not on-chain)
+  last_confirmed_checkpoint  — independently observed TestNet inclusion
+
+Migration: new tables authorized_anchors / confirmed_anchors and meta keys
+last_authorized_checkpoint / last_confirmed_checkpoint. Confirmed defaults
+empty. Legacy meta['anchor'] {size, at} is authorized-only, never confirmed.
+
 Publish order: entry bundles → tiles → tree → signed checkpoint.
 Never checkpoint a size whose tiles/bundles are missing.
 """
 
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 import threading
@@ -62,6 +71,23 @@ CREATE TABLE IF NOT EXISTS meta (
 CREATE TABLE IF NOT EXISTS checkpoints (
     size INTEGER PRIMARY KEY,
     note TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS authorized_anchors (
+    tree_size INTEGER PRIMARY KEY,
+    origin TEXT NOT NULL,
+    root TEXT NOT NULL,
+    checkpoint TEXT NOT NULL,
+    request_id TEXT NOT NULL,
+    signed BLOB NOT NULL,
+    at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS confirmed_anchors (
+    tree_size INTEGER PRIMARY KEY,
+    origin TEXT NOT NULL,
+    root TEXT NOT NULL,
+    txid TEXT NOT NULL,
+    confirmed_round INTEGER NOT NULL,
+    at INTEGER NOT NULL
 );
 """
 
@@ -113,6 +139,7 @@ def _connect() -> sqlite3.Connection:
     _conn_path = path
     _chmod_db_files(path)
     _ensure_meta(conn)
+    _migrate_authorized_confirmed(conn)
     try:
         have = _size_unlocked(conn)
         if have and not _ready_unlocked(conn, have):
@@ -131,7 +158,55 @@ def _ensure_meta(conn: sqlite3.Connection) -> None:
         conn.execute("INSERT INTO meta(k, v) VALUES ('size', '0')")
         conn.execute("INSERT INTO meta(k, v) VALUES ('vkey', '')")
         conn.execute("INSERT INTO meta(k, v) VALUES ('checkpoint', '')")
+        conn.execute("INSERT INTO meta(k, v) VALUES ('last_authorized_checkpoint', '')")
+        conn.execute("INSERT INTO meta(k, v) VALUES ('last_confirmed_checkpoint', '')")
         conn.commit()
+
+
+def _migrate_authorized_confirmed(conn: sqlite3.Connection) -> None:
+    """Legacy meta['anchor'] is authorized-only. Confirmed stays empty unless set."""
+    cur = conn.execute("SELECT v FROM meta WHERE k = 'last_authorized_checkpoint'")
+    have_auth = cur.fetchone()
+    if have_auth is None:
+        conn.execute("INSERT INTO meta(k, v) VALUES ('last_authorized_checkpoint', '')")
+        have_auth = ("",)
+    cur = conn.execute("SELECT v FROM meta WHERE k = 'last_confirmed_checkpoint'")
+    have_conf = cur.fetchone()
+    if have_conf is None:
+        conn.execute("INSERT INTO meta(k, v) VALUES ('last_confirmed_checkpoint', '')")
+    old = conn.execute("SELECT v FROM meta WHERE k = 'anchor'").fetchone()
+    if old and old[0] and not (have_auth and have_auth[0]):
+        try:
+            data = json.loads(old[0])
+        except (TypeError, ValueError, json.JSONDecodeError):
+            data = {}
+        if isinstance(data, dict):
+            payload = {
+                "size": int(data.get("size") or 0),
+                "at": int(data.get("at") or 0),
+                "request_id": "",
+                "origin": "",
+                "root": "",
+            }
+            conn.execute(
+                "INSERT INTO meta(k, v) VALUES ('last_authorized_checkpoint', ?) "
+                "ON CONFLICT(k) DO UPDATE SET v = excluded.v",
+                (json.dumps(payload),),
+            )
+    conn.commit()
+
+
+def close() -> None:
+    """Close the process-local connection without deleting the file."""
+    global _conn, _conn_path
+    with _lock:
+        if _conn is not None:
+            try:
+                _conn.close()
+            except Exception:
+                pass
+            _conn = None
+            _conn_path = None
 
 
 def reset() -> None:
@@ -438,3 +513,193 @@ def checkpoint_at(tree_size: int) -> str:
         cur = conn.execute("SELECT note FROM checkpoints WHERE size = ?", (int(tree_size),))
         row = cur.fetchone()
         return str(row[0]) if row else ""
+
+
+def _authorized_row(conn: sqlite3.Connection, tree_size: int) -> dict | None:
+    cur = conn.execute(
+        "SELECT tree_size, origin, root, checkpoint, request_id, signed, at "
+        "FROM authorized_anchors WHERE tree_size = ?",
+        (int(tree_size),),
+    )
+    row = cur.fetchone()
+    if not row:
+        return None
+    return {
+        "tree_size": int(row[0]),
+        "size": int(row[0]),
+        "origin": str(row[1] or ""),
+        "root": str(row[2] or ""),
+        "checkpoint": str(row[3] or ""),
+        "request_id": str(row[4] or ""),
+        "signed": bytes(row[5]) if row[5] is not None else b"",
+        "at": int(row[6] or 0),
+    }
+
+
+def authorized_at(tree_size: int) -> dict | None:
+    with _lock:
+        return _authorized_row(_connect(), int(tree_size))
+
+
+def last_authorized_checkpoint() -> dict:
+    raw = meta_get("last_authorized_checkpoint")
+    data = {}
+    if raw:
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                data = parsed
+        except (TypeError, ValueError, json.JSONDecodeError):
+            data = {}
+    size = int(data.get("size") or 0)
+    out = {
+        "size": size,
+        "at": int(data.get("at") or 0),
+        "request_id": str(data.get("request_id") or ""),
+        "origin": str(data.get("origin") or ""),
+        "root": str(data.get("root") or ""),
+    }
+    if size:
+        row = authorized_at(size)
+        if row:
+            out.update(
+                {
+                    "origin": row["origin"] or out["origin"],
+                    "root": row["root"] or out["root"],
+                    "request_id": row["request_id"] or out["request_id"],
+                    "checkpoint": row["checkpoint"],
+                    "signed": row["signed"],
+                    "at": row["at"] or out["at"],
+                    "tree_size": row["tree_size"],
+                }
+            )
+    return out
+
+
+def save_authorized_checkpoint(
+    *,
+    tree_size: int,
+    origin: str,
+    root,
+    checkpoint: str,
+    request_id: str,
+    signed: bytes,
+    at: int,
+) -> dict:
+    """Persist AUTHORIZED only. Same checkpoint is idempotent. Different checkpoint refused."""
+    size = int(tree_size)
+    root_hex = bytes(root).hex() if isinstance(root, (bytes, bytearray)) else str(root or "")
+    blob = bytes(signed or b"")
+    note = checkpoint if checkpoint is not None else ""
+    rid = request_id if request_id is not None else ""
+    when = int(at)
+    with _lock:
+        conn = _connect()
+        existing = _authorized_row(conn, size)
+        if existing and existing["signed"]:
+            if existing["checkpoint"] != note or (existing["root"] and root_hex and existing["root"] != root_hex):
+                return existing
+            payload = {
+                "size": existing["tree_size"],
+                "at": existing["at"],
+                "request_id": existing["request_id"],
+                "origin": existing["origin"],
+                "root": existing["root"],
+            }
+            conn.execute(
+                "INSERT INTO meta(k, v) VALUES ('last_authorized_checkpoint', ?) "
+                "ON CONFLICT(k) DO UPDATE SET v = excluded.v",
+                (json.dumps(payload),),
+            )
+            conn.commit()
+            return existing
+        conn.execute(
+            "INSERT OR REPLACE INTO authorized_anchors"
+            "(tree_size, origin, root, checkpoint, request_id, signed, at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (size, origin or "", root_hex, note, rid, blob, when),
+        )
+        payload = {
+            "size": size,
+            "at": when,
+            "request_id": rid,
+            "origin": origin or "",
+            "root": root_hex,
+        }
+        conn.execute(
+            "INSERT INTO meta(k, v) VALUES ('last_authorized_checkpoint', ?) "
+            "ON CONFLICT(k) DO UPDATE SET v = excluded.v",
+            (json.dumps(payload),),
+        )
+        conn.commit()
+        _chmod_db_files(_conn_path or db_path())
+        return _authorized_row(conn, size) or {
+            "tree_size": size,
+            "size": size,
+            "origin": origin or "",
+            "root": root_hex,
+            "checkpoint": note,
+            "request_id": rid,
+            "signed": blob,
+            "at": when,
+        }
+
+
+def last_confirmed_checkpoint() -> dict:
+    raw = meta_get("last_confirmed_checkpoint")
+    if not raw:
+        return {"size": 0, "at": 0, "txid": "", "round": 0, "root": "", "origin": ""}
+    try:
+        data = json.loads(raw)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {"size": 0, "at": 0, "txid": "", "round": 0, "root": "", "origin": ""}
+    if not isinstance(data, dict):
+        return {"size": 0, "at": 0, "txid": "", "round": 0, "root": "", "origin": ""}
+    return {
+        "size": int(data.get("size") or 0),
+        "at": int(data.get("at") or 0),
+        "txid": str(data.get("txid") or ""),
+        "round": int(data.get("round") or data.get("confirmed_round") or 0),
+        "root": str(data.get("root") or ""),
+        "origin": str(data.get("origin") or ""),
+    }
+
+
+def save_confirmed_checkpoint(
+    *,
+    tree_size: int,
+    origin: str,
+    root,
+    txid: str,
+    confirmed_round: int,
+    at: int,
+) -> dict:
+    """Persist CONFIRMED only. Does not write authorized. Does not POST."""
+    size = int(tree_size)
+    root_hex = bytes(root).hex() if isinstance(root, (bytes, bytearray)) else str(root or "")
+    when = int(at)
+    rnd = int(confirmed_round)
+    with _lock:
+        conn = _connect()
+        conn.execute(
+            "INSERT OR REPLACE INTO confirmed_anchors"
+            "(tree_size, origin, root, txid, confirmed_round, at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (size, origin or "", root_hex, txid, rnd, when),
+        )
+        payload = {
+            "size": size,
+            "at": when,
+            "txid": txid,
+            "round": rnd,
+            "root": root_hex,
+            "origin": origin or "",
+        }
+        conn.execute(
+            "INSERT INTO meta(k, v) VALUES ('last_confirmed_checkpoint', ?) "
+            "ON CONFLICT(k) DO UPDATE SET v = excluded.v",
+            (json.dumps(payload),),
+        )
+        conn.commit()
+        _chmod_db_files(_conn_path or db_path())
+        return last_confirmed_checkpoint()
