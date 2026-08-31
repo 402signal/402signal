@@ -1,4 +1,4 @@
-"""Isolated Falcon signer process: unsigned txn in, pqsig out. No /route. No log SK."""
+"""In-process isolated Falcon signer: unsigned txn in, pqsig out. No /route. No log SK."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from live402 import payment, server
 from live402.pq import algo_anchor, isolated_signer, receipt, store
 
 
-class IsolatedSignerProcessTests(unittest.TestCase):
+class IsolatedSignerLibraryTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         os.environ["LIVE402_PQ_LOG_DB"] = os.path.join(self.tmp.name, "pq-log.sqlite")
@@ -26,7 +26,6 @@ class IsolatedSignerProcessTests(unittest.TestCase):
         algo_anchor.configure_falcon_sk(None)
         os.environ.pop("LIVE402_PQ_FALCON_SK", None)
         os.environ.pop("LIVE402_PQ_LOG_SK", None)
-        os.environ.pop("FLY_PROCESS_GROUP", None)
         self.sk = os.urandom(algo_anchor.FALCON_SK_LEN)
         self.hex_sk = self.sk.hex()
         self.log_seed = os.urandom(32)
@@ -40,7 +39,6 @@ class IsolatedSignerProcessTests(unittest.TestCase):
         store.reset()
         os.environ.pop("LIVE402_PQ_FALCON_SK", None)
         os.environ.pop("LIVE402_PQ_LOG_SK", None)
-        os.environ.pop("FLY_PROCESS_GROUP", None)
         os.environ.pop("LIVE402_PQ_LOG_DB", None)
         self.tmp.cleanup()
 
@@ -81,6 +79,8 @@ class IsolatedSignerProcessTests(unittest.TestCase):
         self.assertNotIn("boot_optional_log_signer", src)
         self.assertNotIn("handle_route", src)
         self.assertNotIn("ThreadingHTTPServer", src)
+        self.assertNotIn("FLY_PROCESS_GROUP", src)
+        self.assertNotIn("falcon process", src)
 
     def test_main_empty_stdin_does_not_serve_http_or_configure_log(self):
         os.environ["LIVE402_PQ_LOG_SK"] = self.log_hex
@@ -93,31 +93,24 @@ class IsolatedSignerProcessTests(unittest.TestCase):
         self.assertNotIn(self.hex_sk, out.getvalue())
         self.assertNotIn(self.log_hex, out.getvalue())
 
-    def test_refuses_to_run_in_app_process_group(self):
-        os.environ["FLY_PROCESS_GROUP"] = "app"
-        with self.assertRaises(isolated_signer.SignerProcessError):
-            isolated_signer.boot()
-
-    def test_http_main_refuses_falcon_process_group(self):
-        os.environ["FLY_PROCESS_GROUP"] = "falcon"
-        with self.assertRaises(SystemExit) as ctx:
-            server.main(["--host", "127.0.0.1", "--port", "0"])
-        self.assertIn("falcon", str(ctx.exception).lower())
-
-    def test_source_has_no_route_server(self):
+    def test_source_has_no_route_or_http_server(self):
         src = inspect.getsource(isolated_signer)
         self.assertIn("unsigned txn in", src.lower())
         self.assertNotIn("handle_route", src)
         self.assertNotIn('"/route"', src)
         self.assertNotIn("SimpleHTTPRequestHandler", src)
-        falcon_main = inspect.getsource(isolated_signer.main)
-        self.assertNotIn("boot_optional_log_signer", falcon_main)
+        self.assertNotIn("FLY_PROCESS_GROUP", src)
+        self.assertNotIn("[processes]", src)
+        lib_main = inspect.getsource(isolated_signer.main)
+        self.assertNotIn("boot_optional_log_signer", lib_main)
 
-    def test_app_process_still_send_forbidden(self):
+    def test_app_still_send_forbidden(self):
         with self.assertRaises(RuntimeError):
             algo_anchor.send_forbidden({})
         src = inspect.getsource(server.main)
         self.assertNotIn("boot_optional_falcon_sk", src)
+        self.assertNotIn("FLY_PROCESS_GROUP", src)
+        self.assertNotIn("falcon process", src)
 
 
 if __name__ == "__main__":

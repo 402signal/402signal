@@ -1,25 +1,19 @@
-"""Isolated Falcon signer process. Unsigned txn in, pqsig out.
+"""In-process isolated Falcon signer. Unsigned txn in, pqsig out via callback.
 
-This is the Fly `falcon` process only. It does not serve HTTP and must
-never handle /route. It must not load LIVE402_PQ_LOG_SK (Ed25519 log
-key). It may load LIVE402_PQ_FALCON_SK. Never log, print, or commit
-that secret. 402dev never holds it.
+Library code only on the single app process. Does not serve HTTP /route.
+Does not load LIVE402_PQ_LOG_SK. May load LIVE402_PQ_FALCON_SK.
+Never log, print, or commit that secret. 402dev never holds it.
 
-Stdin: one JSON object per line (unsigned txn; bytes as hex).
-Stdout: {"pqsig": "<hex>"} or {"error": "sign_failed"}.
+Optional stdin helper: one JSON object per line (unsigned txn; bytes as
+hex). Stdout: {"pqsig": "<hex>"} or {"error": "sign_failed"}.
 """
 
 from __future__ import annotations
 
 import json
-import os
 import sys
 
 from live402.pq import algo_anchor
-
-PROCESS_GROUP_ENV = "FLY_PROCESS_GROUP"
-PROCESS_NAME = "falcon"
-APP_PROCESS_NAME = "app"
 
 
 class SignerProcessError(RuntimeError):
@@ -33,7 +27,7 @@ def _bytes_to_hex(value):
 
 
 def encode_unsigned_message(txn: dict) -> str:
-    """JSON line for the isolated process. Never includes a private key."""
+    """JSON line for the isolated callback. Never includes a private key."""
     if not isinstance(txn, dict):
         raise SignerProcessError("txn required")
     payload = {}
@@ -56,7 +50,7 @@ def decode_unsigned_message(raw: str) -> dict:
     out = dict(txn)
     for key in ("note", "gh", "snd", "rcv", "grp"):
         val = out.get(key)
-        if isinstance(val, str) and key in ("note", "gh", "snd", "rcv", "grp"):
+        if isinstance(val, str):
             try:
                 out[key] = bytes.fromhex(val)
             except ValueError as exc:
@@ -65,7 +59,7 @@ def decode_unsigned_message(raw: str) -> dict:
 
 
 def _fail_closed_callback(_txn):
-    raise SignerProcessError("falcon sdk unavailable")
+    raise SignerProcessError("callback required")
 
 
 def handle_request(txn: dict, signer_callback=None) -> bytes:
@@ -93,15 +87,12 @@ def run_loop(infp, outfp, signer_callback=None) -> None:
 
 def boot() -> bool:
     """Load Falcon SK only. Never load the Ed25519 log key."""
-    group = (os.environ.get(PROCESS_GROUP_ENV) or "").strip()
-    if group == APP_PROCESS_NAME:
-        raise SignerProcessError("isolated signer must not run in the app process")
     return algo_anchor.load_falcon_sk_from_env()
 
 
 def main(argv: list[str] | None = None) -> None:
-    """Process entrypoint. No HTTP server. No log-SK load."""
-    del argv  # no flags; refuse to look like the HTTP app
+    """Stdin helper. No HTTP server. No log-SK load."""
+    del argv
     boot()
     run_loop(sys.stdin, sys.stdout)
 

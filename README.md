@@ -183,7 +183,7 @@ fly deploy
 fly ips list
 ```
 
-`fly.toml` already sets `app = "402signal"`, `internal_port = 8080`, `auto_stop_machines = "off"`, `min_machines_running = 1`, one VM. This SHA does not provision or declare a second machine. Ross spend-GO'd ~$2/mo shared-cpu-1x later; that is a **separate PR** after this SHA GOs. Do not `fly scale`. Do not deploy from this PR. The app process still defaults to `send_forbidden`. TestNet broadcast still requires `LIVE402_PQ_FALCON_BROADCAST=1` plus SK.
+`fly.toml` already sets `app = "402signal"`, `internal_port = 8080`, `auto_stop_machines = "off"`, `min_machines_running = 1`, one VM. This SHA has one app process and does not provision or declare a second machine. Ross spend-GO'd ~$2/mo shared-cpu-1x later; that is a **separate PR** after this SHA GOs. Do not deploy from this PR. `send_forbidden` stays the default. TestNet broadcast still requires `LIVE402_PQ_FALCON_NETWORK=testnet`, `LIVE402_PQ_FALCON_BROADCAST=1`, and the other submit gates.
 
 ## Namecheap BasicDNS (do not change until deploy)
 

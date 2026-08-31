@@ -1,16 +1,14 @@
-"""In-process PQ1 anchor worker on the app process.
+"""In-process PQ1 anchor worker on the single app process.
 
 Queue unsigned checkpoint requests. Build a PaymentTxn only when the SLA
 fires. Idle: do not even build an anchor if tree size is unchanged.
 
-send_forbidden remains the default on the app process. maybe_submit()
-may call algod send only when every TestNet gate passes (including
+send_forbidden remains the default. maybe_submit() may call algod send
+only when every TestNet gate passes (including
 LIVE402_PQ_FALCON_BROADCAST=1 plus SK/callback). Otherwise it does not
 build or send.
 
-The isolated Falcon signer is a separate Fly process (shared-cpu-1x
-256MB, ~$2/mo, Ross spend-GO). Scale stays 0 until 402security GOs.
-402QA must not fly scale until that GO. Do not deploy from this module.
+Isolated signing is in-process: unsigned txn in, pqsig out via callback.
 """
 
 from __future__ import annotations

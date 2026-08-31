@@ -211,16 +211,17 @@ class FalconSkEnvTests(unittest.TestCase):
         src = inspect.getsource(server.main)
         self.assertNotIn("boot_optional_falcon_sk", src)
         self.assertIn("boot_optional_log_signer", src)
-        self.assertIn("falcon process", src)
+        self.assertNotIn("falcon process", src)
+        self.assertNotIn("FLY_PROCESS_GROUP", src)
 
         from live402.pq import isolated_signer
 
-        falcon_src = inspect.getsource(isolated_signer.main)
-        self.assertIn("boot", falcon_src)
-        self.assertNotIn("load_signer_from_env", falcon_src)
-        self.assertNotIn("boot_optional_log_signer", falcon_src)
-        self.assertNotIn("ThreadingHTTPServer", falcon_src)
-        self.assertNotIn("/route", falcon_src)
+        iso_src = inspect.getsource(isolated_signer.main)
+        self.assertIn("boot", iso_src)
+        self.assertNotIn("load_signer_from_env", iso_src)
+        self.assertNotIn("boot_optional_log_signer", iso_src)
+        self.assertNotIn("ThreadingHTTPServer", iso_src)
+        self.assertNotIn("/route", iso_src)
 
 
 if __name__ == "__main__":
