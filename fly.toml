@@ -35,3 +35,4 @@ primary_region = "iad"
 
 [env]
   LIVE402_HISTORY_DB = "/data/live402-history.sqlite"
+  LIVE402_CATALOG_DB = "/data/catalog.sqlite"
