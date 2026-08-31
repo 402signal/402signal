@@ -254,7 +254,12 @@ def openapi_spec(resource_url: str = ROUTE) -> dict:
             "max_amount_atomic": {
                 "type": "integer",
                 "minimum": 0,
-                "description": "Drop live hits whose known atomic amount exceeds this bound. Unknown amount fails closed.",
+                "description": "Drop live hits whose known atomic amount exceeds this bound. Unknown or cross-asset amount fails closed.",
+            },
+            "max_price_usd": {
+                "type": "number",
+                "minimum": 0,
+                "description": "Drop live hits whose known normalized USD exceeds this bound. Unknown USD fails closed.",
             },
             "max_latency_ms": {
                 "type": "integer",
@@ -854,7 +859,7 @@ HTTP 200 = live URL plus target contract. HTTP 503 = typed miss_reason.
 
 - POST /route  $0.01 USDC on Base, Solana, or Algorand
 - We support Base, Solana, and Algorand. Ranking is rail-neutral unless prefer_network or a named chain is requested.
-- Body: {"need": "what you want", "url": "https://optional", "prefer_network": "base|solana|algorand", "objective": "best|cheapest|fastest|most_reliable", "max_amount_atomic": 0, "max_latency_ms": 0, "require_invocable": false, "networks": ["base"]}
+- Body: {"need": "what you want", "url": "https://optional", "prefer_network": "base|solana|algorand", "objective": "best|cheapest|fastest|most_reliable", "max_amount_atomic": 0, "max_price_usd": 0, "max_latency_ms": 0, "require_invocable": false, "networks": ["base"]}
 - Agents that intend to pay should POST /route, not GET.
 - GET /route with Accept: application/json (or no Accept) returns HTTP 402 so crawlers can index payment. Browsers that send Accept: text/html get a human page.
 - Unpaid → HTTP 402 (amount 10000 atomic = $0.01, 6 decimals)

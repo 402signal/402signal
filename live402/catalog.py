@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
-from live402 import fixtures, probe
+from live402 import fixtures, payment, probe
 
 PAGE_SIZE = 100
 # Need-scoped working set only. Do not walk PayAI's ~279 pages or accumulate 30k.
@@ -419,6 +419,9 @@ def _slim_extra(extra: dict) -> dict:
                 out["facilitator"] = fac
     if extra.get("feePayer"):
         out["feePayer"] = extra.get("feePayer")
+    display = extra.get("displayAmount")
+    if display is not None and str(display).strip():
+        out["displayAmount"] = str(display).strip()
     return out
 
 
@@ -431,7 +434,7 @@ def _slim_accepts(item: dict) -> list[dict]:
         if not isinstance(acc, dict):
             continue
         row: dict = {}
-        for key in ("payTo", "network", "scheme"):
+        for key in ("payTo", "network", "scheme", "asset", "currency"):
             if acc.get(key) is not None:
                 row[key] = acc[key]
         amount = acc.get("amount")
@@ -705,11 +708,28 @@ def fetch_rail(
     }
 
 
+def _merge_accepts(dest: dict, src: dict) -> None:
+    """Keep every rail's payment terms when the same URL is listed twice."""
+    existing = [a for a in (dest.get("accepts") or []) if isinstance(a, dict)]
+    seen = {payment.accept_identity(a) for a in existing}
+    for acc in src.get("accepts") or []:
+        if not isinstance(acc, dict):
+            continue
+        ident = payment.accept_identity(acc)
+        if ident in seen:
+            continue
+        existing.append(acc)
+        seen.add(ident)
+    if existing:
+        dest["accepts"] = existing
+
+
 def _merge_items(by_rail: dict) -> list[dict]:
     """Dedup by resource URL across rails. Keep rails/also_on. Do not drop a rail copy.
 
     Reuses the by_rail item dicts (no per-item copy) so items and by_rail share
-    identity. Cross-rail hits mutate rails/also_on on the first-seen dict.
+    identity. Cross-rail hits mutate rails/also_on on the first-seen dict and
+    append the later rail's accepts so payment options survive URL dedupe.
     """
     merged: dict[str, dict] = {}
     order: list[str] = []
@@ -730,6 +750,7 @@ def _merge_items(by_rail: dict) -> list[dict]:
                 also = [r for r in rails if r != primary]
                 if also:
                     prev["also_on"] = also
+                _merge_accepts(prev, item)
             else:
                 item["rails"] = [rail]
                 item.pop("also_on", None)

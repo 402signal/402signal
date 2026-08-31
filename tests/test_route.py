@@ -981,10 +981,11 @@ class UnitHelpers(unittest.TestCase):
 
     def test_samples_prefer_useful_themes(self):
         from live402 import pulse as pulse_mod
+        usdc = {"amount": "10000", "asset": payment.USDC_BASE, "network": payment.BASE_CAIP2}
         items = [
-            {"url": "https://g.example/coinflip", "description": "coinflip game", "accepts": [{"amount": "10000"}]},
-            {"url": "https://w.example/weather", "description": "weather", "accepts": [{"amount": "10000"}]},
-            {"url": "https://x.example/erc20-balance", "description": "erc20", "accepts": [{"amount": "10000"}]},
+            {"url": "https://g.example/coinflip", "description": "coinflip game", "accepts": [dict(usdc)]},
+            {"url": "https://w.example/weather", "description": "weather", "accepts": [dict(usdc)]},
+            {"url": "https://x.example/erc20-balance", "description": "erc20", "accepts": [dict(usdc)]},
         ]
         samples = pulse_mod._samples_for_items("base", items)
         needs = [s["need"] for s in samples]

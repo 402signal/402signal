@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 os.environ.setdefault("LIVE402_FIXTURE", "1")
 
-from live402 import catalog, history, probe, pulse
+from live402 import catalog, history, payment, probe, pulse
 
 
 def _snap(live=True, payTo="0xabc", **extra):
@@ -176,6 +176,65 @@ class HistoryDbTests(unittest.TestCase):
         summ = history.summary(url)
         self.assertEqual(summ["last_payTo"], "0xbbb")
         self.assertEqual(summ["payTo_changed_at"], t0 + 2)
+
+    def test_base_payto_case_is_not_a_flip(self):
+        url = "https://hist.example/base-case"
+        mixed = "0xb18fc2275f36dae99eb215caeff03b431f887d16"
+        t0 = int(time.time()) - 5
+        history.record_probe(url, _snap(live=True, payTo=mixed, rail="base", ts=t0))
+        meta = history.record_probe(url, _snap(live=True, payTo=mixed.upper(), rail="base", ts=t0 + 1))
+        self.assertFalse(meta.get("payTo_flipped"))
+        self.assertIsNone(history.summary(url).get("payTo_changed_at"))
+
+    def test_solana_payto_case_is_a_flip(self):
+        url = "https://hist.example/sol-case"
+        addr = payment.DEFAULT_PAYTO_SOLANA
+        t0 = int(time.time()) - 5
+        history.record_probe(url, _snap(live=True, payTo=addr, rail="solana", ts=t0))
+        meta = history.record_probe(
+            url, _snap(live=True, payTo=addr.lower(), rail="solana", ts=t0 + 1)
+        )
+        self.assertTrue(meta.get("payTo_flipped"))
+        self.assertEqual(history.summary(url).get("payTo_changed_at"), t0 + 1)
+
+    def test_price_flip_requires_same_asset(self):
+        url = "https://hist.example/price-asset"
+        t0 = int(time.time()) - 5
+        history.record_probe(
+            url,
+            _snap(
+                live=True,
+                payTo="0xabc",
+                rail="base",
+                amount="10000",
+                asset=payment.USDC_BASE,
+                ts=t0,
+            ),
+        )
+        same = history.record_probe(
+            url,
+            _snap(
+                live=True,
+                payTo="0xabc",
+                rail="base",
+                amount="10000",
+                asset=payment.USDC_BASE,
+                ts=t0 + 1,
+            ),
+        )
+        self.assertFalse(same.get("price_flipped"))
+        flipped = history.record_probe(
+            url,
+            _snap(
+                live=True,
+                payTo="0xabc",
+                rail="base",
+                amount="20000",
+                asset=payment.USDC_BASE,
+                ts=t0 + 2,
+            ),
+        )
+        self.assertTrue(flipped.get("price_flipped"))
 
     def test_record_probe_never_raises_unwritable(self):
         os.environ["LIVE402_HISTORY_DB"] = "/proc/1/live402-history.sqlite"

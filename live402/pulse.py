@@ -126,26 +126,10 @@ def reset_cache() -> None:
 
 def usdc_atomic_to_price(amount) -> tuple[str, float | None]:
     """USDC 6 decimals: 10000 -> $0.01. Never treat atomic as dollars."""
-    if amount is None or amount == "":
+    label, usd = payment.usdc_from_atomic(amount)
+    if label is None and usd is None:
         return "unknown", None
-    raw = str(amount).strip()
-    if raw.startswith("$"):
-        try:
-            usd = float(raw[1:].replace(",", ""))
-        except ValueError:
-            return raw, None
-        return f"${usd:.2f}" if usd >= 0.01 or usd == 0 else raw, usd
-    try:
-        n = int(raw)
-    except (ValueError, TypeError):
-        return "unknown", None
-    usd = n / 1_000_000
-    if n == 0:
-        return "$0.00", 0.0
-    if n % 10_000 == 0:
-        return f"${usd:.2f}", usd
-    text = f"${usd:.6f}".rstrip("0").rstrip(".")
-    return text, usd
+    return label or "unknown", usd
 
 
 def _listing_name(item: dict, url: str) -> str:
@@ -174,16 +158,14 @@ def _accepts(item: dict) -> list[dict]:
 
 
 def _price_from_accept(acc: dict) -> tuple[str, float | None]:
-    extra = acc.get("extra") or {}
-    display = extra.get("displayAmount") if isinstance(extra, dict) else None
-    if display:
-        label, usd = usdc_atomic_to_price(display)
-        if usd is not None:
-            return label, usd
-    amount = acc.get("amount")
-    if amount is None:
-        amount = acc.get("maxAmountRequired")
-    return usdc_atomic_to_price(amount)
+    opt = payment.payment_option_from_accept(acc)
+    if not opt:
+        return "unknown", None
+    if opt.get("normalized_usd") is not None:
+        return opt.get("display_amount") or "unknown", opt["normalized_usd"]
+    if opt.get("display_amount"):
+        return opt["display_amount"], None
+    return "unknown", None
 
 
 def _is_ours(url: str) -> bool:

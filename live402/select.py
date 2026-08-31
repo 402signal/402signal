@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from functools import cmp_to_key
 
+from live402 import payment
+
 OBJECTIVES = ("best", "cheapest", "fastest", "most_reliable")
 RAILS = frozenset(("base", "solana", "algorand"))
 WEAK_MIN_N = 3
@@ -108,8 +110,12 @@ def parse_constraints(body: dict) -> dict:
     networks = src.get("networks")
     if networks is None:
         networks = src.get("rails")
+    max_usd = _as_float(src.get("max_price_usd"))
+    if max_usd is not None and max_usd < 0:
+        max_usd = None
     return {
         "max_amount_atomic": _nonneg_int(src.get("max_amount_atomic")),
+        "max_price_usd": max_usd,
         "max_latency_ms": _nonneg_int(src.get("max_latency_ms")),
         "require_invocable": _truthy(src.get("require_invocable"), False),
         "rails": _parse_rails(networks),
@@ -129,6 +135,10 @@ def _amount_from_accepts(accepts) -> int | None:
         if n is not None:
             return n
     return None
+
+
+def payment_options(result) -> list[dict]:
+    return payment.payment_options_from_result(result)
 
 
 def amount_atomic(result) -> int | None:
@@ -154,7 +164,52 @@ def amount_atomic(result) -> int | None:
         if n is not None:
             return n
     env = result.get("envelope") if isinstance(result.get("envelope"), dict) else {}
-    return _amount_from_accepts(env.get("accepts"))
+    n = _amount_from_accepts(env.get("accepts"))
+    if n is not None:
+        return n
+    opts = payment_options(result)
+    for opt in opts:
+        n = _as_int(opt.get("amount_atomic"))
+        if n is not None:
+            return n
+    return None
+
+
+def _result_rails(result) -> set:
+    rails: set = set()
+    if isinstance(result, dict) and result.get("rail") in RAILS:
+        rails.add(result.get("rail"))
+    for opt in payment_options(result):
+        if opt.get("rail") in RAILS:
+            rails.add(opt["rail"])
+    return rails
+
+
+def _options_for_constraints(result, cons) -> list[dict]:
+    """Payment options that survive network + price bounds. Fail closed per option."""
+    opts = payment_options(result)
+    rails = cons.get("rails") if isinstance(cons, dict) else None
+    if isinstance(rails, frozenset):
+        opts = [o for o in opts if o.get("rail") in rails]
+    max_amt = cons.get("max_amount_atomic") if isinstance(cons, dict) else None
+    if max_amt is not None:
+        kept = []
+        for opt in opts:
+            # Atomic bound only when the asset is known so units are meaningful.
+            if opt.get("decimals") is None or opt.get("amount_atomic") is None:
+                continue
+            if int(opt["amount_atomic"]) > int(max_amt):
+                continue
+            kept.append(opt)
+        opts = kept
+    max_usd = cons.get("max_price_usd") if isinstance(cons, dict) else None
+    if max_usd is not None:
+        opts = [
+            o
+            for o in opts
+            if o.get("normalized_usd") is not None and float(o["normalized_usd"]) <= float(max_usd)
+        ]
+    return opts
 
 
 def latency_ms(result) -> int | None:
@@ -222,10 +277,13 @@ def passes_constraints(result, constraints) -> bool:
     if not _payto(result):
         return False
     cons = constraints if isinstance(constraints, dict) else {}
-    max_amt = cons.get("max_amount_atomic")
-    if max_amt is not None:
-        amt = amount_atomic(result)
-        if amt is None or amt > max_amt:
+    rails = cons.get("rails")
+    if isinstance(rails, frozenset):
+        if _result_rails(result).isdisjoint(rails):
+            return False
+    if cons.get("max_amount_atomic") is not None or cons.get("max_price_usd") is not None:
+        # Unknown or cross-asset atomic cannot apply the bound — drop the candidate.
+        if not _options_for_constraints(result, cons):
             return False
     max_lat = cons.get("max_latency_ms")
     if max_lat is not None:
@@ -233,9 +291,6 @@ def passes_constraints(result, constraints) -> bool:
         if lat is None or lat > max_lat:
             return False
     if cons.get("require_invocable") and not result.get("invocable"):
-        return False
-    rails = cons.get("rails")
-    if isinstance(rails, frozenset) and result.get("rail") not in rails:
         return False
     return True
 
@@ -253,19 +308,91 @@ def _readiness_tier(result) -> int:
     return -1
 
 
+def _best_usd(result, cons=None) -> float | None:
+    opts = _options_for_constraints(result, cons or {})
+    if not opts:
+        opts = payment_options(result)
+    vals = [o.get("normalized_usd") for o in opts if o.get("normalized_usd") is not None]
+    if not vals:
+        return None
+    return min(float(v) for v in vals)
+
+
+def _best_atomic_for_asset(result, asset_key: str, cons=None) -> int | None:
+    opts = _options_for_constraints(result, cons or {})
+    if not opts:
+        opts = payment_options(result)
+    vals = []
+    for opt in opts:
+        if payment.asset_identity(opt) != asset_key:
+            continue
+        n = _as_int(opt.get("amount_atomic"))
+        if n is not None:
+            vals.append(n)
+    if not vals:
+        return None
+    return min(vals)
+
+
 def _cmp_amount_asc(a, b) -> int:
-    aa, ab = amount_atomic(a), amount_atomic(b)
-    if aa is not None and ab is not None:
-        if aa < ab:
+    """Compare prices only when both sides are USD-known or the same known asset."""
+    ua, ub = _best_usd(a), _best_usd(b)
+    if ua is not None and ub is not None:
+        if ua < ub:
             return -1
-        if aa > ab:
+        if ua > ub:
             return 1
         return 0
-    if aa is not None:
-        return -1
-    if ab is not None:
-        return 1
+    keys_a = {payment.asset_identity(o) for o in payment_options(a)}
+    keys_b = {payment.asset_identity(o) for o in payment_options(b)}
+    keys_a.discard(None)
+    keys_b.discard(None)
+    shared = keys_a & keys_b
+    if len(shared) == 1:
+        key = next(iter(shared))
+        aa, ab = _best_atomic_for_asset(a, key), _best_atomic_for_asset(b, key)
+        if aa is not None and ab is not None:
+            if aa < ab:
+                return -1
+            if aa > ab:
+                return 1
+            return 0
+    # Incomparable: do not treat unknown atomic as cheaper/dearer.
     return 0
+
+
+def _cheapest_comparable_subset(results, cons) -> list[dict]:
+    """Keep only results that can be cheapest-ranked. Fail closed on mixed unknowns.
+
+    Known-USDC options compare via normalized_usd. Unknown tokens are dropped
+    when any USD-known option exists. Two different unknown tokens → empty.
+    Same known asset → amount_atomic is OK.
+    """
+    priced: list[tuple] = []
+    for result in results:
+        opts = _options_for_constraints(result, cons)
+        if not opts:
+            opts = payment_options(result)
+        usd = [o for o in opts if o.get("normalized_usd") is not None]
+        if usd:
+            priced.append((result, "usd", min(float(o["normalized_usd"]) for o in usd), None))
+            continue
+        keys = {payment.asset_identity(o) for o in opts}
+        keys.discard(None)
+        if len(keys) == 1:
+            key = next(iter(keys))
+            atomics = [_as_int(o.get("amount_atomic")) for o in opts if payment.asset_identity(o) == key]
+            atomics = [n for n in atomics if n is not None]
+            if atomics:
+                priced.append((result, "atomic", min(atomics), key))
+    if not priced:
+        return []
+    if any(kind == "usd" for _r, kind, _v, _k in priced):
+        return [r for r, kind, _v, _k in priced if kind == "usd"]
+    assets = {k for _r, kind, _v, k in priced if kind == "atomic"}
+    if len(assets) == 1:
+        return [r for r, kind, _v, _k in priced if kind == "atomic"]
+    return []
 
 
 def _cmp_latency_asc(a, b, unknown_last: bool) -> int:
@@ -318,13 +445,7 @@ def _cmp_fastest(a, b) -> int:
     c = _cmp_latency_asc(a, b, unknown_last=True)
     if c:
         return c
-    aa, ab = amount_atomic(a), amount_atomic(b)
-    if aa is not None and ab is not None:
-        if aa < ab:
-            return -1
-        if aa > ab:
-            return 1
-    return 0
+    return _cmp_amount_asc(a, b)
 
 
 def _cmp_most_reliable(a, b) -> int:
@@ -337,13 +458,7 @@ def _cmp_most_reliable(a, b) -> int:
     c = _cmp_latency_asc(a, b, unknown_last=True)
     if c:
         return c
-    aa, ab = amount_atomic(a), amount_atomic(b)
-    if aa is not None and ab is not None:
-        if aa < ab:
-            return -1
-        if aa > ab:
-            return 1
-    return 0
+    return _cmp_amount_asc(a, b)
 
 
 def _cmp_best(a, b) -> int:
@@ -356,9 +471,9 @@ def _cmp_best(a, b) -> int:
     la, lb = latency_ms(a), latency_ms(b)
     if la is not None and lb is not None and la != lb:
         return -1 if la < lb else 1
-    aa, ab = amount_atomic(a), amount_atomic(b)
-    if aa is not None and ab is not None and aa != ab:
-        return -1 if aa < ab else 1
+    c = _cmp_amount_asc(a, b)
+    if c:
+        return c
     return _cmp_weak_reliability_desc(a, b)
 
 
@@ -387,6 +502,9 @@ def enough_evidence(results: list[dict], objective: str, constraints: dict | Non
     stable = [r for r in viable if not r.get("payTo_changed")]
     if obj == "best":
         return bool(stable)
+    if obj == "cheapest":
+        pool = stable or viable
+        return bool(_cheapest_comparable_subset(pool, cons))
     return bool(stable or viable)
 
 
@@ -399,6 +517,10 @@ def pick_winner(results: list[dict], objective: str, constraints: dict | None = 
     remaining = [r for r in results if isinstance(r, dict) and passes_constraints(r, cons)]
     if not remaining:
         return None
+    if obj == "cheapest":
+        remaining = _cheapest_comparable_subset(remaining, cons)
+        if not remaining:
+            return None
     cmp_fn = _CMP.get(obj, _cmp_best)
     # Stable: original remaining order is the last tie-break (first wins).
     ranked = sorted(remaining, key=cmp_to_key(cmp_fn))

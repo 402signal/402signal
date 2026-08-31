@@ -11,6 +11,8 @@ import threading
 import time
 from datetime import datetime, timezone
 
+from live402 import payment
+
 DEFAULT_DB = "/tmp/live402-history.sqlite"
 VOLUME_DB = "/data/live402-history.sqlite"
 PER_URL_CAP = 500
@@ -219,6 +221,47 @@ def _observed_amount(snap: dict) -> str | None:
     if snap.get("amount") is not None and snap.get("amount") != "":
         return _text(snap.get("amount"))
     return _amount_from_accepts(_envelope(snap).get("accepts"))
+
+
+def _price_option(amount, snap: dict, rail=None) -> dict | None:
+    opts = payment.payment_options_from_result(snap if isinstance(snap, dict) else {})
+    if opts:
+        return opts[0]
+    return payment.payment_option_from_accept(
+        {
+            "amount": amount,
+            "asset": (snap or {}).get("asset"),
+            "network": (snap or {}).get("network") or rail,
+        },
+        rail,
+    )
+
+
+def _price_flipped(prev_amt, amount, snap: dict, rail=None) -> bool:
+    """Asset-aware price change. Do not treat raw atomic strings as dollars."""
+    curr = _price_option(amount, snap, rail)
+    prev = payment.payment_option_from_accept(
+        {
+            "amount": prev_amt,
+            "asset": (curr or {}).get("asset") or (snap or {}).get("asset"),
+            "network": (curr or {}).get("network") or (snap or {}).get("network") or rail,
+        },
+        rail,
+    )
+    if curr and prev:
+        if payment.prices_equivalent(prev, curr):
+            return False
+        # Same known asset, different atomic / USD → flipped.
+        if payment.asset_identity(prev) and payment.asset_identity(prev) == payment.asset_identity(curr):
+            return True
+        if prev.get("normalized_usd") is not None and curr.get("normalized_usd") is not None:
+            return float(prev["normalized_usd"]) != float(curr["normalized_usd"])
+        # Different or unknown assets: only flip when atomics differ AND assets match
+        # enough to compare. Incomparable assets are not a silent same-price.
+        if not payment.asset_identity(prev) or not payment.asset_identity(curr):
+            return str(prev_amt) != str(amount)
+        return True
+    return str(prev_amt) != str(amount)
 
 def _bazaar_schema_present(blob: dict | None) -> bool:
     if not isinstance(blob, dict):
@@ -442,13 +485,16 @@ def record_probe(url: str, snap: dict | None = None) -> dict:
             price_changed_at = row[4] if row else None
             schema_changed_at = row[5] if row else None
             last_ok = row[6] if row else None
-            if prev_pay and pay_to and prev_pay.lower() != pay_to.lower():
+            if prev_pay and pay_to and not payment.payto_equal(prev_pay, pay_to, rail):
                 pay_changed_at = ts
                 meta["payTo_flipped"] = True
             claimed_pay = _text(claimed.get("payTo")) if claimed else None
-            if claimed_pay and pay_to and claimed_pay.lower() != pay_to.lower():
+            claimed_rail = _text(claimed.get("rail")) if claimed else None
+            if claimed_pay and pay_to and not payment.payto_equal(
+                claimed_pay, pay_to, claimed_rail or rail
+            ):
                 meta["payTo_flipped"] = True
-            if prev_amt is not None and amount is not None and str(prev_amt) != str(amount):
+            if prev_amt is not None and amount is not None and _price_flipped(prev_amt, amount, snap, rail):
                 price_changed_at = ts
                 meta["price_flipped"] = True
             if prev_schema is not None and schema_present is not None and int(prev_schema) != int(schema_present):
@@ -915,7 +961,8 @@ def attach_to_result(result: dict | None, meta: dict | None = None) -> dict:
         result["observed"] = observed
         obs_pay = observed.get("payTo") or _text(result.get("payTo"))
         cl_pay = claimed.get("payTo")
-        if obs_pay and cl_pay and str(obs_pay).lower() != str(cl_pay).lower():
+        rail = _text(result.get("rail"))
+        if obs_pay and cl_pay and not payment.payto_equal(obs_pay, cl_pay, rail):
             result["payTo_changed"] = True
         if result.get("payTo_changed"):
             result["risk"] = ["payTo_changed"]

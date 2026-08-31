@@ -439,6 +439,46 @@ class CatalogIndexTests(unittest.TestCase):
         self.assertIs(merged[0], item)
         self.assertEqual(merged[0]["rails"], ["base"])
 
+    def test_merge_keeps_both_rail_payment_options(self):
+        from live402 import payment
+
+        url = "https://multi.example/weather"
+        base = catalog.slim_item(
+            {
+                "url": url,
+                "description": "weather base",
+                "accepts": [
+                    {
+                        "network": payment.BASE_CAIP2,
+                        "asset": payment.USDC_BASE,
+                        "amount": "20000",
+                        "payTo": "0xabc",
+                    }
+                ],
+            },
+            "base",
+        )
+        sol = catalog.slim_item(
+            {
+                "url": url,
+                "description": "weather solana",
+                "accepts": [
+                    {
+                        "network": payment.SOLANA_MAINNET,
+                        "asset": payment.USDC_SOLANA_MINT,
+                        "amount": "10000",
+                        "payTo": payment.DEFAULT_PAYTO_SOLANA,
+                    }
+                ],
+            },
+            "solana",
+        )
+        merged = catalog._merge_items({"base": [base], "solana": [sol], "algorand": []})
+        self.assertEqual(len(merged), 1)
+        assets = {a.get("asset") for a in (merged[0].get("accepts") or [])}
+        self.assertEqual(assets, {payment.USDC_BASE, payment.USDC_SOLANA_MINT})
+        self.assertIn("solana", merged[0].get("also_on") or [])
+
     def test_query_caps_are_need_scoped(self):
         self.assertEqual(catalog.QUERY_MAX_ITEMS, 100)
         self.assertEqual(catalog.QUERY_MAX_PAGES, 2)

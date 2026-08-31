@@ -16,7 +16,7 @@ from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import datetime, timezone
 from urllib.parse import urljoin, urlparse
 
-from live402 import fixtures, select
+from live402 import fixtures, payment, select
 
 USER_AGENT = "402Signal/0.1 (fail-closed probe; no payment)"
 DISCOVERY_URL = "https://api.cdp.coinbase.com/platform/v2/x402/discovery/resources"
@@ -161,21 +161,26 @@ def _request_timeout(deadline: float | None) -> float:
     return min(cap, left)
 
 
-def _display_amount(amount, extra: dict | None) -> str | None:
+def _display_amount(amount, extra: dict | None, asset=None, network=None) -> str | None:
     extra = extra if isinstance(extra, dict) else {}
-    display = extra.get("displayAmount")
-    if display:
-        return str(display)
+    acc = {
+        "amount": amount,
+        "asset": asset,
+        "network": network,
+        "extra": extra,
+    }
+    opt = payment.payment_option_from_accept(acc, network)
+    if opt and opt.get("display_amount"):
+        return opt["display_amount"]
+    seller = extra.get("displayAmount")
+    if seller:
+        return str(seller)
     if amount is None or amount == "":
         return None
     raw = str(amount).strip()
     if raw.startswith("$"):
         return raw
-    try:
-        n = int(raw)
-    except (TypeError, ValueError):
-        return None
-    return f"${n / 1_000_000:.2f}"
+    return None
 
 
 def _bazaar_blobs(item: dict | None, envelope: dict | None) -> list[dict]:
@@ -308,12 +313,24 @@ def normalize_target_accepts(accepts: list | None) -> list[dict]:
 
 
 def _accepts_from(item: dict | None, envelope: dict | None) -> list[dict]:
+    """Merge envelope + catalog accepts so multi-rail terms survive."""
+    out: list[dict] = []
+    seen: set[tuple] = set()
     for blob in (envelope, item):
-        if isinstance(blob, dict):
-            raw = blob.get("accepts")
-            if isinstance(raw, list) and raw:
-                return [a for a in raw if isinstance(a, dict)]
-    return []
+        if not isinstance(blob, dict):
+            continue
+        raw = blob.get("accepts")
+        if not isinstance(raw, list):
+            continue
+        for acc in raw:
+            if not isinstance(acc, dict):
+                continue
+            key = payment.accept_identity(acc)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(acc)
+    return out
 
 
 def build_target(item: dict | None, envelope: dict | None = None) -> dict:
@@ -328,6 +345,10 @@ def build_target(item: dict | None, envelope: dict | None = None) -> dict:
     except (TypeError, ValueError):
         timeout_s = 60
     fac_url = fac.get("url") if isinstance(fac, dict) else None
+    opt = payment.payment_option_from_accept(first, first.get("network"))
+    display = (opt or {}).get("display_amount")
+    if display is None:
+        display = _display_amount(amount, extra, first.get("asset") or first.get("currency"), first.get("network"))
     return {
         "method": extract_method(item, envelope),
         "inputSchema": extract_input_schema(item, envelope),
@@ -335,7 +356,7 @@ def build_target(item: dict | None, envelope: dict | None = None) -> dict:
         "accepts": accepts,
         "facilitator": fac_url,
         "amountAtomic": str(amount) if amount is not None else None,
-        "displayAmount": _display_amount(amount, extra),
+        "displayAmount": display,
         "timeoutSeconds": timeout_s,
     }
 
@@ -750,6 +771,26 @@ def _catalog_payto(item: dict | None) -> str | None:
     return None
 
 
+def _payto_matches_catalog(probed, item: dict | None, rail=None) -> bool:
+    """True if probed payTo matches any catalog accept on that accept's rail."""
+    if not probed or not item or not isinstance(item, dict):
+        return False
+    accepts = item.get("accepts") or []
+    if isinstance(accepts, list) and accepts:
+        for acc in accepts:
+            if not isinstance(acc, dict):
+                continue
+            pay = acc.get("payTo")
+            if not pay:
+                continue
+            acc_rail = payment.rail_of_network(acc.get("network") or "") or rail
+            if payment.payto_equal(probed, pay, acc_rail):
+                return True
+        return False
+    catalog_pay = _catalog_payto(item)
+    return bool(catalog_pay and payment.payto_equal(probed, catalog_pay, rail))
+
+
 def _traction(item: dict | None) -> str:
     """Numeric catalog traction only. Prefer unknown over a guessed volume."""
     if not item or not isinstance(item, dict):
@@ -838,9 +879,8 @@ def attach_catalog_fields(result: dict, item: dict | None = None) -> dict:
     catalog_pay = _catalog_payto(item)
     probed = result.get("payTo")
     if catalog_pay:
-        mismatched = bool(
-            probed and str(probed).strip().lower() != catalog_pay.lower()
-        )
+        rail = result.get("rail") or _item_rail(item)
+        mismatched = bool(probed and not _payto_matches_catalog(probed, item, rail))
         if mismatched:
             result["payTo_changed"] = True
         else:

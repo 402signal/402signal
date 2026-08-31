@@ -34,7 +34,12 @@ INPUT_SCHEMA = {
         "max_amount_atomic": {
             "type": "integer",
             "minimum": 0,
-            "description": "Drop live hits whose known atomic amount exceeds this bound.",
+            "description": "Drop live hits whose known atomic amount exceeds this bound. Unknown or cross-asset amount fails closed.",
+        },
+        "max_price_usd": {
+            "type": "number",
+            "minimum": 0,
+            "description": "Drop live hits whose known normalized USD exceeds this bound. Unknown USD fails closed.",
         },
         "max_latency_ms": {
             "type": "integer",

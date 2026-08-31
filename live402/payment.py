@@ -24,6 +24,7 @@ CDP_FACILITATOR = "https://api.cdp.coinbase.com/platform/v2/x402"
 # $0.01 USDC, 6 decimals
 AMOUNT_ATOMIC = "10000"
 AMOUNT_USD = "$0.01"
+USDC_DECIMALS = 6
 
 # Spec-shaped bazaar declaration for POST /route.
 # See https://github.com/x402-foundation/x402/blob/main/specs/extensions/bazaar.md
@@ -389,6 +390,22 @@ def _norm(value) -> str:
     return str(value or "").strip().lower()
 
 
+def _text(value) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _as_int(val):
+    if val is None or val == "" or isinstance(val, bool):
+        return None
+    try:
+        return int(val)
+    except (TypeError, ValueError):
+        return None
+
+
 def rail_of_network(network: str) -> str | None:
     n = _norm(network)
     if not n:
@@ -404,6 +421,318 @@ def rail_of_network(network: str) -> str | None:
 
 def rail_of_accept(accept: dict) -> str:
     return rail_of_network((accept or {}).get("network")) or "base"
+
+
+def _rail_name(rail) -> str | None:
+    """Short rail name from a short name or CAIP-2 network."""
+    if rail is None or rail == "":
+        return None
+    text = str(rail).strip()
+    if not text:
+        return None
+    low = text.lower()
+    if low in {"base", "solana", "algorand", "evm"}:
+        return "base" if low == "evm" else low
+    return rail_of_network(text)
+
+
+def infer_rail_from_payto(addr) -> str | None:
+    """Guess a rail from address shape. Algorand is 58 chars; EVM is 0x+40 hex."""
+    text = _text(addr)
+    if not text:
+        return None
+    if text.startswith("0x") and len(text) == 42:
+        try:
+            int(text[2:], 16)
+        except ValueError:
+            return None
+        return "base"
+    if len(text) == 58 and text.isalnum():
+        return "algorand"
+    if text.isalnum() and 32 <= len(text) <= 44:
+        return "solana"
+    return None
+
+
+def payto_canonical(addr, rail=None) -> str | None:
+    """Canonical payTo for a rail. Algorand is uppercase; Base/EVM is lowercase hex."""
+    text = _text(addr)
+    if not text:
+        return None
+    r = _rail_name(rail)
+    if r == "algorand":
+        return text.upper()
+    if r == "base":
+        return text.lower()
+    return text
+
+
+def payto_equal(a, b, rail=None) -> bool:
+    """Rail-aware payTo equality. No universal .lower().
+
+    Base/EVM: case-insensitive hex. Solana: case-sensitive base58.
+    Algorand: case-insensitive; canonical form in this repo is uppercase
+    (DEFAULT_PAYTO_ALGORAND) and algo_tx.decode_address uses base32.
+    """
+    left, right = _text(a), _text(b)
+    if not left or not right:
+        return False
+    r = _rail_name(rail)
+    if not r:
+        ra, rb = infer_rail_from_payto(left), infer_rail_from_payto(right)
+        if ra and ra == rb:
+            r = ra
+        else:
+            return left == right
+    if r == "solana":
+        return left == right
+    if r == "algorand":
+        return left.upper() == right.upper()
+    if r == "base":
+        return left.lower() == right.lower()
+    return left == right
+
+
+def _token_equal(a, b, rail) -> bool:
+    left, right = _text(a), _text(b)
+    if not left or not right:
+        return False
+    r = _rail_name(rail)
+    if r == "solana":
+        return left == right
+    if r == "algorand":
+        return left.upper() == right.upper()
+    if r == "base":
+        return left.lower() == right.lower()
+    return left == right
+
+
+def known_usdc_asset(asset, network=None) -> bool:
+    """True only for the three USDC constants in this repo, or the name USDC/USD on a known rail."""
+    raw = _text(asset)
+    if not raw:
+        return False
+    rail = _rail_name(network)
+    if _token_equal(raw, USDC_BASE, "base"):
+        return True
+    if _token_equal(raw, USDC_SOLANA_MINT, "solana"):
+        return True
+    if _token_equal(raw, USDC_ALGORAND_ASA, "algorand"):
+        return True
+    if raw.upper() in {"USDC", "USD"} and rail in {"base", "solana", "algorand"}:
+        return True
+    return False
+
+
+def usdc_asset_for_rail(rail) -> str | None:
+    r = _rail_name(rail)
+    if r == "solana":
+        return USDC_SOLANA_MINT
+    if r == "algorand":
+        return USDC_ALGORAND_ASA
+    if r == "base":
+        return USDC_BASE
+    return None
+
+
+def _format_usd(usd: float) -> str:
+    if usd == 0:
+        return "$0.00"
+    if usd >= 0.01 or usd == 0:
+        rounded = round(usd, 2)
+        if abs(usd - rounded) < 1e-12:
+            return f"${rounded:.2f}"
+    text = f"${usd:.6f}".rstrip("0").rstrip(".")
+    return text
+
+
+def usdc_from_atomic(amount) -> tuple[str | None, float | None]:
+    """Known USDC 6 decimals only. 10000 → ('$0.01', 0.01). Never invent dollars for other assets."""
+    if amount is None or amount == "":
+        return None, None
+    raw = str(amount).strip()
+    if raw.startswith("$"):
+        try:
+            usd = float(raw[1:].replace(",", ""))
+        except ValueError:
+            return raw, None
+        return _format_usd(usd) if usd >= 0 else raw, usd
+    n = _as_int(raw)
+    if n is None:
+        return None, None
+    usd = n / 1_000_000
+    if n == 0:
+        return "$0.00", 0.0
+    if n % 10_000 == 0:
+        return f"${usd:.2f}", usd
+    return _format_usd(usd), usd
+
+
+def _accept_asset(accept: dict) -> str | None:
+    asset = _text((accept or {}).get("asset"))
+    currency = _text((accept or {}).get("currency"))
+    if asset and asset.upper() not in {"USDC", "USD"}:
+        return asset
+    return asset or currency
+
+
+def payment_option_from_accept(accept, fallback_network=None) -> dict | None:
+    """Explicit payment option. USD only when the asset/value relationship is known."""
+    if not isinstance(accept, dict):
+        return None
+    network = accept.get("network") or fallback_network
+    network_s = _text(network)
+    rail = _rail_name(network_s)
+    asset = _accept_asset(accept)
+    raw_amt = accept.get("amount")
+    if raw_amt is None or raw_amt == "":
+        raw_amt = accept.get("maxAmountRequired")
+    amount_atomic = _as_int(raw_amt)
+    extra = accept.get("extra") if isinstance(accept.get("extra"), dict) else {}
+    seller_display = extra.get("displayAmount")
+    if seller_display is not None:
+        seller_display = str(seller_display).strip() or None
+    if raw_amt is not None and str(raw_amt).strip().startswith("$") and not seller_display:
+        seller_display = str(raw_amt).strip()
+
+    known = known_usdc_asset(asset, network_s)
+    decimals = USDC_DECIMALS if known else None
+    normalized_usd = None
+    display_amount = None
+    if known and amount_atomic is not None:
+        label, usd = usdc_from_atomic(amount_atomic)
+        normalized_usd = usd
+        display_amount = label
+    elif seller_display:
+        display_amount = seller_display
+    elif amount_atomic is not None and asset:
+        display_amount = "%s %s" % (amount_atomic, asset)
+    elif amount_atomic is None and raw_amt is None and not asset and not network_s:
+        return None
+
+    return {
+        "network": network_s,
+        "rail": rail,
+        "asset": asset,
+        "amount_atomic": amount_atomic,
+        "decimals": decimals,
+        "display_amount": display_amount,
+        "normalized_usd": normalized_usd,
+    }
+
+
+def payment_options_from_accepts(accepts, fallback_network=None) -> list[dict]:
+    out: list[dict] = []
+    if not isinstance(accepts, list):
+        return out
+    for acc in accepts:
+        opt = payment_option_from_accept(acc, fallback_network)
+        if opt:
+            out.append(opt)
+    return out
+
+
+def _option_identity(opt: dict) -> tuple:
+    rail = opt.get("rail") or ""
+    asset = str(opt.get("asset") or "")
+    amt = opt.get("amount_atomic")
+    net = str(opt.get("network") or "")
+    return (rail, net, asset, amt)
+
+
+def _dedupe_options(opts: list[dict]) -> list[dict]:
+    seen: set[tuple] = set()
+    out: list[dict] = []
+    for opt in opts:
+        key = _option_identity(opt)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(opt)
+    return out
+
+
+def payment_options_from_result(result) -> list[dict]:
+    """Collect payment options from accepts / target / envelope / top-level amount."""
+    if not isinstance(result, dict):
+        return []
+    target = result.get("target") if isinstance(result.get("target"), dict) else {}
+    env = result.get("envelope") if isinstance(result.get("envelope"), dict) else {}
+    fallback = result.get("network") or result.get("rail")
+    blobs: list = []
+    for src in (result.get("accepts"), target.get("accepts"), env.get("accepts")):
+        if isinstance(src, list):
+            blobs.extend(a for a in src if isinstance(a, dict))
+    opts = payment_options_from_accepts(blobs, fallback)
+    if opts:
+        return _dedupe_options(opts)
+    extra = {}
+    display = target.get("displayAmount") or result.get("displayAmount")
+    if display:
+        extra["displayAmount"] = display
+    synth = payment_option_from_accept(
+        {
+            "network": fallback,
+            "asset": result.get("asset") or target.get("asset"),
+            "currency": result.get("currency"),
+            "amount": result.get("amount")
+            if result.get("amount") is not None
+            else (result.get("amountAtomic") or target.get("amountAtomic")),
+            "extra": extra,
+        },
+        fallback,
+    )
+    return [synth] if synth else []
+
+
+def asset_identity(opt: dict | None) -> str | None:
+    """Comparable asset key. None means unknown / incomparable."""
+    if not isinstance(opt, dict):
+        return None
+    asset = _text(opt.get("asset"))
+    if not asset:
+        return None
+    rail = opt.get("rail") or _rail_name(opt.get("network"))
+    if known_usdc_asset(asset, opt.get("network") or rail):
+        known = usdc_asset_for_rail(rail)
+        return ("usdc:%s" % (known or asset)).lower()
+    r = _rail_name(rail)
+    if r == "base":
+        return "base:%s" % asset.lower()
+    if r == "algorand":
+        return "algorand:%s" % asset.upper()
+    if r == "solana":
+        return "solana:%s" % asset
+    return "%s:%s" % (r or "unknown", asset)
+
+
+def accept_identity(acc: dict) -> tuple:
+    """Dedupe key for catalog accepts: rail + asset + payTo + amount."""
+    if not isinstance(acc, dict):
+        return ("", "", "", "")
+    rail = rail_of_network(acc.get("network") or "") or ""
+    asset = _accept_asset(acc) or ""
+    pay = _text(acc.get("payTo")) or ""
+    amt = acc.get("amount")
+    if amt is None or amt == "":
+        amt = acc.get("maxAmountRequired")
+    return (rail, str(asset), pay, str(amt) if amt is not None else "")
+
+
+def prices_equivalent(left, right) -> bool:
+    """True when two payment options are the same price. Incomparable → False."""
+    if not isinstance(left, dict) or not isinstance(right, dict):
+        return False
+    lu, ru = left.get("normalized_usd"), right.get("normalized_usd")
+    if lu is not None and ru is not None:
+        return float(lu) == float(ru)
+    la, ra = asset_identity(left), asset_identity(right)
+    if not la or not ra or la != ra:
+        return False
+    aa, ab = left.get("amount_atomic"), right.get("amount_atomic")
+    if aa is None or ab is None:
+        return False
+    return int(aa) == int(ab)
 
 
 def token_of(req: dict) -> str:
@@ -431,12 +760,12 @@ def match_accept(payload: dict, required: dict) -> dict | None:
     accepted = _accepted_from_payload(payload or {})
     rail = rail_of_network(accepted.get("network") or payload.get("network") or "")
     if not rail:
-        pay_to = _norm(accepted.get("payTo"))
-        if pay_to and pay_to == _norm(payto_algorand()):
+        pay_to = accepted.get("payTo")
+        if pay_to and payto_equal(pay_to, payto_algorand(), "algorand"):
             rail = "algorand"
-        elif pay_to and pay_to == _norm(payto_solana()):
+        elif pay_to and payto_equal(pay_to, payto_solana(), "solana"):
             rail = "solana"
-        elif pay_to and pay_to == _norm(payto_address()):
+        elif pay_to and payto_equal(pay_to, payto_address(), "base"):
             rail = "base"
     if not rail:
         return None
@@ -446,7 +775,7 @@ def match_accept(payload: dict, required: dict) -> dict | None:
     for item in required.get("accepts") or []:
         if rail_of_network(item.get("network")) != rail:
             continue
-        if client_pay and _norm(client_pay) != _norm(item.get("payTo")):
+        if client_pay and not payto_equal(client_pay, item.get("payTo"), rail):
             continue
         if client_amount is not None and str(client_amount) != str(item.get("amount")):
             continue

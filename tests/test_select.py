@@ -10,7 +10,19 @@ from unittest.mock import patch
 
 os.environ.setdefault("LIVE402_FIXTURE", "1")
 
-from live402 import history, probe, select
+from live402 import history, payment, probe, select
+
+
+def _usdc_for_rail(rail: str) -> str:
+    return payment.usdc_asset_for_rail(rail) or payment.USDC_BASE
+
+
+def _network_for_rail(rail: str) -> str:
+    if rail == "solana":
+        return payment.SOLANA_MAINNET
+    if rail == "algorand":
+        return payment.ALGORAND_MAINNET
+    return payment.BASE_CAIP2
 
 
 def _hist(success_7d=None, n_7d=0, success_24h=None, n_24h=0):
@@ -35,6 +47,10 @@ def _hit(
     history=None,
     **extra,
 ):
+    asset = extra.pop("asset", None)
+    accepts = extra.pop("accepts", None)
+    if asset is None and accepts is None:
+        asset = _usdc_for_rail(rail)
     row = {
         "url": url,
         "rail": rail,
@@ -49,6 +65,19 @@ def _hit(
         ),
         "history": history if history is not None else _hist(),
     }
+    if asset is not None:
+        row["asset"] = asset
+    if accepts is None and (amount is not None or asset):
+        accepts = [
+            {
+                "network": _network_for_rail(rail),
+                "asset": asset or _usdc_for_rail(rail),
+                "payTo": pay_to,
+                "amount": amount,
+            }
+        ]
+    if accepts is not None:
+        row["accepts"] = accepts
     row.update(extra)
     return row
 
@@ -67,24 +96,28 @@ class ParseTests(unittest.TestCase):
     def test_parse_constraints_invalid_is_unconstrained(self):
         empty = select.parse_constraints({})
         self.assertIsNone(empty["max_amount_atomic"])
+        self.assertIsNone(empty["max_price_usd"])
         self.assertIsNone(empty["max_latency_ms"])
         self.assertFalse(empty["require_invocable"])
         self.assertIsNone(empty["rails"])
         bad = select.parse_constraints(
-            {"max_amount_atomic": -1, "max_latency_ms": "nope", "networks": []}
+            {"max_amount_atomic": -1, "max_latency_ms": "nope", "networks": [], "max_price_usd": -1}
         )
         self.assertIsNone(bad["max_amount_atomic"])
+        self.assertIsNone(bad["max_price_usd"])
         self.assertIsNone(bad["max_latency_ms"])
         self.assertIsNone(bad["rails"])
         ok = select.parse_constraints(
             {
                 "max_amount_atomic": 10000,
+                "max_price_usd": "0.05",
                 "max_latency_ms": "50",
                 "require_invocable": True,
                 "networks": ["solana", "ethereum", "base"],
             }
         )
         self.assertEqual(ok["max_amount_atomic"], 10000)
+        self.assertAlmostEqual(ok["max_price_usd"], 0.05)
         self.assertEqual(ok["max_latency_ms"], 50)
         self.assertTrue(ok["require_invocable"])
         self.assertEqual(ok["rails"], frozenset({"solana", "base"}))
@@ -383,7 +416,14 @@ class RouteNeedSelectTests(unittest.TestCase):
         return {
             "url": url,
             "description": description,
-            "accepts": [{"network": network, "payTo": pay_to, "amount": amount}],
+            "accepts": [
+                {
+                    "network": network,
+                    "payTo": pay_to,
+                    "amount": amount,
+                    "asset": _usdc_for_rail(network),
+                }
+            ],
         }
 
     def _live(self, url, amount=10000, latency=10, pay_to="0xabc", changed=False, rail="base"):
@@ -392,6 +432,7 @@ class RouteNeedSelectTests(unittest.TestCase):
             "url": url,
             "payTo": pay_to,
             "amount": amount,
+            "asset": _usdc_for_rail(rail),
             "latency_ms": latency,
             "invocable": False,
             "payTo_changed": bool(changed),
@@ -400,6 +441,14 @@ class RouteNeedSelectTests(unittest.TestCase):
             "rail": rail,
             "status": 402,
             "has_402_challenge": True,
+            "accepts": [
+                {
+                    "network": _network_for_rail(rail),
+                    "asset": _usdc_for_rail(rail),
+                    "payTo": pay_to,
+                    "amount": amount,
+                }
+            ],
         }
         if changed:
             row["risk"] = ["payTo_changed"]
