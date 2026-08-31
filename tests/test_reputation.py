@@ -172,34 +172,37 @@ class ScoreTests(unittest.TestCase):
             "probe_count_7d": 20,
             "has_probe_history": True,
         }
-        no_usage = {
+        listing = {"days_listed": 30, "source_count": 1}
+        with_probes = reputation.score_v1(reputation.components_from_evidence(measured, listing), measured)
+        zero_ev = {
+            "n_7d": 20,
+            "ok_7d": 18,
+            "success_7d": 0.9,
+            "probe_count_7d": 0,
+            "has_probe_history": True,
+        }
+        unknown_ev = {
             "n_7d": 20,
             "ok_7d": 18,
             "success_7d": 0.9,
             "has_probe_history": True,
         }
-        listing = {"days_listed": 30, "source_count": 1}
-        with_probes = reputation.score_v1(reputation.components_from_evidence(measured, listing), measured)
-        unknown_usage = dict(no_usage)
-        unknown_usage["probe_count_7d"] = None
-        # Force usage missing: no probe_count and treat 0 as missing
-        comps_zero = reputation.components_from_evidence(
-            {"n_7d": 20, "ok_7d": 18, "success_7d": 0.9, "probe_count_7d": 0, "has_probe_history": True},
-            listing,
-        )
-        zero_scored = reputation.score_v1(comps_zero, {"n_7d": 20, "ok_7d": 18, "success_7d": 0.9, "probe_count_7d": 0, "has_probe_history": True})
-        unknown_scored = reputation.score_v1(
-            reputation.components_from_evidence(
-                {"n_7d": 20, "ok_7d": 18, "success_7d": 0.9, "has_probe_history": True},
-                listing,
-            ),
-            {"n_7d": 20, "ok_7d": 18, "success_7d": 0.9, "has_probe_history": True},
-        )
-        # 0 probes and unknown usage both drop the usage component.
-        self.assertEqual(zero_scored["reputation_score"], unknown_scored["reputation_score"])
+        comps_zero = reputation.components_from_evidence(zero_ev, listing)
+        comps_unknown = reputation.components_from_evidence(unknown_ev, listing)
+        zero_scored = reputation.score_v1(comps_zero, zero_ev)
+        unknown_scored = reputation.score_v1(comps_unknown, unknown_ev)
+        # Missing is not scored as 0.0 and not as 1.0 (perfect). Both omit usage
+        # so a never-measured peer is not worse than a measured-zero peer.
+        self.assertIsNone(unknown_scored["scoring_components"]["values"]["usage"])
+        self.assertIsNone(zero_scored["scoring_components"]["values"]["usage"])
         self.assertNotIn("usage", zero_scored["scoring_components"]["present"])
         self.assertNotIn("usage", unknown_scored["scoring_components"]["present"])
+        self.assertGreaterEqual(unknown_scored["reputation_score"], zero_scored["reputation_score"])
+        self.assertEqual(zero_scored["reputation_score"], unknown_scored["reputation_score"])
+        self.assertLess(unknown_scored["reputation_score"], 1.0)
         self.assertIn("usage", with_probes["scoring_components"]["present"])
+        self.assertGreater(with_probes["scoring_components"]["values"]["usage"], 0.0)
+        self.assertLess(with_probes["scoring_components"]["values"]["usage"], 1.0)
 
     def test_same_score_on_all_rails(self):
         ev = {
@@ -219,19 +222,38 @@ class ScoreTests(unittest.TestCase):
         self.assertEqual(scores[1], scores[2])
 
     def test_no_algo_bonus_in_code(self):
+        """Ban ranking identifiers/assignments, not prose mentions in docs."""
+        import ast
         import pathlib
 
         root = pathlib.Path(__file__).resolve().parents[1]
-        banned = ("algo_bonus", "algo_multiplier", "algo_first")
+        banned = {"algo_bonus", "algo_multiplier", "algo_first"}
         for path in (root / "live402").rglob("*.py"):
-            text = path.read_text(encoding="utf-8")
-            for token in banned:
-                if token == "algo_bonus" and path.name in {"reputation.py"}:
-                    self.assertIn("algo_bonus", text)
-                    self.assertIn('"algo_bonus": False', text)
-                    self.assertNotIn("algo_bonus =", text)
-                    continue
-                self.assertNotIn(token, text, msg=str(path))
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Name) and node.id in banned:
+                    # Allowed only as the documented denial in model_spec.
+                    self.assertEqual(path.name, "reputation.py", msg=str(path))
+                    self.assertEqual(node.id, "algo_bonus")
+                if isinstance(node, ast.Assign):
+                    for target in node.targets:
+                        if isinstance(target, ast.Name) and target.id in banned:
+                            self.fail("ranking assignment %s in %s" % (target.id, path))
+                if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+                    if node.target.id in banned:
+                        self.fail("ranking assignment %s in %s" % (node.target.id, path))
+                if isinstance(node, ast.Dict):
+                    for key, val in zip(node.keys, node.values):
+                        if not isinstance(key, ast.Constant) or key.value not in banned:
+                            continue
+                        if path.name == "reputation.py" and key.value == "algo_bonus":
+                            self.assertIsInstance(val, ast.Constant)
+                            self.assertIs(val.value, False)
+                            continue
+                        self.fail("ranking weight %r in %s" % (key.value, path))
+        spec = reputation.model_spec()
+        self.assertFalse(spec.get("algo_bonus"))
+        self.assertNotIn("algo_bonus", reputation.WEIGHTS)
 
 
 class HistoryEvidenceTests(unittest.TestCase):

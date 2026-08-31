@@ -158,9 +158,12 @@ class SelectedPaymentTests(unittest.TestCase):
         hit = _live_base_only(url, _catalog_base_and_solana(url))
         selected = select.pick_selected_payment(hit, "cheapest", None)
         self.assertIsNotNone(selected)
-        eco = selected.pop("economics", None)
+        identity = {k: selected[k] for k in (
+            "rail", "network", "asset", "amount_atomic",
+            "display_amount", "normalized_usd", "payTo", "facilitator",
+        )}
         self.assertEqual(
-            selected,
+            identity,
             {
                 "rail": "base",
                 "network": payment.BASE_CAIP2,
@@ -172,10 +175,25 @@ class SelectedPaymentTests(unittest.TestCase):
                 "facilitator": CDP,
             },
         )
+        eco = selected.get("economics")
         self.assertIsInstance(eco, dict)
         self.assertEqual(eco.get("rail"), "base")
+        allowed_prov = {"402signal_observed", "protocol_reference", "unknown"}
+        for field in (
+            "merchant_price_usd",
+            "chain_fee_usd",
+            "facilitator_fee_usd",
+            "total_cost_usd",
+            "settlement_latency_ms",
+            "finality_ms",
+            "settlement_or_finality_ms",
+        ):
+            self.assertIn((eco.get(field) or {}).get("provenance"), allowed_prov, msg=field)
+        self.assertEqual((eco.get("merchant_price_usd") or {}).get("provenance"), "402signal_observed")
         self.assertEqual((eco.get("merchant_price_usd") or {}).get("value"), 0.02)
-        selected["economics"] = eco
+        # Economics must not swap the observed winner for the cheaper catalog Solana bait.
+        self.assertNotEqual(selected["amount_atomic"], 1000)
+        self.assertNotEqual(selected["payTo"], SOL_PAYTO)
         probe._align_target_with_selected(hit, selected)
         target = hit["target"]
         self.assertEqual(target["amountAtomic"], "20000")
