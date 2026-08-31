@@ -3,6 +3,7 @@
 Fly VM is 1GB — slim at ingest, never retain raw JSON schemas.
 Pagination is limit+offset+total only. Never send page= or cursor=.
 refresh() is single-flight: overlapping daemon / get_index callers share one walk.
+TTL recrawl builds the next by_rail, drops the previous index, then merges.
 """
 
 from __future__ import annotations
@@ -17,6 +18,9 @@ PAGE_SIZE = 100
 INDEX_TTL = 180.0
 MAX_PAGES = 400
 MAX_ITEMS = 30_000
+# Live 2026-08-30 size model (not a reason to raise caps): CDP Base pagination.total
+# 14376, PayAI Solana 27855 (279 pages), GoPlausible Algorand 1749. ~44k slim items.
+# by_rail alone ~82MB before merge. 1GB is a bandage. Build, swap, drop.
 # Raw CDP pages include huge schemas; 1MiB/page then slim immediately. Oversize pages dropped.
 PAGE_READ_LIMIT = 1_048_576
 
@@ -641,7 +645,11 @@ def fetch_rail(rail: str, base_url: str) -> dict:
 
 
 def _merge_items(by_rail: dict) -> list[dict]:
-    """Dedup by resource URL across rails. Keep rails/also_on. Do not drop a rail copy."""
+    """Dedup by resource URL across rails. Keep rails/also_on. Do not drop a rail copy.
+
+    Reuses the by_rail item dicts (no per-item copy) so items and by_rail share
+    identity. Cross-rail hits mutate rails/also_on on the first-seen dict.
+    """
     merged: dict[str, dict] = {}
     order: list[str] = []
     for rail in _RAILS:
@@ -662,20 +670,33 @@ def _merge_items(by_rail: dict) -> list[dict]:
                 if also:
                     prev["also_on"] = also
             else:
-                row = dict(item)
-                row["rails"] = [rail]
-                merged[key] = row
+                item["rails"] = [rail]
+                item.pop("also_on", None)
+                merged[key] = item
                 order.append(key)
     return [merged[k] for k in order]
 
 
-def _crawl_index() -> dict:
-    """Walk all three rails sequentially (RAM/CPU). Keep previous items on rail error."""
+def _steal_prev_rail(rail: str) -> tuple[list, object, bool]:
+    """Borrow one previous rail list for error fallback. Does not snapshot the whole index."""
     with _lock:
-        prev = _index if isinstance(_index, dict) else _empty_index()
-    prev_by = prev.get("by_rail") or {}
-    prev_totals = prev.get("totals") or {}
-    prev_trunc = prev.get("truncated") or {}
+        prev = _index if isinstance(_index, dict) else None
+        if not prev:
+            return [], None, False
+        stolen = (prev.get("by_rail") or {}).get(rail) or []
+        totals = (prev.get("totals") or {}).get(rail)
+        trunc = bool((prev.get("truncated") or {}).get(rail))
+        return stolen, totals, trunc
+
+
+def _crawl_index() -> dict:
+    """Walk all three rails sequentially (RAM/CPU). Build, swap, drop.
+
+    Does not keep a handle to the previous index for the whole crawl. On rail
+    error, steal that rail's last-good list only. Drops _index before merge so
+    we never hold previous index + new by_rail + merged items at once.
+    """
+    global _index
     by_rail: dict[str, list] = {rail: [] for rail in _RAILS}
     totals: dict = {}
     truncated: dict = {}
@@ -692,10 +713,11 @@ def _crawl_index() -> dict:
         err = result.get("error")
         got = list(result.get("items") or [])
         if err and not got:
-            by_rail[rail] = list(prev_by.get(rail) or [])
+            stolen, prev_total, prev_trunc = _steal_prev_rail(rail)
+            by_rail[rail] = stolen
             errors[rail] = err
-            totals[rail] = prev_totals.get(rail)
-            truncated[rail] = bool(prev_trunc.get(rail))
+            totals[rail] = prev_total
+            truncated[rail] = prev_trunc
         else:
             by_rail[rail] = got
             totals[rail] = result.get("total")
@@ -703,6 +725,10 @@ def _crawl_index() -> dict:
             if err:
                 errors[rail] = err
 
+    # Last-good stays published during the walk (get_index stays instant).
+    # Drop it before merge so peak is not prev + by_rail + items.
+    with _lock:
+        _index = None
     items = _merge_items(by_rail)
     complete = (not any(truncated.values())) and (not errors)
     return {

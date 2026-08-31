@@ -389,6 +389,81 @@ class CatalogIndexTests(unittest.TestCase):
         self.assertIsNone(catalog.peek_index())
         self.assertFalse(catalog.refresh_in_progress())
 
+    def test_caps_unchanged_from_live_size_model(self):
+        self.assertEqual(catalog.MAX_ITEMS, 30_000)
+        self.assertEqual(catalog.MAX_PAGES, 400)
+        self.assertEqual(catalog.PAGE_READ_LIMIT, 1_048_576)
+
+    def test_merge_items_reuses_by_rail_dicts(self):
+        item = catalog.slim_item(_item("https://a.example/x", "alpha"), "base")
+        by_rail = {"base": [item], "solana": [], "algorand": []}
+        merged = catalog._merge_items(by_rail)
+        self.assertEqual(len(merged), 1)
+        self.assertIs(merged[0], item)
+        self.assertEqual(merged[0]["rails"], ["base"])
+
+    def test_refresh_drops_prev_index_before_merge(self):
+        def fake_payload(url, timeout, read_limit=None):
+            return {
+                "items": [_item("https://a.example/one", "alpha")],
+                "pagination": {"limit": 100, "offset": 0, "total": 1},
+            }
+
+        with patch("live402.probe._fetch_catalog_payload", side_effect=fake_payload):
+            first = catalog.refresh()
+        prev = first
+        self.assertIs(catalog.peek_index(), prev)
+
+        seen = {}
+        real_merge = catalog._merge_items
+
+        def wrapped(by_rail):
+            seen["index_is_prev"] = catalog._index is prev
+            seen["index"] = catalog._index
+            return real_merge(by_rail)
+
+        with patch("live402.probe._fetch_catalog_payload", side_effect=fake_payload), patch.object(
+            catalog, "_merge_items", side_effect=wrapped
+        ):
+            catalog.refresh()
+        self.assertFalse(seen["index_is_prev"])
+        self.assertIsNone(seen["index"])
+        published = catalog.peek_index()
+        self.assertIsNotNone(published)
+        self.assertIs(published["items"][0], published["by_rail"]["base"][0])
+
+    def test_rail_error_keeps_previous_items(self):
+        def ok_payload(url, timeout, read_limit=None):
+            host = urlparse(url).hostname
+            if host == "api.cdp.coinbase.com":
+                return {
+                    "items": [_item("https://base.example/a", "base a")],
+                    "pagination": {"limit": 100, "offset": 0, "total": 1},
+                }
+            if host == "facilitator.payai.network":
+                return {
+                    "items": [_item("https://sol.example/b", "sol b")],
+                    "pagination": {"limit": 100, "offset": 0, "total": 1},
+                }
+            return {"items": [], "pagination": {"limit": 100, "offset": 0, "total": 0}}
+
+        with patch("live402.probe._fetch_catalog_payload", side_effect=ok_payload):
+            first = catalog.refresh()
+        self.assertEqual(len(first["by_rail"]["base"]), 1)
+
+        def then_fail_base(url, timeout, read_limit=None):
+            host = urlparse(url).hostname
+            if host == "api.cdp.coinbase.com":
+                raise RuntimeError("boom")
+            return ok_payload(url, timeout, read_limit)
+
+        with patch("live402.probe._fetch_catalog_payload", side_effect=then_fail_base):
+            second = catalog.refresh()
+        self.assertEqual(second["errors"].get("base"), "fetch_failed")
+        self.assertEqual(len(second["by_rail"]["base"]), 1)
+        self.assertEqual(probe._resource_url(second["by_rail"]["base"][0]), "https://base.example/a")
+        self.assertEqual(len(second["by_rail"]["solana"]), 1)
+
 
 if __name__ == "__main__":
     unittest.main()
