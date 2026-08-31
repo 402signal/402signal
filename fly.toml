@@ -32,7 +32,7 @@ primary_region = "iad"
 # pq-log.sqlite is a separate file. 402security must GO before Fly enablement of a log key
 # and before any Falcon spend.
 # Falcon TestNet (this PR): in-process on the existing app only. No extra
-# [processes] entry, no extra [[vm]], do not fly scale, do not deploy.
+# process group, no extra VM, do not fly scale, do not deploy.
 # Ross spend-GO'd an extra shared-cpu-1x (~$2/mo) for a later isolated
 # signer machine. That is a separate PR after this SHA GOs.
 # Scheduled snapshots off.

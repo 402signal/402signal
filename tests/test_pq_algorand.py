@@ -367,9 +367,10 @@ class TestNetSubmitTests(unittest.TestCase):
 
     def test_fly_toml_stays_one_app_machine(self):
         text = Path(__file__).resolve().parent.parent.joinpath("fly.toml").read_text(encoding="utf-8")
-        self.assertEqual(text.count("[[vm]]"), 1)
+        vm_lines = [ln for ln in text.splitlines() if ln.strip() == "[[vm]]"]
+        self.assertEqual(len(vm_lines), 1)
         self.assertIn('processes = ["app"]', text)
-        self.assertNotIn("[processes]", text)
+        self.assertFalse(any(ln.strip() == "[processes]" for ln in text.splitlines()))
         self.assertNotIn("falcon-signer", text)
         self.assertIn("Ross spend-GO", text)
         self.assertIn("separate PR", text)
