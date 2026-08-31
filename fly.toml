@@ -11,7 +11,7 @@ primary_region = "iad"
 
 # Isolated signer process (Ross spend-GO ~$2/mo shared-cpu-1x 256MB).
 # Unsigned txn in, pqsig out. Does not serve HTTP /route. Does not load
-# the log key. Not in [http_service]. 402QA deploys later after GO.
+# the log key. Not attached to the public HTTP service. 402QA deploys later after GO.
 [processes]
   app = "python3 -m live402 --host 0.0.0.0 --port 8080"
   falcon = "python3 -m live402.pq.isolated_signer"

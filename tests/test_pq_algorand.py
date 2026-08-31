@@ -374,7 +374,9 @@ class TestNetSubmitTests(unittest.TestCase):
         self.assertIn('app = "python3 -m live402', text)
         self.assertIn('processes = ["app"]', text)
         self.assertIn('processes = ["falcon"]', text)
-        http = text.split("[http_service]", 1)[1].split("[[vm]]", 1)[0]
+        http_idx = text.find("\n[http_service]\n")
+        self.assertGreaterEqual(http_idx, 0)
+        http = text[http_idx + 1 :].split("[[vm]]", 1)[0]
         self.assertIn('processes = ["app"]', http)
         self.assertNotIn("falcon", http)
         self.assertIn("256mb", text)

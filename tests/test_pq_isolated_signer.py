@@ -43,10 +43,16 @@ class IsolatedSignerProcessTests(unittest.TestCase):
         self.sender = payment.DEFAULT_PAYTO_ALGORAND
         self._stop = False
         self._threads = []
+        self._socks = []
         self.addCleanup(self._cleanup)
 
     def _cleanup(self):
         self._stop = True
+        for sock in self._socks:
+            try:
+                sock.close()
+            except Exception:
+                pass
         for thread in self._threads:
             thread.join(timeout=2)
         receipt.configure_signer(None)
@@ -82,6 +88,7 @@ class IsolatedSignerProcessTests(unittest.TestCase):
     def _start_ipc(self, signer_callback=None, host="127.0.0.1"):
         sock = isolated_signer.bind_ipc(host, 0)
         port = sock.getsockname()[1]
+        self._socks.append(sock)
         self._stop = False
         thread = threading.Thread(
             target=isolated_signer.serve_ipc,

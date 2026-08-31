@@ -216,7 +216,12 @@ class LogSkEnvTests(unittest.TestCase):
         import inspect
 
         src = inspect.getsource(server.main)
-        self.assertIn("boot_optional_log_signer", src)
+        self.assertIn("boot_http_process", src)
+        self.assertNotIn("boot_optional_falcon_sk", src)
+        boot = inspect.getsource(server.boot_http_process)
+        self.assertIn("boot_optional_log_signer", boot)
+        self.assertNotIn("boot_optional_falcon_sk", boot)
+        self.assertNotIn("load_falcon_sk_from_env", boot)
 
 
 if __name__ == "__main__":
