@@ -3,149 +3,175 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>402Signal</title>
-  <meta name="description" content="Check before your agent pays. We probe x402 services on Base, Solana, and Algorand at request time. Catalog said X. We observed Y." />
+  <title>402Signal - Find a paid API that works right now</title>
+  <meta name="description" content="402Signal discovers x402 services across Base, Solana, and Algorand and independently checks payment endpoints before an agent relies on them." />
   <link rel="canonical" href="https://402signal.com" />
-  <meta property="og:title" content="402Signal" />
-  <meta property="og:description" content="Check before your agent pays. We probe x402 services on Base, Solana, and Algorand at request time. Catalog said X. We observed Y." />
+  <meta property="og:title" content="402Signal - Find a paid API that works right now" />
+  <meta property="og:description" content="402Signal discovers x402 services across Base, Solana, and Algorand and independently checks payment endpoints before an agent relies on them." />
   <meta property="og:url" content="https://402signal.com" />
   <meta property="og:type" content="website" />
   <meta property="og:site_name" content="402Signal" />
   <meta name="twitter:card" content="summary" />
-  <meta name="twitter:title" content="402Signal" />
-  <meta name="twitter:description" content="Check before your agent pays. We probe x402 services on Base, Solana, and Algorand at request time. Catalog said X. We observed Y." />
+  <meta name="twitter:title" content="402Signal - Find a paid API that works right now" />
+  <meta name="twitter:description" content="402Signal discovers x402 services across Base, Solana, and Algorand and independently checks payment endpoints before an agent relies on them." />
   <meta name="twitter:site" content="@402Signal" />
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
   <div class="page">
-    <header class="mast">
-      <div class="brand-row">
-        <div class="mark">402</div>
-        <h1>402Signal</h1>
-      </div>
-      <p class="sub">Check before your agent pays.</p>
-      <p class="lede">We probe x402 services on Base, Solana, and Algorand at request time. Catalog said X. We observed Y.</p>
-      <nav class="nav" id="home-tabs">
-        <a href="#overview" id="tab-overview" class="tab is-active">Overview</a><span class="sep">|</span><a href="#use" id="tab-use" class="tab">How you'd use this</a><span class="sep">|</span><a href="/pulse">Pulse</a>
+    <header class="site">
+      <a class="brand" href="#product">
+        <span class="mark">402</span>
+        <span class="brand-name">402Signal</span>
+      </a>
+      <nav class="nav" aria-label="Primary">
+        <a href="#product">Product</a>
+        <a href="#try">Try it</a>
+        <a href="#integrate">Integrate</a>
+        <a href="#pulse" id="nav-pulse" hidden>Pulse</a>
+        <a href="https://github.com/402signal/402signal" rel="noopener noreferrer">GitHub</a>
       </nav>
     </header>
 
     <main>
-      <div id="panel-overview">
-      <form id="route-form">
-        <label class="label" for="need">What do you need?</label>
-        <input id="need" class="editable" type="text" value="" placeholder="weather, token balance, web search..." autocomplete="off" spellcheck="false" />
-        <div class="chips" id="need-chips">
-          <button type="button" class="chip" data-need="web search">web search</button>
-          <button type="button" class="chip" data-need="weather">weather</button>
-          <button type="button" class="chip" data-need="token risk">token risk</button>
-          <button type="button" class="chip" data-need="LLM inference">LLM inference</button>
-          <button type="button" class="chip" data-need="wallet balance">wallet balance</button>
+      <section class="hero" id="product">
+        <h1>402Signal</h1>
+        <p class="sub">Find a paid API that works right now.</p>
+        <p class="lede">402Signal searches x402 services across Base, Solana, and Algorand, then checks the endpoint at request time before returning it to your agent.</p>
+        <p class="lede">If we can't verify a usable payment path, we return a miss instead of guessing.</p>
+        <p class="note">Works means the payment interface was ready when we checked. It does not mean 402Signal paid the seller, or that the seller delivered the product.</p>
+        <p class="note">Directories tell an agent what is listed. 402Signal records what the endpoint actually returned.</p>
+        <div class="hero-actions">
+          <a class="btn" href="#try">Search services</a>
+          <a class="btn secondary" href="#integrate">Integrate 402Signal</a>
         </div>
-        <div class="row">
-          <button type="button" id="preview-btn" class="btn">Preview</button>
-          <button type="button" id="probe-btn" class="btn secondary">Probe live ($0.01)</button>
-          <button type="button" id="pay-base" class="btn pay-base" hidden>Pay $0.01 on Base</button>
-          <span id="status" class="muted"></span>
-        </div>
-        <p id="pay-base-hint" class="muted" hidden>Uses an injected wallet on Base (8453): MetaMask, Coinbase Wallet, or Base App. One $0.01 USDC signature per click. No auto-pay.</p>
-        <div class="chips" id="rail-chips"></div>
-        <p id="rail-caption" class="muted">Facilitator reachability, not seller health.</p>
-        <p class="trust">Catalog claims and 402Signal observations are separate fields.</p>
-        <p id="empty-state" class="muted">Index is filling. Preview has no hits yet. Pulse counts are 0. Probe live still 402s /route.</p>
-        <div id="recommend-card" class="result-card" hidden>
-          <h3 id="recommend-title"></h3>
-          <p id="recommend-body"></p>
-          <p id="recommend-why" class="muted"></p>
-        </div>
-        <div id="observed-card" class="result-card" hidden>
-          <h3>Catalog vs observed</h3>
-          <p id="observed-body"></p>
-        </div>
-        <div id="compared-card" class="result-card" hidden>
-          <h3>Compared</h3>
-          <p id="compared-body"></p>
-        </div>
-        <div id="human-result" class="result-card" hidden>
-          <h3 id="human-title"></h3>
-          <p id="human-body"></p>
-        </div>
-      </form>
+      </section>
 
-      <section class="panel">
-        <h2>How it works</h2>
-        <ol class="steps">
-          <li><strong>Discover.</strong> Free GET /preview is cached catalog, not_probed.</li>
-          <li><strong>Compare.</strong> Catalog said X. We observed Y. Separate fields.</li>
-          <li><strong>Probe.</strong> Probe live is the penny POST /route. Unpaid HTTP 402 at $0.01. A paid hit returns a live URL plus the target contract. A miss returns a typed <code>miss_reason</code>.</li>
-          <li><strong>Recommend.</strong> Best capability match in the current index.</li>
+      <section id="try" class="block">
+        <h2>Search the x402 catalog</h2>
+        <p>Free catalog search. These results are directory listings, not a live seller probe.</p>
+        <form id="search-form">
+          <label class="label" for="need">What does your agent need?</label>
+          <input id="need" class="editable" type="text" value="" placeholder="weather, token risk, web search..." autocomplete="off" spellcheck="false" />
+          <div class="chips" id="need-chips">
+            <button type="button" class="chip" data-need="web search">web search</button>
+            <button type="button" class="chip" data-need="weather">weather</button>
+            <button type="button" class="chip" data-need="token risk">token risk</button>
+            <button type="button" class="chip" data-need="LLM inference">LLM inference</button>
+            <button type="button" class="chip" data-need="wallet balance">wallet balance</button>
+          </div>
+          <div class="row">
+            <button type="submit" id="search-btn" class="btn" disabled>Search</button>
+            <span id="search-status" class="muted" role="status" aria-live="polite"></span>
+          </div>
+        </form>
+        <p class="note">Free catalog search. Results have not been live-probed unless explicitly marked otherwise.</p>
+        <div id="search-results" aria-live="polite" aria-relevant="additions text"></div>
+      </section>
+
+      <section id="fits" class="block">
+        <h2>Where it fits</h2>
+        <p>402Signal sits between discovery and execution.</p>
+        <ol class="fit-flow">
+          <li>Need</li>
+          <li>Candidates</li>
+          <li>402Signal check</li>
+          <li>Route + evidence</li>
+          <li>Agent pays seller</li>
         </ol>
-        <p>402Signal recommends the route. Your agent keeps the wallet.</p>
+        <p>A live routing request costs $0.01 USDC. 402Signal does not hold keys or pay the selected API on your behalf. Your agent keeps the wallet.</p>
       </section>
 
-      <section class="panel">
+      <section id="checked" class="block">
+        <h2>What gets checked</h2>
+        <dl class="checks">
+          <div>
+            <dt>Payment challenge</dt>
+            <dd>Whether the endpoint returned a payment challenge we can read.</dd>
+          </div>
+          <div>
+            <dt>Payment details</dt>
+            <dd>payTo, amount, asset, and rail as returned at request time.</dd>
+          </div>
+          <div>
+            <dt>Invocation</dt>
+            <dd>Whether a call contract is listed (method and input schema).</dd>
+          </div>
+          <div>
+            <dt>Freshness</dt>
+            <dd>When the check was made, if we have a timestamp.</dd>
+          </div>
+        </dl>
+        <p>When evidence exists, readiness is labeled DISCOVERED, PAYABLE, INVOCABLE, or RECENTLY VERIFIED. Missing evidence is UNKNOWN, not no.</p>
+      </section>
+
+      <section id="agents" class="block">
+        <h2>How agents use it</h2>
+        <ol class="steps">
+          <li>Ask what is listed for a need. Free catalog search (<code>GET /preview</code>) returns candidates. These are listings, not live checks.</li>
+          <li>Your agent pays 402Signal $0.01 USDC and sends <code>POST /route</code> with that need. An unpaid call returns HTTP 402.</li>
+          <li>402Signal checks the endpoint at request time. If a usable payment path is verified, you get a route plus evidence. A paid route can also return compared candidates. If not, the response is a miss: no qualifying endpoint was verified.</li>
+          <li>Your agent then pays the selected seller. 402Signal does not take custody and does not pay the seller for you.</li>
+        </ol>
+        <p class="note">The API may include a <code>miss_reason</code>. Optional <code>prefer_network</code>: <code>base</code>, <code>solana</code>, or <code>algorand</code>.</p>
+      </section>
+
+      <section id="claims" class="block">
+        <h2>Catalog claims and 402Signal observations</h2>
+        <p>Catalog fields are what a directory listed. 402Signal-observed fields are what we recorded from the endpoint at request time. They stay separate. UNKNOWN is better than a guess.</p>
+        <div id="claims-example" class="result-card" hidden>
+          <h3>From the current result</h3>
+          <p id="claims-example-body"></p>
+        </div>
+      </section>
+
+      <section id="integrate" class="block">
+        <h2>Quickstart</h2>
+        <h3 class="subhead">HTTP</h3>
+        <p>Unpaid <code>POST /route</code> with <code>{"need":"weather"}</code> returns HTTP 402. Sign the matching $0.01 USDC option from <code>accepts[]</code>, then retry the same POST with <code>PAYMENT-SIGNATURE</code>.</p>
+        <div class="code-card">
+          <div class="code-toolbar">
+            <span>Unpaid <code>POST /route</code></span>
+            <button type="button" class="btn secondary" id="copy-curl">Copy</button>
+          </div>
+          <pre class="code" id="curl-route">curl -sS -D - https://402signal.com/route -H 'Content-Type: application/json' -d '{"need":"weather"}'</pre>
+        </div>
+        <h3 class="subhead">MCP</h3>
+        <p>Endpoint <code>https://402signal.com/mcp</code>. Tools: <code>route</code> (paid) and <code>preview</code> (free). See <a href="/mcp.json">MCP tool list</a> and <a href="/llms.txt">llms.txt</a>.</p>
+        <p>Docs: <a href="/openapi.json">OpenAPI</a>, <a href="/mcp.json">MCP</a>, <a href="/llms.txt">llms.txt</a>, <a href="https://github.com/402signal/402signal" rel="noopener noreferrer">GitHub</a>.</p>
+        <p>Machine-readable: <a href="/.well-known/x402.json">/.well-known/x402.json</a>, <a href="/rails">/rails</a>, <a href="/attestation">/attestation</a>.</p>
+      </section>
+
+      <section id="rails" class="block">
+        <h2>Rails</h2>
+        <ul class="rails-list">
+          <li>Base</li>
+          <li>Solana</li>
+          <li>Algorand</li>
+        </ul>
+      </section>
+
+      <section id="pulse" class="block" hidden>
         <h2>Pulse</h2>
-        <p>Index pending. No market-quality rates until probe history fills. <a href="/pulse">GET /pulse</a></p>
+        <p id="pulse-teaser" class="note"></p>
+        <p><a href="/pulse">GET /pulse</a> is the machine snapshot. Counts below are catalog listings, not 402Signal observations.</p>
       </section>
 
-      <section class="panel">
-        <h2>Developer access</h2>
-        <p><a href="https://402signal.com/route">POST /route</a> · <a href="/preview?need=weather">GET /preview</a> · <a href="/validate">POST /validate</a> · <a href="/attestation">GET /attestation</a> · <a href="https://402signal.com/mcp">/mcp</a> · <a href="/openapi.json">/openapi.json</a> · <a href="/llms.txt">/llms.txt</a> · <a href="/rails">/rails</a></p>
-      </section>
-
-      <p class="muted">Feedback: <a href="https://x.com/402Signal" rel="noopener noreferrer">@402Signal</a> and <a href="mailto:402signal@gmail.com">402signal@gmail.com</a>. Source: <a href="https://github.com/402signal/402signal" rel="noopener noreferrer">https://github.com/402signal/402signal</a>.</p>
-      </div>
-
-      <div id="panel-use" hidden>
-      <section class="panel">
-        <h2>Shared</h2>
-        <p><a href="https://402signal.com/route">POST https://402signal.com/route</a> with <code>{"need":"weather"}</code>. Optional <code>url</code>. Optional <code>prefer_network</code> <code>base</code>, <code>solana</code>, or <code>algorand</code>. Unpaid HTTP 402. Sign the matching <code>accepts[]</code> entry. Retry the same POST with PAYMENT-SIGNATURE. HTTP 200 is a live URL plus <code>target</code> <code>{method,inputSchema,facilitator}</code>. HTTP 503 is a typed <code>miss_reason</code>. Amount 10000 atomic USDC = $0.01.</p>
-        <pre class="code">curl -sS -D - https://402signal.com/route -H 'Content-Type: application/json' -d '{"need":"weather"}'</pre>
-        <pre class="code">{"need":"weather","url":"https://optional.example","prefer_network":"base"}</pre>
-        <pre class="code">curl -sS https://402signal.com/route -H 'Content-Type: application/json' -H "PAYMENT-SIGNATURE: $SIG" -d '{"need":"weather"}'</pre>
-      </section>
-
-      <section class="panel">
-        <h2>Front of a larger process</h2>
-        <p>Free <a href="/preview?need=weather">GET /preview?need=weather</a> is cached, <code>not_probed</code>, and does not probe. Then paid POST /route for a live probe. Then call the returned URL with <code>target.method</code> and <code>inputSchema</code>. MCP: POST <a href="https://402signal.com/mcp">https://402signal.com/mcp</a> <code>tools/call</code> <code>preview</code> (free) then <code>route</code> (paid). Docs <a href="/llms.txt">/llms.txt</a> <a href="/openapi.json">OpenAPI</a> <a href="/.well-known/x402.json">/.well-known/x402.json</a>.</p>
-        <pre class="code">curl -sS 'https://402signal.com/preview?need=weather'</pre>
-        <pre class="code">{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"preview","arguments":{"need":"weather"}}}</pre>
-      </section>
-
-      <section class="panel">
-        <h2>Base</h2>
-        <p><code>prefer_network</code> <code>base</code>. EVM PAYMENT-SIGNATURE. Hidden Pay $0.01 on Base if an injected wallet exists (MetaMask, Coinbase Wallet, Base App). Chain 8453.</p>
-      </section>
-
-      <section class="panel">
-        <h2>Solana</h2>
-        <p><code>prefer_network</code> <code>solana</code>. Agent/CLI only. Sign the Solana accept from the 402. x402scan lists Solana/Base; it skips Algorand.</p>
-      </section>
-
-      <section class="panel">
-        <h2>Algorand</h2>
-        <p><code>prefer_network</code> <code>algorand</code>. Agent/CLI only (no Pera button). USDC ASA 31566704. GoPlausible facilitator. POST /route still returns a live Algo 402 when that's what is up.</p>
-      </section>
-
-      <section class="panel">
-        <h2>Facilitator</h2>
-        <p>The facilitator is echoed from the target <code>accepts</code>. Never default x402.org.</p>
-      </section>
-      </div>
+      <p class="validate-line">Building an x402 API? Check whether your endpoint is agent-ready. See unpaid <code>GET</code> / <code>POST /validate</code> in the <a href="/openapi.json">OpenAPI</a>.</p>
     </main>
 
     <footer class="foot">
-      <p><a href="https://402signal.com" rel="noopener noreferrer">402signal.com</a> · <a href="https://x.com/402Signal" rel="noopener noreferrer">@402Signal</a></p>
-      <p class="listed-on">Listed on
-        <a href="https://glama.ai/mcp/servers/402signal/402signal" rel="noopener noreferrer">Glama</a>,
-        <a href="https://registry.modelcontextprotocol.io/?q=402signal" rel="noopener noreferrer">MCP Registry</a>,
-        <a href="https://github.com/Haustorium12/gold-402/blob/main/directory/aggregators.md" rel="noopener noreferrer">Gold-402</a>,
-        <a href="https://smithery.ai/servers/live402/signal" rel="noopener noreferrer">Smithery</a>,
-        <a href="https://agentic.market/services/402signal-com" rel="noopener noreferrer">Agentic Market</a>,
-        <a href="https://github.com/michielpost/x402-dev/blob/master/Projects.md" rel="noopener noreferrer">x402-dev</a>,
-        <a href="https://facilitator.goplausible.xyz/dashboard/merchants/56466a9400d70f08" rel="noopener noreferrer">GoPlausible</a>,
-        <a href="https://www.x402scan.com/recipient/0xb18fc2275f36dae99eb215caeff03b431f887d16" rel="noopener noreferrer">x402scan</a>.
+      <p>
+        <a href="https://402signal.com">402Signal</a>
+        <a href="https://github.com/402signal/402signal" rel="noopener noreferrer">GitHub</a>
+        <a href="/openapi.json">OpenAPI</a>
+        <a href="https://x.com/402Signal" rel="noopener noreferrer">@402Signal</a>
+        <a href="mailto:402signal@gmail.com">402signal@gmail.com</a>
+      </p>
+      <p class="also-found">
+        <a href="https://registry.modelcontextprotocol.io/?q=402signal" rel="noopener noreferrer">MCP Registry</a>.
+        Merchant record:
+        <a href="https://facilitator.goplausible.xyz/dashboard/merchants/56466a9400d70f08" rel="noopener noreferrer">GoPlausible</a>.
       </p>
     </footer>
   </div>

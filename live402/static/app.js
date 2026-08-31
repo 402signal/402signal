@@ -1,377 +1,30 @@
 (function () {
   const need = document.getElementById("need");
-  const payBaseBtn = document.getElementById("pay-base");
-  const payBaseHint = document.getElementById("pay-base-hint");
-  const status = document.getElementById("status");
-  const form = document.getElementById("route-form");
-  const human = document.getElementById("human-result");
-  const humanTitle = document.getElementById("human-title");
-  const humanBody = document.getElementById("human-body");
+  const form = document.getElementById("search-form");
+  const searchBtn = document.getElementById("search-btn");
+  const status = document.getElementById("search-status");
+  const results = document.getElementById("search-results");
+  const claimsCard = document.getElementById("claims-example");
+  const claimsBody = document.getElementById("claims-example-body");
+  const pulseSection = document.getElementById("pulse");
+  const pulseTeaser = document.getElementById("pulse-teaser");
+  const navPulse = document.getElementById("nav-pulse");
+  const copyBtn = document.getElementById("copy-curl");
+  const curlEl = document.getElementById("curl-route");
 
-  const BASE_CHAIN_ID = 8453;
-  const BASE_CHAIN_HEX = "0x2105";
-  const ATOMIC_AMOUNT = "10000";
-  let paying = false;
-
-  function requestBody() {
-    return { need: ((need && need.value) || "").trim() };
-  }
+  const RAIL_NAMES = { base: "Base", solana: "Solana", algorand: "Algorand" };
+  const FORBIDDEN_RESULT_LABELS = /^(recommended|verified|live|payable now|best for)$/i;
 
   function hasContent() {
     return Boolean(((need && need.value) || "").trim());
   }
 
-  function injectedWallet() {
-    return window.ethereum && typeof window.ethereum.request === "function"
-      ? window.ethereum
-      : null;
+  function syncSearch() {
+    if (searchBtn) searchBtn.disabled = !hasContent();
   }
-
-  function revealPayControl() {
-    const ok = Boolean(injectedWallet());
-    if (form) form.hidden = false;
-    if (payBaseBtn) {
-      payBaseBtn.hidden = !ok;
-      if (!paying) payBaseBtn.disabled = !ok || !hasContent();
-    }
-    if (payBaseHint) payBaseHint.hidden = !ok;
-  }
-
-  function syncPreview() {
-    const ok = Boolean(injectedWallet());
-    if (form && !paying) form.hidden = false;
-    if (payBaseBtn && !paying) {
-      payBaseBtn.hidden = !ok;
-      payBaseBtn.disabled = !ok || !hasContent();
-    }
-    const previewBtn = document.getElementById("preview-btn");
-    const probeBtn = document.getElementById("probe-btn");
-    if (previewBtn) previewBtn.disabled = !hasContent();
-    if (probeBtn) probeBtn.disabled = !hasContent();
-  }
-
-  function showHuman(code, parsed) {
-    if (!human || !humanTitle || !humanBody) return;
-    human.hidden = false;
-    if (code === 402) {
-      const err = parsed && parsed.error ? String(parsed.error) : "";
-      if (err && err !== "Payment required") {
-        humanTitle.textContent = "Payment did not go through";
-        humanBody.textContent = err;
-        return;
-      }
-      humanTitle.textContent = "This call costs $0.01 USDC";
-      const q = ((need && need.value) || "").trim() || "weather";
-      humanBody.textContent = "Unpaid POST /route. Sign PAYMENT-SIGNATURE and retry, or Pay $0.01 on Base if an injected wallet is present. curl -sS -D - https://402signal.com/route -H 'Content-Type: application/json' -d " + JSON.stringify({need: q});
-      return;
-    }
-    if (code === 200 && parsed && parsed.live && parsed.url) {
-      humanTitle.textContent = "Live URL found";
-      humanBody.textContent = parsed.url;
-      return;
-    }
-    if (code === 503) {
-      humanTitle.textContent = "Honest miss";
-      humanBody.textContent = "Nothing live matched. Same $0.01 either way. You paid for the probe report.";
-      return;
-    }
-    if (code === 429) {
-      humanTitle.textContent = "Slow down";
-      humanBody.textContent = "Too many lookups from this network right now. Try again in a minute.";
-      return;
-    }
-    if (parsed && parsed.error) {
-      humanTitle.textContent = "Could not route";
-      humanBody.textContent = String(parsed.error);
-      return;
-    }
-    humanTitle.textContent = "HTTP " + code;
-    humanBody.textContent = "GET /preview is free if you only wanted a cached look.";
-  }
-
-  function showResult(code, parsed) {
-    showHuman(code, parsed);
-    status.textContent = "HTTP " + code;
-    if (code === 402) status.className = "http-402";
-    else if (code === 200) status.className = "http-ok";
-    else status.className = "http-dead";
-    if (code === 200 && parsed && typeof parsed === "object") {
-      if (parsed.url) renderRecommend(parsed, { probed: true });
-      renderObserved(parsed);
-      renderCompared(parsed);
-    } else if (code === 503 && parsed && typeof parsed === "object") {
-      renderObserved(parsed);
-      renderCompared(parsed);
-    } else if (code === 402) {
-      const obs = document.getElementById("observed-card");
-      if (obs) obs.hidden = true;
-      const cmp = document.getElementById("compared-card");
-      if (cmp) cmp.hidden = true;
-    }
-  }
-
-  function showClientError(message) {
-    status.textContent = "wallet";
-    status.className = "http-dead";
-    showHuman(0, { error: message });
-  }
-
-  function pickBaseAccept(required) {
-    const accepts = (required && required.accepts) || [];
-    for (let i = 0; i < accepts.length; i++) {
-      const item = accepts[i];
-      const net = String((item && item.network) || "").toLowerCase();
-      if (net === "base" || net === "eip155:8453" || net.indexOf("eip155:8453") === 0) {
-        return item;
-      }
-    }
-    return null;
-  }
-
-  function randomNonce() {
-    const bytes = new Uint8Array(32);
-    crypto.getRandomValues(bytes);
-    let hex = "0x";
-    for (let i = 0; i < bytes.length; i++) {
-      hex += bytes[i].toString(16).padStart(2, "0");
-    }
-    return hex;
-  }
-
-  function encodePaymentSignature(payload) {
-    const json = JSON.stringify(payload);
-    const bytes = new TextEncoder().encode(json);
-    let bin = "";
-    for (let i = 0; i < bytes.length; i++) {
-      bin += String.fromCharCode(bytes[i]);
-    }
-    return btoa(bin);
-  }
-
-  async function ensureBase(eth) {
-    const raw = await eth.request({ method: "eth_chainId" });
-    const current = parseInt(raw, 16);
-    if (current === BASE_CHAIN_ID) return;
-    try {
-      await eth.request({
-        method: "wallet_switchEthereumChain",
-        params: [{ chainId: BASE_CHAIN_HEX }],
-      });
-    } catch (err) {
-      const code = err && err.code;
-      if (code === 4902) {
-        try {
-          await eth.request({
-            method: "wallet_addEthereumChain",
-            params: [{
-              chainId: BASE_CHAIN_HEX,
-              chainName: "Base",
-              nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
-              rpcUrls: ["https://mainnet.base.org"],
-              blockExplorerUrls: ["https://basescan.org"],
-            }],
-          });
-        } catch (addErr) {
-          throw new Error("Switch your wallet to Base (chain 8453). This page only pays Base.");
-        }
-      } else if (code === 4001) {
-        throw new Error("Switch to Base (8453) to pay. This page does not pay other chains.");
-      } else {
-        throw new Error("Switch your wallet to Base (chain 8453). This page only pays Base.");
-      }
-    }
-    const after = parseInt(await eth.request({ method: "eth_chainId" }), 16);
-    if (after !== BASE_CHAIN_ID) {
-      throw new Error("Wallet is not on Base (8453). Switch to Base, then try again.");
-    }
-  }
-
-  async function signExactEip3009(eth, from, accept) {
-    const extra = accept.extra || {};
-    const name = extra.name || "USD Coin";
-    const version = extra.version || "2";
-    const asset = accept.asset || accept.currency;
-    const amount = String(accept.amount);
-    const payTo = accept.payTo;
-    if (amount !== ATOMIC_AMOUNT) {
-      throw new Error("Refusing to sign: amount must be 10000 atomic USDC ($0.01).");
-    }
-    if (!payTo) {
-      throw new Error("Refusing to sign: 402 is missing payTo.");
-    }
-    if (!asset) {
-      throw new Error("Refusing to sign: 402 is missing USDC asset.");
-    }
-    const timeout = Number(accept.maxTimeoutSeconds) || 60;
-    const authorization = {
-      from: from,
-      to: payTo,
-      value: amount,
-      validAfter: "0",
-      validBefore: String(Math.floor(Date.now() / 1000) + timeout),
-      nonce: randomNonce(),
-    };
-    const typedData = {
-      types: {
-        EIP712Domain: [
-          { name: "name", type: "string" },
-          { name: "version", type: "string" },
-          { name: "chainId", type: "uint256" },
-          { name: "verifyingContract", type: "address" },
-        ],
-        TransferWithAuthorization: [
-          { name: "from", type: "address" },
-          { name: "to", type: "address" },
-          { name: "value", type: "uint256" },
-          { name: "validAfter", type: "uint256" },
-          { name: "validBefore", type: "uint256" },
-          { name: "nonce", type: "bytes32" },
-        ],
-      },
-      primaryType: "TransferWithAuthorization",
-      domain: {
-        name: name,
-        version: version,
-        chainId: BASE_CHAIN_ID,
-        verifyingContract: asset,
-      },
-      message: authorization,
-    };
-    const signature = await eth.request({
-      method: "eth_signTypedData_v4",
-      params: [from, JSON.stringify(typedData)],
-    });
-    if (!signature) {
-      throw new Error("Wallet did not return a signature.");
-    }
-    return { authorization: authorization, signature: signature };
-  }
-
-  async function payBase() {
-    if (paying) return;
-    if (!hasContent()) {
-      showClientError("need is required");
-      return;
-    }
-    const eth = injectedWallet();
-    if (!eth) {
-      showClientError("No injected wallet. Use MetaMask, Coinbase Wallet, or Base App, or POST /route from an agent.");
-      revealPayControl();
-      return;
-    }
-    paying = true;
-    if (payBaseBtn) {
-      payBaseBtn.disabled = true;
-      payBaseBtn.classList.add("posting");
-    }
-    status.textContent = "connecting wallet…";
-    status.className = "muted";
-    if (human) human.hidden = true;
-    const body = requestBody();
-    try {
-      const accounts = await eth.request({ method: "eth_requestAccounts" });
-      const from = accounts && accounts[0];
-      if (!from) throw new Error("Wallet did not share an account.");
-      await ensureBase(eth);
-      status.textContent = "reading 402…";
-      const challenge = await fetch("/route", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      const challengeText = await challenge.text();
-      let required;
-      try { required = JSON.parse(challengeText); } catch (e) { required = null; }
-      if (challenge.status !== 402 || !required || typeof required !== "object") {
-        showResult(challenge.status, required == null ? challengeText : required);
-        return;
-      }
-      const accept = pickBaseAccept(required);
-      if (!accept) {
-        throw new Error("402 did not advertise Base (eip155:8453). Refusing other rails.");
-      }
-      if (String(accept.amount) !== ATOMIC_AMOUNT) {
-        throw new Error("Refusing to sign: amount must be 10000 atomic USDC ($0.01).");
-      }
-      status.textContent = "Confirm $0.01 USDC in your wallet…";
-      const signed = await signExactEip3009(eth, from, accept);
-      const paymentPayload = {
-        x402Version: 2,
-        resource: required.resource,
-        accepted: accept,
-        payload: {
-          signature: signed.signature,
-          authorization: signed.authorization,
-        },
-        extensions: required.extensions || {},
-      };
-      const header = encodePaymentSignature(paymentPayload);
-      status.textContent = "paying…";
-      const paid = await fetch("/route", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "PAYMENT-SIGNATURE": header,
-        },
-        body: JSON.stringify(body),
-      });
-      const paidText = await paid.text();
-      let parsed;
-      try { parsed = JSON.parse(paidText); } catch (e) { parsed = paidText; }
-      showResult(paid.status, parsed);
-    } catch (err) {
-      const code = err && err.code;
-      let message = err && err.message ? String(err.message) : String(err);
-      if (code === 4001) message = "Signature rejected. No payment was sent.";
-      showClientError(message);
-    } finally {
-      paying = false;
-      if (payBaseBtn) payBaseBtn.classList.remove("posting");
-      syncPreview();
-    }
-  }
-
-  if (form) {
-    form.addEventListener("submit", function (ev) {
-      ev.preventDefault();
-    });
-  }
-  if (payBaseBtn) {
-    payBaseBtn.addEventListener("click", function (ev) {
-      ev.preventDefault();
-      payBase();
-    });
-  }
-  if (need) {
-    need.addEventListener("input", syncPreview);
-    need.addEventListener("change", syncPreview);
-  }
-
-  try {
-    const q = new URLSearchParams(window.location.search);
-    const qNeed = q.get("need");
-    if (qNeed && need) need.value = qNeed;
-  } catch (e) {}
-
-  function applyHomeTab() {
-    const overviewEl = document.getElementById("panel-overview");
-    const useEl = document.getElementById("panel-use");
-    if (!overviewEl || !useEl) return;
-    const use = String(window.location.hash || "").toLowerCase() === "#use";
-    overviewEl.hidden = use;
-    useEl.hidden = !use;
-    const tabOverview = document.getElementById("tab-overview");
-    const tabUse = document.getElementById("tab-use");
-    if (tabOverview) tabOverview.classList.toggle("is-active", !use);
-    if (tabUse) tabUse.classList.toggle("is-active", use);
-  }
-  applyHomeTab();
-  window.addEventListener("hashchange", applyHomeTab);
-
-  const EMPTY_STATE = "Index is filling. Preview has no hits yet. Pulse counts are 0. Probe live still 402s /route.";
 
   function unknown(v) {
-    if (v === null || v === undefined || v === "") return "unknown";
+    if (v === null || v === undefined || v === "") return "Unknown";
     return String(v);
   }
 
@@ -383,267 +36,363 @@
     }
   }
 
-  function yn(ok) {
-    return ok ? "yes" : "no";
+  function text(el, value) {
+    if (el) el.textContent = value == null ? "" : String(value);
   }
 
-  function showEmpty(text) {
-    const el = document.getElementById("empty-state");
-    if (el) {
-      el.hidden = false;
-      el.textContent = text || EMPTY_STATE;
-    }
-    renderRecommend(null);
-    const obs = document.getElementById("observed-card");
-    if (obs) obs.hidden = true;
-    const cmp = document.getElementById("compared-card");
-    if (cmp) cmp.hidden = true;
+  function setStatus(message) {
+    text(status, message || "");
   }
 
-  function hideEmpty() {
-    const el = document.getElementById("empty-state");
-    if (el) el.hidden = true;
-  }
-
-  function firstHit(parsed) {
-    if (!parsed || typeof parsed !== "object") return null;
+  function catalogHits(parsed) {
+    if (!parsed || typeof parsed !== "object") return [];
     const hits = parsed.hits;
-    if (Array.isArray(hits) && hits.length) return hits[0];
-    return null;
+    if (!Array.isArray(hits)) return [];
+    return hits.filter(function (hit) {
+      return hit && typeof hit === "object";
+    });
   }
 
   function railOf(hit) {
-    if (!hit || typeof hit !== "object") return "unknown";
-    const target = hit.target || {};
-    const accepts = target.accepts || hit.accepts || [];
-    let net = hit.chain || hit.rail || hit.network || target.network;
-    if (!net && accepts.length && accepts[0]) net = accepts[0].network;
-    return unknown(net);
+    if (!hit || typeof hit !== "object") return "Unknown";
+    const net = hit.chain || hit.rail || hit.network;
+    if (!net) return "Unknown";
+    const key = String(net).toLowerCase();
+    return RAIL_NAMES[key] || String(net);
   }
 
-  function priceOf(hit) {
-    if (!hit || typeof hit !== "object") return "unknown";
-    const target = hit.target || {};
-    const claimed = hit.claimed || {};
-    return unknown(hit.price || target.displayAmount || claimed.amount || hit.amount);
+  function listedPrice(hit) {
+    if (!hit || typeof hit !== "object") return "Unknown";
+    const claimed = hit.claimed && typeof hit.claimed === "object" ? hit.claimed : {};
+    if (hit.price != null && hit.price !== "") return String(hit.price);
+    if (claimed.amount != null && claimed.amount !== "") return String(claimed.amount);
+    return "Unknown";
   }
 
-  function invocableOf(hit) {
+  function catalogPayTo(hit) {
+    if (!hit || typeof hit !== "object") return null;
+    const claimed = hit.claimed && typeof hit.claimed === "object" ? hit.claimed : null;
+    if (claimed && claimed.payTo) return String(claimed.payTo);
+    return null;
+  }
+
+  function schemaListed(hit) {
     if (!hit || typeof hit !== "object") return "unknown";
-    if (typeof hit.invocable === "boolean") return yn(hit.invocable);
-    if (typeof hit.inputSchema_present === "boolean") return yn(hit.inputSchema_present);
-    const target = hit.target || {};
-    if (target.inputSchema) return "yes";
+    if (typeof hit.inputSchema_present === "boolean") {
+      return hit.inputSchema_present ? "yes" : "no";
+    }
+    const claimed = hit.claimed && typeof hit.claimed === "object" ? hit.claimed : null;
+    if (claimed && typeof claimed.schema_present === "boolean") {
+      return claimed.schema_present ? "yes" : "no";
+    }
+    if (claimed && (claimed.schema_present === 1 || claimed.schema_present === 0)) {
+      return claimed.schema_present === 1 ? "yes" : "no";
+    }
     return "unknown";
   }
 
-  function verifiedOf(hit, opts) {
-    opts = opts || {};
-    if (!hit) return "not_probed";
-    if (opts.probed || hit.verified_seconds_ago === 0 || hit.verified_seconds_ago) {
-      const n = hit.verified_seconds_ago;
-      if (n === 0 || n) return "verified " + n + "s ago";
-    }
-    if (hit.not_probed || opts.not_probed) return "not_probed";
-    return "not_probed";
+  function catalogSource(hit) {
+    if (!hit || typeof hit !== "object") return null;
+    if (typeof hit.source === "string" && hit.source) return hit.source;
+    const claimed = hit.claimed && typeof hit.claimed === "object" ? hit.claimed : null;
+    if (claimed && typeof claimed.source === "string" && claimed.source) return claimed.source;
+    return null;
   }
 
-  function renderRecommend(hit, opts) {
-    const card = document.getElementById("recommend-card");
-    const title = document.getElementById("recommend-title");
-    const body = document.getElementById("recommend-body");
-    const why = document.getElementById("recommend-why");
-    if (!card || !title || !body || !why) return;
-    if (!hit) {
-      card.hidden = true;
-      return;
+  function independentlyObserved(parsed) {
+    if (!parsed || typeof parsed !== "object") return null;
+    const obs = parsed.observed;
+    if (!obs || typeof obs !== "object") return null;
+    if (obs.source && obs.source !== "402signal_observed") return null;
+    const keys = Object.keys(obs).filter(function (key) {
+      if (key === "source") return false;
+      return obs[key] !== null && obs[key] !== undefined && obs[key] !== "";
+    });
+    if (!keys.length) return null;
+    return obs;
+  }
+
+  function observedField(obs, key) {
+    if (!obs || !Object.prototype.hasOwnProperty.call(obs, key)) return undefined;
+    const value = obs[key];
+    if (value === null || value === undefined || value === "") return undefined;
+    return value;
+  }
+
+  function isRefreshingPulse(pulse) {
+    if (!pulse || typeof pulse !== "object") return false;
+    const status = String(pulse.index_status || "").toLowerCase();
+    return status === "pending" || status === "refreshing";
+  }
+
+  function pulseCatalogCounts(pulse) {
+    if (!pulse || typeof pulse !== "object") return null;
+    if (pulse.ok === false) return null;
+    if (isRefreshingPulse(pulse)) return null;
+    const chains = pulse.chains;
+    if (!chains || typeof chains !== "object") return null;
+    const out = [];
+    ["base", "solana", "algorand"].forEach(function (name) {
+      const row = chains[name];
+      if (!row || typeof row !== "object") return;
+      const count = row.count;
+      if (typeof count !== "number" || !isFinite(count) || count <= 0) return;
+      out.push({ name: name, label: RAIL_NAMES[name] || name, count: count });
+    });
+    return out.length ? out : null;
+  }
+
+  function pulseUseful(pulse) {
+    return Boolean(pulseCatalogCounts(pulse));
+  }
+
+  function formatCount(n) {
+    try {
+      return Number(n).toLocaleString("en-US");
+    } catch (e) {
+      return String(n);
     }
-    opts = opts || {};
-    card.hidden = false;
-    const url = hit.url || "";
-    const name = hit.label || hit.need || hit.serviceName || hit.name || hostOf(url) || "Recommended";
-    title.textContent = name;
-    const lines = [
-      url || "unknown",
-      "Price " + priceOf(hit),
-      "Rail " + railOf(hit),
-      "Invocable " + invocableOf(hit),
-      verifiedOf(hit, opts)
-    ];
+  }
+
+  function safeLabel(hit) {
+    const url = (hit && hit.url) || "";
+    const name = (hit && (hit.label || hit.need || hit.serviceName || hit.name)) || hostOf(url) || "Candidate";
+    if (FORBIDDEN_RESULT_LABELS.test(String(name))) return hostOf(url) || "Candidate";
+    return String(name);
+  }
+
+  function appendMeta(dl, label, value) {
+    if (value == null || value === "") return;
+    const row = document.createElement("div");
+    const dt = document.createElement("dt");
+    const dd = document.createElement("dd");
+    dt.textContent = label;
+    dd.textContent = value;
+    row.appendChild(dt);
+    row.appendChild(dd);
+    dl.appendChild(row);
+  }
+
+  function renderHit(hit) {
+    const article = document.createElement("article");
+    article.className = "result-card";
+
+    const title = document.createElement("h3");
+    title.textContent = safeLabel(hit);
+    article.appendChild(title);
+
+    const tags = document.createElement("p");
+    tags.className = "result-tags";
+    const match = document.createElement("span");
+    match.className = "tag";
+    match.textContent = "Catalog match";
+    const unverified = document.createElement("span");
+    unverified.className = "tag";
+    unverified.textContent = "Not live-verified";
+    tags.appendChild(match);
+    tags.appendChild(document.createTextNode(" "));
+    tags.appendChild(unverified);
+    article.appendChild(tags);
+
+    if (hit.url) {
+      const urlP = document.createElement("p");
+      urlP.className = "result-url";
+      urlP.textContent = String(hit.url);
+      article.appendChild(urlP);
+    }
+
+    const dl = document.createElement("dl");
+    dl.className = "result-meta";
+    appendMeta(dl, "Listed price", listedPrice(hit));
+    const payTo = catalogPayTo(hit);
+    if (payTo) appendMeta(dl, "Catalog payTo", payTo);
+    appendMeta(dl, "Schema listed", schemaListed(hit));
+    const source = catalogSource(hit);
+    if (source) appendMeta(dl, "Source", source);
+    appendMeta(dl, "Rail", railOf(hit));
     const also = hit.also_on;
     if (Array.isArray(also) && also.length) {
-      lines.push("Also on " + also.join(", "));
+      appendMeta(dl, "Also listed on", also.join(", "));
     }
-    body.textContent = lines.join("\n");
-    why.textContent = whyFromProbe(hit, opts);
+    article.appendChild(dl);
+    return article;
   }
 
-  function whyFromProbe(parsed, opts) {
-    opts = opts || {};
-    if (opts.not_probed) return "Best capability match in the current index.";
-    const rows = parsed && Array.isArray(parsed.compared) ? parsed.compared : [];
-    const obj = parsed && parsed.objective;
-    if (rows.length && (obj === "cheapest" || obj === "fastest" || obj === "most_reliable")) {
-      return "Selected as " + String(obj).split("_").join(" ") + " among compared rows.";
-    }
-    return "Best capability match in the current index.";
+  function showMessage(message) {
+    if (!results) return;
+    results.textContent = "";
+    const p = document.createElement("p");
+    p.className = "empty-state";
+    p.id = "empty-state";
+    p.textContent = message;
+    results.appendChild(p);
   }
 
-  function renderCompared(parsed) {
-    const card = document.getElementById("compared-card");
-    const body = document.getElementById("compared-body");
-    if (!card || !body) return;
-    if (!parsed || typeof parsed !== "object") {
-      card.hidden = true;
-      return;
-    }
-    const rows = parsed.compared;
-    if (!Array.isArray(rows) || !rows.length) {
-      card.hidden = true;
+  function renderClaimsExample(parsed, hit) {
+    if (!claimsCard || !claimsBody) return;
+    if (!hit && !independentlyObserved(parsed)) {
+      claimsCard.hidden = true;
+      claimsBody.textContent = "";
       return;
     }
     const lines = [];
-    const obj = parsed.objective;
-    if (obj === "cheapest" || obj === "fastest" || obj === "most_reliable") {
-      lines.push("Objective " + obj);
+    if (hit) {
+      lines.push("Catalog (this result)");
+      lines.push("Listed price: " + listedPrice(hit));
+      const payTo = catalogPayTo(hit);
+      if (payTo) lines.push("Catalog payTo: " + payTo);
+      else lines.push("Catalog payTo: omitted (not in this payload)");
+      lines.push("Schema listed: " + schemaListed(hit));
+      const source = catalogSource(hit);
+      if (source) lines.push("Source: " + source);
+      lines.push("Rail: " + railOf(hit));
     }
-    rows.forEach(function (row) {
-      if (!row || typeof row !== "object") return;
-      const bits = [];
-      bits.push(row.selected ? "selected" : "candidate");
-      if (row.url) bits.push(row.url);
-      if (row.rail) bits.push("rail " + row.rail);
-      if (row.amount_atomic != null && row.amount_atomic !== "") bits.push("amount " + row.amount_atomic);
-      if (row.latency_ms != null && row.latency_ms !== "") bits.push(row.latency_ms + "ms");
-      bits.push("live " + yn(!!row.live));
-      bits.push("invocable " + yn(!!row.invocable));
-      lines.push(bits.join(" · "));
+    const obs = independentlyObserved(parsed);
+    if (obs) {
+      lines.push("402Signal observed");
+      const httpStatus = observedField(obs, "http_status");
+      const obsPay = observedField(obs, "payTo");
+      const schema = observedField(obs, "schema_present");
+      const latency = observedField(obs, "latency_ms");
+      if (httpStatus !== undefined) lines.push("HTTP status: " + unknown(httpStatus));
+      if (obsPay !== undefined) lines.push("payTo: " + unknown(obsPay));
+      if (schema !== undefined) {
+        const schemaLabel = schema === 1 || schema === true ? "yes" : schema === 0 || schema === false ? "no" : "Unknown";
+        lines.push("schema_present: " + schemaLabel);
+      } else {
+        lines.push("schema_present: Unknown");
+      }
+      if (latency !== undefined) lines.push("latency_ms: " + unknown(latency));
+    } else {
+      lines.push("402Signal observed: not in this response. Catalog search is not a live probe.");
+    }
+    claimsBody.textContent = lines.join("\n");
+    claimsCard.hidden = false;
+  }
+
+  function renderResults(parsed, pulse) {
+    if (!results) return;
+    results.textContent = "";
+    const hits = catalogHits(parsed);
+    if (!hits.length) {
+      if (isRefreshingPulse(pulse)) {
+        showMessage("Catalog data is refreshing. Try again shortly.");
+      } else {
+        showMessage("No catalog matches found. Try a broader capability.");
+      }
+      renderClaimsExample(parsed, null);
+      return;
+    }
+    const heading = document.createElement("h3");
+    heading.className = "results-heading";
+    heading.textContent = hits.length === 1 ? "1 catalog match" : hits.length + " catalog matches";
+    results.appendChild(heading);
+    hits.forEach(function (hit) {
+      results.appendChild(renderHit(hit));
     });
-    body.textContent = lines.join("\n");
-    card.hidden = false;
+    renderClaimsExample(parsed, hits[0]);
   }
 
-  function renderObserved(parsed) {
-    const card = document.getElementById("observed-card");
-    const body = document.getElementById("observed-body");
-    if (!card || !body) return;
-    if (!parsed || typeof parsed !== "object") {
-      card.hidden = true;
-      return;
-    }
-    if (parsed.accepts && !parsed.claimed && !parsed.observed && parsed.live == null) {
-      card.hidden = true;
-      return;
-    }
-    const claimed = parsed.claimed || {};
-    const observed = parsed.observed || {};
-    const catPrice = unknown(claimed.amount);
-    const catPay = unknown(claimed.payTo);
-    const obsStatus = observed.http_status != null ? observed.http_status : parsed.status;
-    const http402 = obsStatus === 402 || parsed.has_402_challenge === true;
-    const obsPay = observed.payTo || parsed.payTo || "";
-    const payMatch = catPay !== "unknown" && obsPay && String(catPay).toLowerCase() === String(obsPay).toLowerCase();
-    const schema = observed.schema_present === 1 || observed.schema_present === true || parsed.invocable === true || !!(parsed.target && parsed.target.inputSchema);
-    const latency = observed.latency_ms != null ? observed.latency_ms : parsed.latency_ms;
-    const verified = parsed.verified_seconds_ago;
-    const flags = [];
-    if (parsed.payTo_changed || (parsed.risk && parsed.risk.indexOf("payTo_changed") >= 0)) flags.push("payTo_changed");
-    if (!schema) flags.push("missing schema");
-    if (http402 && !obsPay) flags.push("402 without payTo");
-    body.textContent = [
-      "Catalog says: price " + catPrice + " / payTo " + catPay,
-      "402Signal observed: HTTP 402 " + yn(http402) + " · payTo match " + yn(payMatch) + " · schema " + yn(schema) + " · latency " + unknown(latency) + "ms · verified " + unknown(verified) + "s ago"
-    ].join("\n") + (flags.length ? "\nFlags: " + flags.join(", ") : "");
-    card.hidden = false;
-  }
-
-  async function runPreview() {
+  async function runSearch() {
     if (!hasContent()) {
-      showEmpty(EMPTY_STATE);
+      showMessage("Enter a capability to search the catalog.");
       return;
     }
-    status.textContent = "preview…";
-    status.className = "muted";
+    setStatus("Searching catalog...");
+    if (results) results.textContent = "";
+    if (claimsCard) claimsCard.hidden = true;
+    let pulse = null;
     try {
-      const res = await fetch("/preview?need=" + encodeURIComponent(((need && need.value) || "").trim()), { cache: "no-store" });
-      const text = await res.text();
-      let parsed;
-      try { parsed = JSON.parse(text); } catch (e) { parsed = null; }
-      if (res.status === 502) {
-        showEmpty("Preview fetch 502. " + EMPTY_STATE);
+      const pulseRes = await fetch("/pulse", { cache: "no-store" });
+      if (pulseRes.ok) pulse = await pulseRes.json();
+    } catch (e) {
+      pulse = null;
+    }
+    try {
+      const q = ((need && need.value) || "").trim();
+      const res = await fetch("/preview?need=" + encodeURIComponent(q), { cache: "no-store" });
+      const raw = await res.text();
+      let parsed = null;
+      try { parsed = JSON.parse(raw); } catch (e) { parsed = null; }
+      if (res.status === 502 || res.status === 503) {
+        showMessage("Catalog data is refreshing. Try again shortly.");
+        setStatus("");
         return;
       }
       if (!res.ok) {
-        showEmpty("Preview fetch " + res.status + ". " + EMPTY_STATE);
+        showMessage("Catalog data is refreshing. Try again shortly.");
+        setStatus("HTTP " + res.status);
         return;
       }
-      const hit = firstHit(parsed);
-      if (!hit) {
-        showEmpty(EMPTY_STATE);
-        return;
-      }
-      hideEmpty();
-      if (parsed && parsed.not_probed) hit.not_probed = true;
-      renderRecommend(hit, { not_probed: true });
-      const obs = document.getElementById("observed-card");
-      if (obs) obs.hidden = true;
-      const cmp = document.getElementById("compared-card");
-      if (cmp) cmp.hidden = true;
-      status.textContent = "preview";
+      renderResults(parsed, pulse);
+      setStatus("");
     } catch (err) {
-      showEmpty("Preview fetch failed. " + EMPTY_STATE);
+      showMessage("Catalog data is refreshing. Try again shortly.");
+      setStatus("");
     }
   }
 
-  async function runProbe() {
-    if (!hasContent()) {
-      showClientError("need is required");
-      return;
-    }
-    status.textContent = "reading 402…";
-    status.className = "muted";
-    if (human) human.hidden = true;
+  async function loadPulse() {
+    if (!pulseSection || !pulseTeaser) return;
     try {
-      const res = await fetch("/route", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(requestBody()),
-      });
-      const text = await res.text();
-      let parsed;
-      try { parsed = JSON.parse(text); } catch (e) { parsed = text; }
-      showResult(res.status, parsed);
-    } catch (err) {
-      showClientError(err && err.message ? String(err.message) : String(err));
-    }
-  }
-
-  async function loadRails() {
-    const box = document.getElementById("rail-chips");
-    if (!box) return;
-    box.textContent = "";
-    try {
-      const res = await fetch("/rails", { cache: "no-store" });
-      if (!res.ok) return;
+      const res = await fetch("/pulse", { cache: "no-store" });
+      if (!res.ok) {
+        pulseSection.hidden = true;
+        if (navPulse) navPulse.hidden = true;
+        return;
+      }
       const parsed = await res.json();
-      const rails = parsed && parsed.rails;
-      if (!Array.isArray(rails)) return;
-      rails.forEach(function (row) {
-        if (!row || typeof row !== "object") return;
-        const name = row.network || row.rail || row.name;
-        if (!name) return;
-        const span = document.createElement("span");
-        span.className = "chip rail-chip" + (row.up === false ? " down" : "");
-        const bits = [String(name)];
-        if (row.up === true) bits.push("up");
-        else if (row.up === false) bits.push("down");
-        if (row.latency_ms != null && row.latency_ms !== "") bits.push(String(row.latency_ms) + "ms");
-        span.textContent = bits.join(" ");
-        box.appendChild(span);
-      });
-    } catch (e) {}
+      const counts = pulseCatalogCounts(parsed);
+      if (!counts) {
+        pulseSection.hidden = true;
+        if (navPulse) navPulse.hidden = true;
+        return;
+      }
+      pulseTeaser.textContent = counts.map(function (row) {
+        return row.label + " " + formatCount(row.count);
+      }).join(" · ");
+      pulseSection.hidden = false;
+      if (navPulse) navPulse.hidden = false;
+    } catch (e) {
+      pulseSection.hidden = true;
+      if (navPulse) navPulse.hidden = true;
+    }
   }
 
+  async function copyCurl() {
+    if (!curlEl) return;
+    const value = curlEl.textContent || "";
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(value);
+      } else {
+        const range = document.createRange();
+        range.selectNodeContents(curlEl);
+        const sel = window.getSelection();
+        if (sel) {
+          sel.removeAllRanges();
+          sel.addRange(range);
+        }
+      }
+      if (copyBtn) {
+        copyBtn.textContent = "Copied";
+        window.setTimeout(function () { copyBtn.textContent = "Copy"; }, 1500);
+      }
+    } catch (e) {
+      if (copyBtn) copyBtn.textContent = "Copy failed";
+    }
+  }
+
+  if (form) {
+    form.addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      runSearch();
+    });
+  }
+  if (need) {
+    need.addEventListener("input", syncSearch);
+    need.addEventListener("change", syncSearch);
+  }
   const chips = document.getElementById("need-chips");
   if (chips) {
     chips.addEventListener("click", function (ev) {
@@ -652,24 +401,26 @@
       need.value = btn.getAttribute("data-need") || "";
       chips.querySelectorAll(".chip").forEach(function (c) { c.classList.remove("active"); });
       btn.classList.add("active");
-      syncPreview();
+      syncSearch();
     });
   }
-  const previewBtn = document.getElementById("preview-btn");
-  if (previewBtn) previewBtn.addEventListener("click", function (ev) {
-    ev.preventDefault();
-    runPreview();
-  });
-  const probeBtn = document.getElementById("probe-btn");
-  if (probeBtn) probeBtn.addEventListener("click", function (ev) {
-    ev.preventDefault();
-    runProbe();
-  });
+  if (copyBtn) {
+    copyBtn.addEventListener("click", function (ev) {
+      ev.preventDefault();
+      copyCurl();
+    });
+  }
 
-  revealPayControl();
-  window.addEventListener("ethereum#initialized", revealPayControl, { once: true });
-  setTimeout(revealPayControl, 500);
-  setTimeout(revealPayControl, 2000);
-  syncPreview();
-  loadRails();
+  try {
+    const q = new URLSearchParams(window.location.search);
+    const qNeed = q.get("need");
+    if (qNeed && need) {
+      need.value = qNeed;
+      syncSearch();
+      if (hasContent()) runSearch();
+    }
+  } catch (e) {}
+
+  syncSearch();
+  loadPulse();
 })();
