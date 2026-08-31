@@ -31,7 +31,10 @@ GUIDANCE = (
     "GET /mcp.json lists the MCP route tool (type mcp, toolName route); "
     "POST /mcp initialize and tools/list need no payment; tools/call route is the paid probe. "
     "GET /preview?need= is a free request-time catalog search (not_probed:true). Optional prefer_network=base|solana|algorand ranks across all rails; optional networks= restricts rails. GET /rails lists pay-in rails. "
-    "GET /pulse and GET /dashboard are sample lookups. GET /health is {ok:true} only. "
+    "GET /pulse and GET /dashboard are sample lookups. Pulse discovery copy is hybrid: "
+    "current upstream catalogs plus a local shadow catalog. index_status is "
+    "upstream-live, shadow-warm, both, or fixture. Pulse does not publish listing totals. "
+    "GET /health is {ok:true} only. "
     "POST /validate {url} (or GET /validate?url=) is an unpaid seller probe: agent-ready? Fail-closed SSRF, not a /route paywall bypass. "
     "GET /attestation is a public sha256 of a recent 402signal_observed probe batch (not on-chain). "
     "Probe budget is under 60s; a hang returns 503 JSON with miss_reason probe_timeout. "
@@ -411,7 +414,7 @@ def openapi_spec(resource_url: str = ROUTE) -> dict:
         "openapi": "3.1.0",
         "info": {
             "title": "402Signal",
-            "version": "0.4.0",
+            "version": "0.5.0",
             "description": DESC,
             "x-guidance": GUIDANCE,
             "contact": {"url": ORIGIN, "name": "402Signal", "email": "402signal@gmail.com"},
@@ -751,7 +754,39 @@ def openapi_spec(resource_url: str = ROUTE) -> dict:
                     "operationId": "pulse",
                     "tags": ["Public"],
                     "summary": "Get JSON snapshot of sample lookups",
-                    "responses": {"200": {"description": "Public sample lookups snapshot"}},
+                    "description": (
+                        "Sample lookups and observed facts. Discovery uses current upstream "
+                        "catalogs and a local shadow catalog. index_status is upstream-live, "
+                        "shadow-warm, both, or fixture. Does not publish listing totals or "
+                        "sqlite paths. Rates omitted below n_7d=10. No binary healthy."
+                    ),
+                    "responses": {
+                        "200": {
+                            "description": "Public sample lookups snapshot",
+                            "content": {
+                                "application/json": {
+                                    "schema": {
+                                        "type": "object",
+                                        "properties": {
+                                            "ok": {"type": "boolean"},
+                                            "index_status": {
+                                                "type": "string",
+                                                "enum": [
+                                                    "upstream-live",
+                                                    "shadow-warm",
+                                                    "both",
+                                                    "fixture",
+                                                ],
+                                            },
+                                            "observed": {"type": "object"},
+                                            "chains": {"type": "object"},
+                                            "samples": {"type": "array"},
+                                        },
+                                    }
+                                }
+                            },
+                        }
+                    },
                 }
             },
             "/validate": {
@@ -1032,8 +1067,8 @@ HTTP 200 = live URL plus target contract. HTTP 503 = typed miss_reason.
 
 - GET /  human homepage
 - GET /dashboard  sample lookups per chain (Base / Solana / Algorand)
-- GET /pulse  same snapshot as JSON, including samples[]
-- GET /preview?need=weather  request-time catalog search + discovery_matches + displayed + seller claims + read-only 402Signal observation (not_yet_observed when never independently probed). not_probed:true (does not probe, does not charge). Optional prefer_network=base|solana|algorand ranks across all rails; optional networks=solana restricts rails. discovery_via is a compact per-rail search|pages|error|fixture map. discovery_exhaustive is true only when the returned set is known complete. HEAD 200 on /llms.txt /openapi.json /mcp.json /preview /rails /pulse.
+- GET /pulse  same snapshot as JSON, including samples[]. index_status is upstream-live | shadow-warm | both | fixture. Discovery queries current upstream catalogs and a local shadow catalog. Pulse does not publish listing totals.
+- GET /preview?need=weather  request-time catalog search (current upstream catalogs plus a local shadow; not a full-world RAM index) + discovery_matches + displayed + seller claims + read-only 402Signal observation (not_yet_observed when never independently probed). not_probed:true (does not probe, does not charge). Optional prefer_network=base|solana|algorand ranks across all rails; optional networks=solana restricts rails. discovery_via is a compact per-rail search|pages|error|fixture map. discovery_exhaustive is true only when the returned set is known complete. Catalog rows keep three clocks (discovery, claim, verification); a paid route also returns this request's probe time. HEAD 200 on /llms.txt /openapi.json /mcp.json /preview /rails /pulse.
 - POST /validate {"url":"https://seller.example/x402"}  unpaid seller probe (GET, then POST {} if needed, then POST catalog-declared body when present): is this seller agent-ready? Also GET /validate?url=. Fail-closed SSRF. Not a /route paywall bypass. Readiness + claimed vs observed + flags. Never a binary healthy flag. Seller-body tightening and DNS IP-pin are held for 402security.
 - GET /attestation  public sha256 of a recent 402signal_observed probe batch (batch_id, created_at, n, algo, hash). Not on-chain. Optional ?batch_id=.
 - GET /rails  three pay-in networks, asset, amountAtomic, facilitators, feePayers, maxTimeoutSeconds, per-rail up+latency

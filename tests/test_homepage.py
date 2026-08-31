@@ -382,16 +382,21 @@ class HomepageProductTests(unittest.TestCase):
         self.assertIn('href="/rails"', html)
         self.assertIn('href="/attestation"', html)
         self.assertIn('href="/pulse"', html)
+        self.assertIn("selected_payment", html)
+        self.assertIn("probe_ceiling", html)
+        self.assertIn("claimed vs observed", html.lower())
+        self.assertIn("lowest_total_cost", html)
+        self.assertIn("fastest_settlement", html)
+        self.assertIn("prefer_network", html)
         hrefs = [href or "" for _text, href in _links(html)]
         for href in hrefs:
             self.assertFalse(href.rstrip("/").endswith("/route"), href)
             self.assertFalse(href.rstrip("/").endswith("/validate"), href)
             self.assertFalse(href.rstrip("/") == "https://402signal.com/mcp", href)
             self.assertFalse(href.rstrip("/") == "/mcp", href)
-        self.assertNotIn("cheapest", html)
-        self.assertNotIn("most_reliable", html)
-        self.assertNotIn("compared", html)
-        self.assertNotIn("fastest", html)
+        self.assertNotIn("PQ Trust", html)
+        self.assertNotIn("post-quantum", html.lower())
+        self.assertNotIn("algo_bonus", html)
 
     def test_listed_on_footer_verified_only(self):
         forbidden = (
@@ -443,6 +448,7 @@ class HomepageProductTests(unittest.TestCase):
         css = self.css
         self.assertIn("overflow-x: hidden", css)
         self.assertIn("@media (max-width: 720px)", css)
+        self.assertIn("@media (max-width: 390px)", css)
         self.assertIn("grid-template-columns: 1fr", css)
         for html in self.pages.values():
             self.assertIn('name="viewport"', html)

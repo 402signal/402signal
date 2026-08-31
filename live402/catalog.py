@@ -1267,7 +1267,7 @@ def item_for_url(url: str) -> dict | None:
 
 
 def peek_index() -> dict | None:
-    """Always None. We do not keep a local catalog mirror. Never refreshes."""
+    """Always None. There is no in-RAM world index. Shadow catalog is on disk."""
     return None
 
 

@@ -695,3 +695,13 @@ a.lookup:link, a.lookup:visited { color: var(--ink); text-decoration: none; }
   .result-meta > div { grid-template-columns: 1fr; gap: 2px; }
   .checks.compact > div { grid-template-columns: 1fr; gap: 2px; }
 }
+
+@media (max-width: 390px) {
+  .page { padding: 16px 12px 48px; }
+  h1 { font-size: 26px; max-width: none; }
+  .hero.compact h1 { max-width: none; }
+  .code, pre.code { font-size: 12px; }
+  .code-card { padding: 10px 10px 12px; }
+  .seg { width: 100%; }
+  .seg-btn { flex: 1 1 auto; }
+}

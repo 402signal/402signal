@@ -119,6 +119,19 @@ class PulseCopyHonestyTests(unittest.TestCase):
         ):
             self.assertEqual(pulse.index_status(), pulse.INDEX_SHADOW)
 
+    def test_machine_docs_agree_no_local_index_lie(self):
+        from live402 import discover
+
+        blobs = (
+            discover.LLMS_TXT.lower(),
+            discover.GUIDANCE.lower(),
+            str(discover.openapi_spec()).lower(),
+        )
+        for blob in blobs:
+            for lie in BANNED_INDEX_LIES:
+                self.assertNotIn(lie, blob, lie)
+            self.assertNotIn("max_probe=5", blob)
+
 
 def json_blob(payload: dict) -> str:
     import json

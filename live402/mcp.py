@@ -11,9 +11,9 @@ ROUTE_DESCRIPTION = (
 )
 
 PREVIEW_DESCRIPTION = (
-    "Request-time catalog preflight. Returns discovery_matches, displayed hits, "
-    "seller claims vs 402Signal observations, not_probed:true. Does not probe "
-    "and does not charge. Pay POST /route or tools/call route for a live probe."
+    "Request-time catalog preflight over upstream catalogs plus a local shadow. "
+    "Returns discovery_matches, displayed hits, claimed vs observed, not_probed:true. "
+    "Does not probe and does not charge. Pay tools/call route for a live probe."
 )
 
 INPUT_SCHEMA = {
@@ -311,7 +311,7 @@ TOOLS = [
 def manifest() -> dict:
     return {
         "name": "402Signal",
-        "version": "0.4.0",
+        "version": "0.5.0",
         "description": ROUTE_DESCRIPTION,
         "tools": TOOLS,
     }
@@ -324,7 +324,7 @@ def jsonrpc_initialize(req_id) -> dict:
         "result": {
             "protocolVersion": "2024-11-05",
             "capabilities": {"tools": {}},
-            "serverInfo": {"name": "402Signal", "version": "0.4.0"},
+            "serverInfo": {"name": "402Signal", "version": "0.5.0"},
         },
     }
 
