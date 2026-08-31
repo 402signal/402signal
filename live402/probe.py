@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import base64
+import http.client
 import ipaddress
 import json
 import os
 import socket
+import ssl
 import threading
 import time
 import uuid
@@ -58,6 +60,7 @@ MISS_REASONS = (
     "constraints_unmet",
     "probe_budget_exhausted",
     "probe_limit_reached",
+    "unsafe_to_probe",
 )
 STOP_REASONS = (
     "winner_selected",
@@ -92,6 +95,7 @@ _MISS_MAP = {
     "constraints_unmet": "constraints_unmet",
     "probe_budget_exhausted": "probe_budget_exhausted",
     "probe_limit_reached": "probe_limit_reached",
+    "unsafe_to_probe": "unsafe_to_probe",
 }
 BLOCKED_HOSTS = {
     "localhost",
@@ -625,17 +629,23 @@ def _try_ip(host: str):
         return None
 
 
-def _getaddrinfo_timed(host: str, timeout: float | None = None):
+def _getaddrinfo_timed(host: str, timeout: float | None = None, port: int = 443):
     """socket.getaddrinfo with a join timeout. Fail closed on hang."""
     cap = DNS_TIMEOUT if timeout is None else float(timeout)
     if cap <= 0:
         raise TimeoutError("getaddrinfo timed out")
+    try:
+        dest_port = int(port)
+    except (TypeError, ValueError):
+        dest_port = 443
+    if dest_port <= 0 or dest_port > 65535:
+        dest_port = 443
     box: list = []
 
     def run() -> None:
         try:
             box.append(
-                ("ok", socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM))
+                ("ok", socket.getaddrinfo(host, dest_port, type=socket.SOCK_STREAM))
             )
         except Exception as exc:
             box.append(("err", exc))
@@ -651,33 +661,72 @@ def _getaddrinfo_timed(host: str, timeout: float | None = None):
     return payload
 
 
-def _resolve_public(host: str) -> bool:
-    """DNS-resolve host and reject unless every address is a public IP. Fail closed."""
+def _checked_addrs(host: str, port: int = 443) -> list[tuple] | None:
+    """Resolve once. Return sockaddrs only if every address is public. Else None."""
+    if not host:
+        return None
+    try:
+        dest_port = int(port)
+    except (TypeError, ValueError):
+        dest_port = 443
+    if dest_port <= 0 or dest_port > 65535:
+        return None
     literal = _try_ip(host)
     if literal is not None:
-        return not _ip_blocked(literal)
+        if _ip_blocked(literal):
+            return None
+        return [(str(literal), dest_port)]
     if _host_name_blocked(host):
-        return False
+        return None
     try:
-        infos = _getaddrinfo_timed(host)
+        infos = _getaddrinfo_timed(host, port=dest_port)
     except (OSError, TimeoutError):
-        return False
+        return None
     if not infos:
-        return False
-    seen = False
+        return None
+    addrs: list[tuple] = []
+    seen: set[str] = set()
     for info in infos:
         sockaddr = info[4]
         if not sockaddr:
-            return False
+            return None
         ip_str = sockaddr[0]
         try:
             ip = ipaddress.ip_address(ip_str)
         except ValueError:
-            return False
+            return None
         if _ip_blocked(ip):
-            return False
-        seen = True
-    return seen
+            return None
+        if ip_str in seen:
+            continue
+        seen.add(ip_str)
+        extra = sockaddr[2:] if len(sockaddr) > 2 else ()
+        addrs.append((ip_str, dest_port) + extra)
+    return addrs or None
+
+
+def _resolve_public(host: str) -> bool:
+    """DNS-resolve host and reject unless every address is a public IP. Fail closed."""
+    return _checked_addrs(host) is not None
+
+
+def _pin_https_target(url: str) -> tuple[str, list[tuple]] | None:
+    """HTTPS + public DNS, with addresses to pin. None if blocked. Fail closed."""
+    raw = (url or "").strip()
+    if not raw:
+        return None
+    parsed = urlparse(raw)
+    if parsed.scheme != "https" or not parsed.netloc:
+        return None
+    if parsed.username or parsed.password:
+        return None
+    host = _hostname(parsed)
+    if not host or _host_name_blocked(host):
+        return None
+    addrs = _checked_addrs(host, parsed.port or 443)
+    if not addrs:
+        return None
+    return raw, addrs
 
 
 def catalog_url_allowed(url: str) -> bool:
@@ -700,20 +749,8 @@ def pulse_catalogs() -> tuple[tuple[str, str], ...]:
 
 def safe_target(url: str) -> str | None:
     """Return the URL if it is https to a public host, else None. Fail closed."""
-    raw = (url or "").strip()
-    if not raw:
-        return None
-    parsed = urlparse(raw)
-    if parsed.scheme != "https" or not parsed.netloc:
-        return None
-    if parsed.username or parsed.password:
-        return None
-    host = _hostname(parsed)
-    if not host or _host_name_blocked(host):
-        return None
-    if not _resolve_public(host):
-        return None
-    return raw
+    pinned = _pin_https_target(url)
+    return pinned[0] if pinned else None
 
 
 def _https_url(url: str) -> str | None:
@@ -809,17 +846,130 @@ class _SSRFRedirectHandler(urllib.request.HTTPRedirectHandler):
         if hops > MAX_REDIRECTS:
             raise ProbeBlocked("too many redirects")
         joined = urljoin(req.full_url, newurl)
-        if not safe_target(joined):
+        pinned = _pin_https_target(joined)
+        if not pinned:
             raise ProbeBlocked("blocked redirect")
         nxt = super().redirect_request(req, fp, code, msg, headers, newurl)
         if nxt is None:
             raise ProbeBlocked("blocked redirect")
         nxt.ssrf_hops = hops
+        nxt.pinned_addrs = pinned[1]
+        nxt.pinned_host = _hostname(urlparse(joined))
+        try:
+            nxt.remove_header("Host")
+        except Exception:
+            pass
         return nxt
 
 
+class _BlockedHTTPHandler(urllib.request.HTTPHandler):
+    def http_open(self, req):
+        raise ProbeBlocked("http not allowed")
+
+
+class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    """TCP to the SSRF-checked IP. TLS SNI and HTTP Host stay the original name."""
+
+    def __init__(self, host, *args, pinned_addrs=None, server_hostname=None, **kwargs):
+        super().__init__(host, *args, **kwargs)
+        self._pinned_addrs = list(pinned_addrs or [])
+        self._server_hostname = server_hostname
+        if not self._server_hostname:
+            raw = (host or "").split("%")[0]
+            if raw.startswith("["):
+                end = raw.find("]")
+                raw = raw[1:end] if end > 0 else raw
+            else:
+                raw = raw.rsplit(":", 1)[0] if raw.count(":") == 1 else raw
+            self._server_hostname = raw.strip().rstrip(".").lower()
+
+    def connect(self):
+        if not self._pinned_addrs:
+            raise ProbeBlocked("pin missing")
+        hostname = self._server_hostname
+        if not hostname:
+            raise ProbeBlocked("sni missing")
+        context = self._context
+        if context is None:
+            raise ProbeBlocked("no tls context")
+        last_err = None
+        sock = None
+        for sockaddr in self._pinned_addrs:
+            ip = sockaddr[0]
+            try:
+                sock = socket.create_connection(
+                    (ip, self.port),
+                    self.timeout,
+                    self.source_address,
+                )
+                break
+            except OSError as exc:
+                last_err = exc
+                continue
+        if sock is None:
+            if last_err is not None:
+                raise last_err
+            raise ProbeBlocked("pin connect failed")
+        try:
+            self.sock = context.wrap_socket(sock, server_hostname=hostname)
+        except Exception:
+            try:
+                sock.close()
+            except Exception:
+                pass
+            raise
+        applied = getattr(self.sock, "server_hostname", None)
+        if applied != hostname:
+            try:
+                self.sock.close()
+            except Exception:
+                pass
+            raise ProbeBlocked("sni not applied")
+
+
+class _PinnedHTTPSHandler(urllib.request.HTTPSHandler):
+    def https_open(self, req):
+        parsed = urlparse(req.full_url)
+        hostname = _hostname(parsed)
+        if not hostname:
+            raise ProbeBlocked("no host")
+        port = parsed.port or 443
+        addrs = getattr(req, "pinned_addrs", None)
+        if not addrs:
+            addrs = _checked_addrs(hostname, port)
+        if not addrs:
+            raise ProbeBlocked("ssrf")
+        host_header = hostname
+        if parsed.port and parsed.port != 443:
+            host_header = "%s:%s" % (hostname, parsed.port)
+        existing = req.get_header("Host")
+        if existing:
+            exist_host = existing.split(":")[0].strip("[]").lower()
+            if exist_host != hostname:
+                raise ProbeBlocked("host header mismatch")
+        else:
+            req.add_unredirected_header("Host", host_header)
+        pinned = list(addrs)
+        server_name = hostname
+
+        def factory(host, **kwargs):
+            return _PinnedHTTPSConnection(
+                host,
+                pinned_addrs=pinned,
+                server_hostname=server_name,
+                **kwargs,
+            )
+
+        return self.do_open(factory, req)
+
+
 def _opener():
-    return urllib.request.build_opener(_SSRFRedirectHandler)
+    ctx = ssl.create_default_context()
+    return urllib.request.build_opener(
+        _BlockedHTTPHandler(),
+        _SSRFRedirectHandler(),
+        _PinnedHTTPSHandler(context=ctx),
+    )
 
 
 def _has_402_challenge(status: int | None, headers: dict[str, str]) -> bool:
@@ -950,6 +1100,7 @@ def _miss_from_status(status: int | None) -> str:
 
 
 def _declared_input_body(item: dict | None) -> dict | None:
+    """Catalog-declared seller body. Detection only — never sent on unpaid probes."""
     if not item or not isinstance(item, dict):
         return None
     bazaar = ((item.get("extensions") or {}).get("bazaar") or {})
@@ -965,6 +1116,27 @@ def _declared_input_body(item: dict | None) -> dict | None:
     if isinstance(body, dict) and body:
         return body
     return None
+
+
+def _catalog_requires_body(item: dict | None) -> bool:
+    """True if the catalog says a request body is required to reach the endpoint."""
+    return _declared_input_body(item) is not None
+
+
+def _post_empty_justified(get_snap: dict | None) -> bool:
+    """POST {} only if GET was not a live 402 and POST is justified."""
+    if not get_snap or get_snap.get("live"):
+        return False
+    if get_snap.get("miss_reason") == "ssrf":
+        return False
+    status = get_snap.get("status")
+    if status in {405, 501}:
+        return True
+    if get_snap.get("has_402_challenge") or status == 402:
+        return False
+    if status is not None:
+        return True
+    return False
 
 
 def _catalog_payto(item: dict | None) -> str | None:
@@ -1232,7 +1404,13 @@ def _probe_entry(method: str, snap: dict) -> dict:
     return entry
 
 
-def _one_request(url: str, method: str, data: bytes | None = None, deadline: float | None = None) -> dict:
+def _one_request(
+    url: str,
+    method: str,
+    data: bytes | None = None,
+    deadline: float | None = None,
+    pinned_addrs: list[tuple] | None = None,
+) -> dict:
     """Single unpaid HTTP probe. Never pays. ProbeBlocked is ssrf, never live."""
     if remaining_timeout(deadline) is not None and remaining_timeout(deadline) <= 0:
         return {
@@ -1243,12 +1421,35 @@ def _one_request(url: str, method: str, data: bytes | None = None, deadline: flo
             "miss_reason": "probe_timeout",
             "envelope": None,
         }
+    parsed = urlparse(url)
+    if parsed.scheme != "https" or not parsed.netloc or parsed.username or parsed.password:
+        return {
+            "live": False,
+            "status": None,
+            "has_402_challenge": False,
+            "payTo": None,
+            "miss_reason": "ssrf",
+            "envelope": None,
+        }
+    host = _hostname(parsed)
+    addrs = pinned_addrs if pinned_addrs else _checked_addrs(host, parsed.port or 443)
+    if not host or not addrs:
+        return {
+            "live": False,
+            "status": None,
+            "has_402_challenge": False,
+            "payTo": None,
+            "miss_reason": "ssrf",
+            "envelope": None,
+        }
     timeout = _request_timeout(deadline)
     headers = {"User-Agent": USER_AGENT, "Accept": "application/json"}
     if data is not None:
         headers["Content-Type"] = "application/json"
     req = urllib.request.Request(url, data=data, method=method, headers=headers)
     req.ssrf_hops = 0
+    req.pinned_addrs = list(addrs)
+    req.pinned_host = host
     opener = _opener()
     status = None
     hdrs: dict[str, str] = {}
@@ -1402,8 +1603,8 @@ def probe_url(url: str, catalog_item: dict | None = None, deadline: float | None
         result = attach_catalog_fields(result, catalog_item)
         return _finalize_probe(attach_invocable_target(result, catalog_item), batch_id=bid, record=record)
 
-    safe = safe_target(url)
-    if not safe:
+    pinned = _pin_https_target(url)
+    if not pinned:
         result = health_from_probe(
             url,
             {
@@ -1418,11 +1619,12 @@ def probe_url(url: str, catalog_item: dict | None = None, deadline: float | None
             },
         )
         return _finalize_probe(attach_invocable_target(result, catalog_item), batch_id=bid, record=record)
+    safe, addrs = pinned
 
     start = time.perf_counter()
     probes: list[dict] = []
 
-    get_snap = _one_request(safe, "GET", deadline=deadline)
+    get_snap = _one_request(safe, "GET", deadline=deadline, pinned_addrs=addrs)
     probes.append(_probe_entry("GET", get_snap))
     if get_snap.get("miss_reason") == "ssrf":
         latency_ms = int((time.perf_counter() - start) * 1000)
@@ -1433,48 +1635,28 @@ def probe_url(url: str, catalog_item: dict | None = None, deadline: float | None
         return _finalize_probe(attach_invocable_target(result, catalog_item), batch_id=bid, record=record)
 
     post_snap = None
-    if not get_snap.get("live"):
-        post_snap = _one_request(safe, "POST", data=b"{}", deadline=deadline)
+    if not get_snap.get("live") and _post_empty_justified(get_snap):
+        post_snap = _one_request(safe, "POST", data=b"{}", deadline=deadline, pinned_addrs=addrs)
         if get_snap.get("status") in {405, 501} and not post_snap.get("live"):
             post_snap["miss_reason"] = "no_402_envelope"
         probes.append(_probe_entry("POST", post_snap))
 
-    declared_snap = None
-    declared = _declared_input_body(catalog_item)
-    if declared is not None:
-        raw = json.dumps(declared, separators=(",", ":")).encode("utf-8")
-        declared_snap = _one_request(safe, "POST", data=raw, deadline=deadline)
-        probes.append(_probe_entry("POST", declared_snap))
-
     unpaid_live = bool(get_snap.get("live") or (post_snap and post_snap.get("live")))
-    if declared_snap is not None:
-        dstatus = declared_snap.get("status")
-        dmiss = declared_snap.get("miss_reason")
-        if dstatus == 200 or dmiss in {"no_402_envelope", "reachable_200", "empty_402", "http_200_no_challenge"}:
-            unpaid_live = False
 
     winner = None
     if get_snap.get("live") and unpaid_live:
         winner = get_snap
     elif post_snap and post_snap.get("live") and unpaid_live:
         winner = post_snap
-    elif declared_snap and declared_snap.get("live") and unpaid_live:
-        winner = declared_snap
     else:
         winner = post_snap or get_snap
-        if declared_snap and not unpaid_live:
-            if declared_snap.get("status") == 200 or declared_snap.get("miss_reason") in {
-                "empty_402",
-                "http_200_no_challenge",
-                "no_402_envelope",
-                "reachable_200",
-            }:
-                winner = declared_snap
 
     live = bool(unpaid_live and winner and winner.get("live"))
     miss_reason = None
     if not live:
-        if get_snap.get("status") in {405, 501} and not (post_snap and post_snap.get("live")):
+        if _catalog_requires_body(catalog_item):
+            miss_reason = "unsafe_to_probe"
+        elif get_snap.get("status") in {405, 501} and not (post_snap and post_snap.get("live")):
             miss_reason = "no_402_envelope"
         else:
             miss_reason = public_miss_reason((winner or {}).get("miss_reason") or "probe_timeout")

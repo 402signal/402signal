@@ -155,7 +155,7 @@
       <section class="block">
         <h2>Stop reasons and miss reasons</h2>
         <p><code>stop_reason</code> is why this request stopped probing: <code>winner_selected</code>, <code>candidate_set_exhausted</code>, <code>probe_limit_reached</code>, <code>probe_budget_exhausted</code>, or <code>constraints_unmet</code>. <code>probe_limit_reached</code> means the request <code>probe_ceiling</code> was hit with ranked candidates still untested and budget remaining. <code>probe_budget_exhausted</code> means ranked candidates remained when the 55s budget ended. Neither is <code>no_candidates</code>.</p>
-        <p><code>miss_reason</code> is a closed enum: <code>no_candidates</code>, <code>no_402_envelope</code>, <code>no_payto</code>, <code>reachable_200</code>, <code>probe_timeout</code>, <code>quote_expired</code>, <code>invalid_need</code>, <code>upstream_5xx</code>, <code>ssrf</code>, <code>no_input_schema</code>, <code>constraints_unmet</code>, <code>probe_budget_exhausted</code>, <code>probe_limit_reached</code>.</p>
+        <p><code>miss_reason</code> is a closed enum: <code>no_candidates</code>, <code>no_402_envelope</code>, <code>no_payto</code>, <code>reachable_200</code>, <code>probe_timeout</code>, <code>quote_expired</code>, <code>invalid_need</code>, <code>upstream_5xx</code>, <code>ssrf</code>, <code>no_input_schema</code>, <code>constraints_unmet</code>, <code>probe_budget_exhausted</code>, <code>probe_limit_reached</code>, <code>unsafe_to_probe</code>.</p>
       </section>
 
       <section class="block">
@@ -177,7 +177,7 @@
 
       <section class="block">
         <h2>Validate and attestation</h2>
-        <p><code>POST /validate</code> returns readiness, claimed vs observed, and flags. Never a binary healthy flag. Seller-body tightening and DNS IP-pin are held for 402security: current probes are GET, then POST empty JSON if GET was not a live 402, then POST the catalog-declared body when one is present.</p>
+        <p><code>POST /validate</code> returns readiness, claimed vs observed, and flags. Never a binary healthy flag. Unpaid probes are GET first, then POST empty JSON only if GET was not a live 402 and POST is justified. Catalog-declared seller bodies are never POSTed. Required-body misses are <code>unsafe_to_probe</code>. DNS is resolved once and the TCP/TLS connection is pinned to those SSRF-checked public IPs with TLS SNI and HTTP Host set to the original hostname.</p>
         <p><code>GET /attestation</code> is a public sha256 of a recent 402signal_observed probe batch. It is a hash of that batch, not an on-chain proof.</p>
         <p><code>GET /pq/log/checkpoint</code> and <code>/pq/log/tile/*</code> are an experimental C2SP transparency log. They are not MainNet-anchored. Paid <code>/route</code> may include <code>pq_trust.transparency</code> with status <code>pending</code> or <code>unavailable</code>. <code>payment_authorization.pq_native</code> is false. There is no <code>/trust</code> page.</p>
       </section>

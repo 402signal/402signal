@@ -1781,6 +1781,7 @@ class ProductBriefTests(unittest.TestCase):
             "constraints_unmet",
             "probe_budget_exhausted",
             "probe_limit_reached",
+            "unsafe_to_probe",
         }
         self.assertEqual(set(MISS_REASONS), expected)
         self.assertEqual(public_miss_reason("probe_budget_exhausted"), "probe_budget_exhausted")
@@ -1791,6 +1792,7 @@ class ProductBriefTests(unittest.TestCase):
         self.assertEqual(public_miss_reason("no_match"), "no_candidates")
         self.assertEqual(public_miss_reason("http_503"), "upstream_5xx")
         self.assertEqual(public_miss_reason("ssrf"), "ssrf")
+        self.assertEqual(public_miss_reason("unsafe_to_probe"), "unsafe_to_probe")
         for key in expected:
             self.assertIn(public_miss_reason(key), expected)
 

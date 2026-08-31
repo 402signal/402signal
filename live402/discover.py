@@ -46,9 +46,13 @@ GUIDANCE = (
     "Typical probe plan is a first tranche of 3, then 2–4 more if no winner. Hard ceiling is 20. "
     "GET /preview adds discovery_matches, displayed, and a read-only "
     "observation from 402signal_observed history (not_yet_observed when never probed). "
-    "Upstream probe is GET, then POST {} if GET was not a live 402, then POST the "
-    "catalog-declared input body when one is present. Seller-body tightening and DNS "
-    "IP-pin (getaddrinfo then urllib re-resolve is TOCTOU) are held for 402security."
+    "Upstream probe is GET first, then POST {} only if GET was not a live 402 and "
+    "POST is justified (GET 405/501, or GET is clearly not an x402 challenge). "
+    "Never POST seller-declared or catalog-declared input bodies. If the catalog "
+    "says a body is required and GET+POST {} cannot establish a live 402, miss_reason "
+    "is unsafe_to_probe. DNS is resolved once (getaddrinfo, 2s) and the TCP/TLS "
+    "connection is pinned to those SSRF-checked public IPs with TLS SNI and HTTP Host "
+    "set to the original hostname (re-pinned on each redirect hop)."
 )
 
 def _origin_from_resource(resource_url: str) -> str:
@@ -825,7 +829,7 @@ def openapi_spec(resource_url: str = ROUTE) -> dict:
                     "operationId": "validateSellerGet",
                     "tags": ["Public"],
                     "summary": "Ask if a seller URL is agent-ready",
-                    "description": "Unpaid seller probe: GET, then POST {} if GET was not live, then POST the catalog-declared body when present. Fail-closed SSRF. Not a /route payment bypass. Never emits a binary healthy flag. Seller-body tightening and DNS IP-pin are held for 402security.",
+                    "description": "Unpaid seller probe: GET first, then POST {} only if justified. Never POST catalog-declared bodies. DNS IP-pin + fail-closed SSRF. Not a /route payment bypass. Never emits a binary healthy flag.",
                     "parameters": [
                         {
                             "in": "query",
@@ -851,7 +855,7 @@ def openapi_spec(resource_url: str = ROUTE) -> dict:
                     "operationId": "validateSeller",
                     "tags": ["Public"],
                     "summary": "Ask if a seller URL is agent-ready",
-                    "description": "Unpaid seller probe: GET, then POST {} if GET was not live, then POST the catalog-declared body when present. Fail-closed SSRF. Not a /route payment bypass. Never emits a binary healthy flag. Seller-body tightening and DNS IP-pin are held for 402security.",
+                    "description": "Unpaid seller probe: GET first, then POST {} only if justified. Never POST catalog-declared bodies. DNS IP-pin + fail-closed SSRF. Not a /route payment bypass. Never emits a binary healthy flag.",
                     "requestBody": {
                         "required": True,
                         "content": {
@@ -1118,11 +1122,11 @@ HTTP 200 = live URL plus target contract. HTTP 503 = typed miss_reason.
 - Unpaid → HTTP 402 (amount 10000 atomic = $0.01, 6 decimals)
 - Paid live hit → HTTP 200 + URL that 402s with a payment envelope + target {method,inputSchema,outputSchema,accepts,facilitator,amountAtomic,displayAmount,timeoutSeconds} + selected_payment {rail,network,asset,amount_atomic,display_amount,normalized_usd,payTo,facilitator}. target.accepts and selected_payment are CURRENT observed 402 options only. Catalog rails stay on claimed.payment_options and are never selected.
 - 402Signal settles the $0.01 routing payment; it does not pay the selected merchant.
-- Upstream probe is GET, then POST {} if GET was not a live 402, then POST the catalog-declared input body when one is present. Seller-body tightening and DNS IP-pin (getaddrinfo then urllib re-resolve is TOCTOU) are held for 402security.
+- Upstream probe is GET first, then POST {} only if GET was not a live 402 and POST is justified (GET 405/501, or GET is clearly not an x402 challenge). Never POST seller-declared or catalog-declared input bodies. If the catalog says a body is required and GET+POST {} cannot establish a live 402, miss_reason is unsafe_to_probe. DNS is resolved once (getaddrinfo, 2s); TCP/TLS is pinned to those SSRF-checked public IPs with TLS SNI and HTTP Host set to the original hostname (re-pinned on redirects).
 - payable requires a complete observed option (rail/network, amount, asset, payTo). invocable is payable + input schema. challenge_observed is HTTP 402 + parseable x402.
 - If inputSchema is missing: live may be true, invocable false, miss_reason no_input_schema
 - Paid miss → HTTP 503 {live:false, miss_reason}
-- miss_reason enum: no_candidates, no_402_envelope, no_payto, reachable_200, probe_timeout, quote_expired, invalid_need, upstream_5xx, ssrf, no_input_schema, constraints_unmet, probe_budget_exhausted, probe_limit_reached
+- miss_reason enum: no_candidates, no_402_envelope, no_payto, reachable_200, probe_timeout, quote_expired, invalid_need, upstream_5xx, ssrf, no_input_schema, constraints_unmet, probe_budget_exhausted, probe_limit_reached, unsafe_to_probe
 - Paid /route also returns discovery_matches, candidates_discovered, candidates_considered, candidates_probed, candidate_evaluation_complete, probe_ceiling, stop_reason, probe_budget_exhausted, interpreted_constraints, unresolved_constraints. candidate_evaluation_complete is true only when every ranked candidate in this request's working set was probed (not the global catalog). stop_reason is winner_selected | candidate_set_exhausted | probe_limit_reached | probe_budget_exhausted | constraints_unmet. Typical probe plan is 3 then +2–4; hard ceiling is 20. probe_limit_reached means ranked candidates remained after this request's probe_ceiling with budget still open; it is not no_candidates. probe_budget_exhausted means ranked candidates remained when the 55s budget ended; it is not no_candidates. max_latency_ms is a probe-RTT alias. Catalog rows stay slim; only top finalists are hydrated with claimed schemas (not observed payment options).
 - compared[] rows include success_7d, n_7d, reputation components (and score+confidence+scoring_model_id/hash), and rail economics for the selected_payment option. success_7d is null when n_7d < 3. n_7d < 10 means low reputation_confidence and no public reliability %. Unique payer address lists are never returned. lowest_total_cost fails closed when a fee is unknown (merchant price is not total cost). fastest_settlement uses settlement/finality, never probe RTT. Same scoring function on Base, Solana, and Algorand — no hidden Algorand preference. Vague "high reputation" stays unresolved; "established usage" / "strong observed evidence" compile to min_observations=10. Settlement / total cost compile only with a numeric bound.
 - Discovery shortlist keeps need/capability score primary. History only reorders close scores, with freshness bands on prior success (<5m / <1h / <24h / older). A stale 402 cannot leapfrog a substantially better semantic match.
@@ -1136,7 +1140,7 @@ HTTP 200 = live URL plus target contract. HTTP 503 = typed miss_reason.
 - GET /dashboard  sample lookups per chain (Base / Solana / Algorand)
 - GET /pulse  same snapshot as JSON, including samples[]. index_status is upstream-live | shadow-warm | both | fixture. Discovery queries current upstream catalogs and a local shadow catalog. Pulse does not publish listing totals.
 - GET /preview?need=weather  request-time catalog search (current upstream catalogs plus a local shadow; not a full-world RAM index) + discovery_matches + displayed + seller claims + read-only 402Signal observation (not_yet_observed when never independently probed). not_probed:true (does not probe, does not charge). Optional prefer_network=base|solana|algorand ranks across all rails; optional networks=solana restricts rails. discovery_via is a compact per-rail search|pages|error|fixture map. discovery_exhaustive is true only when the returned set is known complete. Catalog rows keep three clocks (discovery, claim, verification); a paid route also returns this request's probe time. HEAD 200 on /llms.txt /openapi.json /mcp.json /preview /rails /pulse.
-- POST /validate {"url":"https://seller.example/x402"}  unpaid seller probe (GET, then POST {} if needed, then POST catalog-declared body when present): is this seller agent-ready? Also GET /validate?url=. Fail-closed SSRF. Not a /route paywall bypass. Readiness + claimed vs observed + flags. Never a binary healthy flag. Seller-body tightening and DNS IP-pin are held for 402security.
+- POST /validate {"url":"https://seller.example/x402"}  unpaid seller probe (GET first, justified POST {} only, never a catalog-declared body, DNS IP-pin): is this seller agent-ready? Also GET /validate?url=. Fail-closed SSRF. Not a /route paywall bypass. Readiness + claimed vs observed + flags. Never a binary healthy flag.
 - GET /attestation  public sha256 of a recent 402signal_observed probe batch (batch_id, created_at, n, algo, hash). Not on-chain. Optional ?batch_id=.
 - GET /pq/log/checkpoint and GET /pq/log/tile/*  experimental C2SP transparency log (tlog-checkpoint + tlog-tiles). Not MainNet-anchored. Paid /route may include pq_trust.transparency {status: pending|unavailable}. pending means a durable leaf and a signed checkpoint, not an Algorand inclusion. unavailable means the log was down; it is not pending. payment_authorization.pq_native is always false. No /trust page. 402security must GO before any Falcon spend or homepage PQ copy.
 - GET /rails  three pay-in networks, asset, amountAtomic, facilitators, feePayers, maxTimeoutSeconds, per-rail up+latency

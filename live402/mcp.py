@@ -181,6 +181,7 @@ OUTPUT_SCHEMA = {
                 "constraints_unmet",
                 "probe_budget_exhausted",
                 "probe_limit_reached",
+                "unsafe_to_probe",
             ],
         },
         "tried": {"type": "integer"},
