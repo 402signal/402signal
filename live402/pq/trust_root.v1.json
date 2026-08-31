@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "origin": "402signal.com/pq/log",
+  "jcs": {
+    "profile": "RFC8785",
+    "i_json": true,
+    "amounts": "decimal-string",
+    "timestamp": "rfc3339-utc-seconds-z"
+  },
+  "merkle": {
+    "algorithm": "SHA-256",
+    "profile": "RFC9162-2.1"
+  },
+  "log_signature": {
+    "algorithm": "ed25519",
+    "signed_note_type": "0x01",
+    "key_name": "402signal.com/pq/log",
+    "vkey": "",
+    "vkey_env": "LIVE402_PQ_LOG_VKEY"
+  },
+  "mmd_seconds": 15,
+  "witness_policy": [],
+  "witness_signed_note_type": "0x04",
+  "falcon": {
+    "address_env": "LIVE402_PQ_FALCON_ADDRESS",
+    "network": "mainnet-v1.0",
+    "note_format": "402sg/pq1:b",
+    "note_version": 1,
+    "fee_microalgo": 3000
+  },
+  "unknown_algorithm": "fail-closed",
+  "rotation": "new-shard",
+  "specs": {
+    "tiles": "C2SP tlog-tiles@v0.1.0",
+    "checkpoint": "C2SP tlog-checkpoint@v1.0.0",
+    "signed_note": "C2SP signed-note@v1.0.0"
+  },
+  "not_mainnet_go": true
+}
