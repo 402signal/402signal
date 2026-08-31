@@ -1004,6 +1004,12 @@ def _catalog_amount(item: dict | None) -> str | None:
 def _catalog_schema_present(item: dict | None) -> bool:
     if not item or not isinstance(item, dict):
         return False
+    if item.get("_input_schema_present"):
+        return True
+    contract = item.get("_claimed_contract")
+    if isinstance(contract, dict) and contract.get("origin") == "catalog_claimed":
+        if contract.get("input_schema") or item.get("inputSchema"):
+            return True
     schema = item.get("inputSchema")
     if isinstance(schema, dict) and (schema.get("properties") or schema.get("required") or schema.get("type")):
         return True
@@ -1049,6 +1055,18 @@ def attach_catalog_fields(result: dict, item: dict | None = None) -> dict:
         claimed["amount"] = amt
     if _catalog_schema_present(item):
         claimed["schema_present"] = True
+    contract = item.get("_claimed_contract") if isinstance(item, dict) else None
+    if isinstance(contract, dict) and contract.get("origin") == "catalog_claimed":
+        claimed["schema_present"] = True
+        claimed["contract"] = {
+            "origin": "catalog_claimed",
+            "method": contract.get("method"),
+            "content_type": contract.get("content_type"),
+            "tool_name": contract.get("tool_name"),
+            "type": contract.get("type"),
+            "schema_bytes": contract.get("schema_bytes"),
+            "truncated": bool(contract.get("truncated")),
+        }
     fac = _catalog_facilitator(item)
     if fac:
         claimed["facilitator"] = fac
@@ -1608,6 +1626,15 @@ def _fetch_one_catalog(rail: str, url: str, timeout: float) -> list[dict]:
     return out
 
 
+_discovery_tls = threading.local()
+
+
+def last_discovery_contracts() -> dict:
+    """Request-local claimed contracts from the last fetch_discovery. Not RAM index."""
+    got = getattr(_discovery_tls, "contracts", None)
+    return got if isinstance(got, dict) else {}
+
+
 def fetch_discovery(
     need: str = "",
     prefer_network: str | None = None,
@@ -1618,15 +1645,18 @@ def fetch_discovery(
 
     prefer_network is ranking-only (passed through for callers). networks
     restricts which rails are queried. limit is kept for compat.
+    Slim items only. Claimed schemas stay in a request-local stash for
+    finalist hydration after rank.
     """
     _ = limit
     from live402 import catalog as catalog_mod
-    return list(
-        catalog_mod.query_for_need(
-            need, prefer_network=prefer_network, networks=networks
-        ).get("items")
-        or []
+    working = catalog_mod.query_for_need(
+        need, prefer_network=prefer_network, networks=networks
     )
+    items = list(working.get("items") or [])
+    contracts = working.get("_contracts") if isinstance(working, dict) else None
+    _discovery_tls.contracts = contracts if isinstance(contracts, dict) else {}
+    return items
 
 
 def _discovery_unavailable_miss(objective: str) -> dict:
@@ -2033,6 +2063,11 @@ def route_need(
         return _discovery_unavailable_miss(obj)
     ranked = rank_resources(need, items, prefer_network=prefer)
     ranked = _history_boost_shortlist(ranked, need=need, prefer_network=prefer)
+    try:
+        from live402 import hydrate as hydrate_mod
+        hydrate_mod.hydrate_finalists(ranked, stash=last_discovery_contracts())
+    except Exception:
+        pass
     discovery_matches = len(ranked)
     probed: list[dict] = []
     last = None

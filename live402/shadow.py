@@ -121,6 +121,21 @@ CREATE TABLE IF NOT EXISTS claim_events (
 );
 CREATE INDEX IF NOT EXISTS claim_events_ts ON claim_events(ts);
 CREATE INDEX IF NOT EXISTS claim_events_url ON claim_events(canonical_url, ts);
+
+CREATE TABLE IF NOT EXISTS finalist_contracts (
+    canonical_url TEXT PRIMARY KEY,
+    method TEXT,
+    content_type TEXT,
+    tool_name TEXT,
+    type TEXT,
+    input_schema BLOB,
+    output_schema BLOB,
+    schema_bytes INTEGER NOT NULL DEFAULT 0,
+    truncated INTEGER NOT NULL DEFAULT 0,
+    fetched_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS finalist_contracts_exp ON finalist_contracts(expires_at);
 """
 
 _FTS_SCHEMA = """

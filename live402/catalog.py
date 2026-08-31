@@ -593,10 +593,17 @@ def _slim_discovery_info(info) -> dict | None:
     return out or None
 
 
-def slim_item(item: dict | None, rail: str) -> dict:
-    """Keep ranking/pulse fields. Drop huge schema blobs. Classify at ingest."""
+def slim_item(item: dict | None, rail: str, stash: dict | None = None) -> dict:
+    """Keep ranking/pulse fields. Drop huge schema blobs. Classify at ingest.
+
+    Optional stash captures a CLAIMED invocation contract (bounded schemas)
+    keyed by URL for later finalist hydration. The returned slim row never
+    carries inputSchema/outputSchema. Payment accepts stay claim-only.
+    """
     if not isinstance(item, dict):
         item = {}
+    from live402 import hydrate as hydrate_mod
+    hydrate_mod.note_raw_item(item, stash, rail)
     in_schema = probe.extract_input_schema(item)
     out_schema = probe.extract_output_schema(item)
     cap, cap_src = classify_capability(item)
@@ -679,6 +686,7 @@ def fetch_rail(
     total = None
     error = None
     tried_extra = False
+    stash: dict = {}
     timeout = max(probe.probe_timeout(), 8.0)
     try:
         page_cap = int(max_pages)
@@ -709,7 +717,7 @@ def fetch_rail(
 
         n = len(page_items)
         for item in page_items:
-            slim = slim_item(item, rail)
+            slim = slim_item(item, rail, stash=stash)
             key = probe._resource_url(slim)
             if not key:
                 continue
@@ -754,6 +762,7 @@ def fetch_rail(
         "error": error,
         "pages": pages,
         "count": len(items),
+        "_contracts": stash,
     }
 
 
@@ -822,11 +831,11 @@ def _looks_like_search_payload(payload) -> bool:
     return False
 
 
-def _slim_payload_items(payload, rail: str) -> list[dict]:
+def _slim_payload_items(payload, rail: str, stash: dict | None = None) -> list[dict]:
     items: list[dict] = []
     seen: set[str] = set()
     for item in _items_from_payload(payload):
-        slim = slim_item(item, rail)
+        slim = slim_item(item, rail, stash=stash)
         key = probe._resource_url(slim)
         if not key or key in seen:
             continue
@@ -959,7 +968,8 @@ def _search_rail(rail: str, need: str, url_substring: str | None = None) -> dict
         return {**_empty_discovery_row("search", "fetch_failed"), "items": []}
     if not _looks_like_search_payload(payload):
         return {**_empty_discovery_row("search", "no_search"), "items": []}
-    items = _slim_payload_items(payload, rail)
+    stash: dict = {}
+    items = _slim_payload_items(payload, rail, stash=stash)
     truncated, total = _search_truncation(payload, items, SEARCH_LIMIT)
     return {
         "items": items,
@@ -969,6 +979,7 @@ def _search_rail(rail: str, need: str, url_substring: str | None = None) -> dict
         "upstream_total": total,
         "truncated": truncated,
         "returned": len(items),
+        "_contracts": stash,
     }
 
 
@@ -1110,6 +1121,10 @@ def query_for_need(
             by_rail[rail].append(row)
         items = _merge_items(by_rail)
         items, by_rail = _union_local_and_write_through(need, rails, items, by_rail)
+        from live402 import hydrate as hydrate_mod
+        fixture_contracts: dict = {}
+        for row in items:
+            hydrate_mod.note_raw_item(row, fixture_contracts)
         discovery = {
             rail: {
                 "via": "fixture",
@@ -1129,6 +1144,7 @@ def query_for_need(
             "errors": {},
             "via": {rail: "fixture" for rail in rails},
             "discovery": discovery,
+            "_contracts": fixture_contracts,
         }
 
     q = _clip_need_query(need)
@@ -1148,10 +1164,12 @@ def query_for_need(
             "errors": {"need": "invalid_need"},
             "via": via,
             "discovery": discovery,
+            "_contracts": {},
         }
 
     live_results: dict[str, dict] = {}
     local_items: list[dict] = []
+    contracts: dict = {}
     pool = _discovery_pool()
     futs = {pool.submit(query_rail, rail, q): ("rail", rail) for rail in rails}
     futs[pool.submit(_local_fts, q, rails)] = ("local", "local")
@@ -1166,6 +1184,9 @@ def query_for_need(
             _note_working(len(local_items))
             continue
         live_results[key] = result if isinstance(result, dict) else {}
+        extra = result.get("_contracts") if isinstance(result, dict) else None
+        if isinstance(extra, dict):
+            contracts.update(extra)
 
     for rail in rails:
         result = live_results.get(rail) or {**_empty_discovery_row("search", "fetch_failed"), "items": []}
@@ -1202,6 +1223,7 @@ def query_for_need(
         "errors": errors,
         "via": via,
         "discovery": discovery,
+        "_contracts": contracts,
     }
 
 
