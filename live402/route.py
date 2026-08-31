@@ -6,6 +6,7 @@ import sys
 import time
 
 from live402 import facilitator, fixtures, payment, probe, select
+from live402 import policy as policy_mod
 
 
 def gate_open(headers) -> bool:
@@ -59,6 +60,7 @@ def run_probe(body: dict) -> tuple[int, dict]:
         result["stop_reason"] = "winner_selected" if result.get("live") else "candidate_set_exhausted"
         result.setdefault("payTo", None)
         result.setdefault("traction", "unknown")
+        policy_mod.attach_policy(result, body)
         if result.get("live"):
             return 200, result
         result["live"] = False
@@ -69,7 +71,7 @@ def run_probe(body: dict) -> tuple[int, dict]:
 
     prefer = probe.normalize_prefer_network(body.get("prefer_network"))
     objective = select.parse_objective(body.get("objective"))
-    constraints = select.parse_constraints(body)
+    constraints = policy_mod.merge_constraints(body)
     plan = probe.probe_plan(body)
     result = probe.route_need(
         need,
@@ -83,6 +85,7 @@ def run_probe(body: dict) -> tuple[int, dict]:
     )
     result.setdefault("payTo", None)
     result.setdefault("traction", "unknown")
+    policy_mod.attach_policy(result, body)
     if result.get("live"):
         return 200, result
     return 503, result
