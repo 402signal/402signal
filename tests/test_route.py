@@ -1089,12 +1089,13 @@ class UnitHelpers(unittest.TestCase):
             },
         ]
 
-        def fake_query(need, prefer_network=None):
-            prefer = prefer_network
+        def fake_query(need, prefer_network=None, networks=None):
+            _ = prefer_network
+            allowed = set(networks) if networks else None
             rows = []
             for item in items:
                 rail = item["_rail"]
-                if prefer and rail != prefer:
+                if allowed is not None and rail not in allowed:
                     continue
                 if "weather" in (need or "") and "weather" not in item["description"]:
                     continue
@@ -1108,6 +1109,8 @@ class UnitHelpers(unittest.TestCase):
             named_base = pulse_mod.preview_need("base weather")
             named_algo = pulse_mod.preview_need("algorand weather")
             named_sol = pulse_mod.preview_need("solana search")
+            prefer_sol = pulse_mod.preview_need("weather", prefer_network="solana")
+            only_sol = pulse_mod.preview_need("weather", networks=["solana"])
         self.assertTrue(amb["not_probed"])
         self.assertNotIn("live", amb)
         self.assertTrue(all("live" not in h for h in amb["hits"]))
@@ -1119,11 +1122,16 @@ class UnitHelpers(unittest.TestCase):
         self.assertEqual(amb.get("discovery_matches"), len(amb["hits"]))
         self.assertEqual(amb.get("displayed"), len(amb["hits"]))
         self.assertTrue(all(h.get("observation", {}).get("status") == "not_yet_observed" for h in amb["hits"]))
-        self.assertTrue(all(h["chain"] == "base" for h in named_base["hits"]))
-        self.assertTrue(all(h["chain"] == "algorand" for h in named_algo["hits"]))
+        self.assertEqual(named_base["hits"][0]["chain"], "base")
+        self.assertTrue(any(h["chain"] == "algorand" for h in named_base["hits"]))
+        self.assertEqual(named_algo["hits"][0]["chain"], "algorand")
+        self.assertTrue(any(h["chain"] == "base" for h in named_algo["hits"]))
         self.assertTrue(named_sol["not_probed"])
-        self.assertTrue(all(h["chain"] == "solana" for h in named_sol["hits"]))
+        self.assertTrue(any(h["chain"] == "solana" for h in named_sol["hits"]))
         self.assertEqual(named_sol["hits"][0]["url"], "https://s.example/sol-search")
+        self.assertTrue(any(h["chain"] == "base" for h in prefer_sol["hits"]))
+        self.assertTrue(any(h["chain"] == "algorand" for h in prefer_sol["hits"]))
+        self.assertFalse(only_sol["hits"])
 
     def test_theme_buckets(self):
         from live402 import pulse as pulse_mod

@@ -294,8 +294,8 @@ class ProbeLifecycleTests(unittest.TestCase):
         ]
         disc_state = {"n": 0}
 
-        def fake_disc(need, prefer_network=None):
-            _ = need, prefer_network
+        def fake_disc(need, prefer_network=None, networks=None, **kwargs):
+            _ = need, prefer_network, networks, kwargs
             with lock:
                 idx = disc_state["n"]
                 disc_state["n"] += 1

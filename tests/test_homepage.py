@@ -317,6 +317,7 @@ class HomepageProductTests(unittest.TestCase):
         self.assertIn("Schema listed", js)
         self.assertIn("DISCOVERED · ", js)
         self.assertIn("discovery matches", js)
+        self.assertIn("matches returned by discovery", js)
         self.assertIn(" shown", js)
         self.assertIn("DISCOVERED · discovery claim", js)
         self.assertIn("OBSERVED · 402Signal observation", js)

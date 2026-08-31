@@ -210,7 +210,7 @@ class PulseObservedThinTests(unittest.TestCase):
         self.assertNotIn("executable_now_rate", obs)
         self.assertNotIn("success_7d", obs)
 
-    def test_enough_samples_emits_healthy_from_observed(self):
+    def test_enough_samples_emits_rates_not_healthy(self):
         url = "https://hist.example/full"
         for i in range(10):
             history.record_probe(url, {
@@ -219,12 +219,16 @@ class PulseObservedThinTests(unittest.TestCase):
                 "latency_ms": 10,
                 "payTo": "0xabc",
                 "batch_id": "fullbatch",
+                "schema_present": 1,
             })
         obs = history.pulse_observed()
         self.assertGreaterEqual(obs.get("n_7d"), 10)
-        self.assertIn("healthy", obs)
-        self.assertTrue(obs["healthy"])
+        self.assertNotIn("healthy", obs)
+        self.assertNotIn("executable_now_rate", obs)
         self.assertIn("success_7d", obs)
+        self.assertGreater(obs.get("success_7d"), 0)
+        self.assertIn("payable_rate_7d", obs)
+        self.assertIn("invocable_rate_7d", obs)
         self.assertNotIn("reliability", obs)
 
     def test_pulse_collect_uses_observed_and_omits_invented_enr(self):

@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 os.environ.setdefault("LIVE402_FIXTURE", "1")
 
-from live402 import catalog, history, payment, probe, pulse
+from live402 import catalog, fixtures, history, payment, probe, pulse
 
 
 def _snap(live=True, payTo="0xabc", **extra):
@@ -157,6 +157,21 @@ class HistoryDbTests(unittest.TestCase):
         ):
             with_total = pulse.preview_need("weather")
         self.assertEqual(with_total.get("total"), 99)
+        self.assertFalse(body.get("discovery_exhaustive"))
+        self.assertEqual(body.get("discovery_via"), {})
+
+    def test_preview_exposes_safe_discovery_via(self):
+        self.assertTrue(fixtures.fixture_mode())
+        body = pulse.preview_need("weather")
+        self.assertTrue(body.get("not_probed"))
+        via = body.get("discovery_via") or {}
+        self.assertEqual(via.get("base"), "fixture")
+        self.assertEqual(via.get("solana"), "fixture")
+        self.assertEqual(via.get("algorand"), "fixture")
+        self.assertTrue(body.get("discovery_exhaustive"))
+        blob = str(via)
+        self.assertNotIn("upstream_total", blob)
+        self.assertNotIn("fetch_failed", blob)
 
     def test_n0_success_is_none_not_zero(self):
         summ = history.summary("https://never-seen.example/x")
@@ -753,6 +768,100 @@ class RankPayToChangedTests(unittest.TestCase):
         self.assertEqual(result.get("url"), "https://stable.example/weather")
         self.assertNotEqual(result.get("risk"), ["payTo_changed"])
         self.assertTrue(result.get("live"))
+
+
+class HistoryShortlistTests(unittest.TestCase):
+    def setUp(self):
+        self._prev = os.environ.get("LIVE402_HISTORY_DB")
+        fd, self._path = tempfile.mkstemp(suffix=".sqlite")
+        os.close(fd)
+        os.environ["LIVE402_HISTORY_DB"] = self._path
+        history.reset()
+
+    def tearDown(self):
+        history.reset()
+        if self._prev is None:
+            os.environ.pop("LIVE402_HISTORY_DB", None)
+        else:
+            os.environ["LIVE402_HISTORY_DB"] = self._prev
+        for p in (self._path, self._path + "-wal", self._path + "-shm"):
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+
+    def _item(self, url, description, capability, rail="base"):
+        return {
+            "url": url,
+            "description": description,
+            "capability": capability,
+            "_rail": rail,
+            "accepts": [{"network": "eip155:8453", "payTo": "0xabc", "amount": "10000"}],
+        }
+
+    def test_stale_success_cannot_leapfrog_better_match(self):
+        strong = self._item(
+            "https://strong.example/weather-forecast",
+            "hourly weather forecast climate temperature",
+            "travel.weather",
+        )
+        weak = self._item(
+            "https://weak.example/misc",
+            "weather",
+            "search.web",
+        )
+        stale_ts = int(time.time()) - 3 * 86400
+        history.record_probe(
+            weak["url"],
+            _snap(live=True, payTo="0xabc", ts=stale_ts),
+        )
+        ranked = probe.rank_resources("weather forecast", [weak, strong])
+        boosted = probe._history_boost_shortlist(
+            ranked, need="weather forecast", prefer_network=None
+        )
+        self.assertEqual(probe._resource_url(boosted[0]), strong["url"])
+        strong_score = probe.score_need("weather forecast", strong)
+        weak_score = probe.score_need("weather forecast", weak)
+        self.assertGreaterEqual(strong_score - weak_score, probe.HISTORY_CLOSE_SCORE)
+
+    def test_fresh_history_breaks_close_relevance_ties(self):
+        a = self._item("https://a.example/weather", "weather forecast", "travel.weather")
+        b = self._item("https://b.example/weather", "weather forecast", "travel.weather")
+        self.assertEqual(
+            probe.score_need("weather forecast", a),
+            probe.score_need("weather forecast", b),
+        )
+        fresh_ts = int(time.time()) - 60
+        history.record_probe(b["url"], _snap(live=True, payTo="0xabc", ts=fresh_ts))
+        ranked = probe.rank_resources("weather forecast", [a, b])
+        boosted = probe._history_boost_shortlist(
+            ranked, need="weather forecast", prefer_network=None
+        )
+        self.assertEqual(probe._resource_url(boosted[0]), b["url"])
+
+    def test_mature_history_beats_weak_when_relevance_similar(self):
+        mature = self._item(
+            "https://mature.example/weather", "weather forecast", "travel.weather"
+        )
+        weak = self._item(
+            "https://weak.example/weather", "weather forecast", "travel.weather"
+        )
+        now = int(time.time()) - 2 * 3600
+        for i in range(12):
+            history.record_probe(
+                mature["url"],
+                _snap(live=True, payTo="0xabc", ts=now - i),
+            )
+        for i in range(4):
+            history.record_probe(
+                weak["url"],
+                _snap(live=True, payTo="0xabc", ts=now - i),
+            )
+        ranked = probe.rank_resources("weather forecast", [weak, mature])
+        boosted = probe._history_boost_shortlist(
+            ranked, need="weather forecast", prefer_network=None
+        )
+        self.assertEqual(probe._resource_url(boosted[0]), mature["url"])
 
 
 if __name__ == "__main__":

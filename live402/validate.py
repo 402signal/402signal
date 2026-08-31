@@ -69,7 +69,7 @@ def _schema_present(result: dict) -> bool:
 
 
 def public_validate_body(result: dict) -> dict:
-    """Slim seller-facing body. Omit healthy unless n_7d >= 10 observed."""
+    """Slim seller-facing body. Facts only — never a binary healthy flag."""
     if not isinstance(result, dict):
         return _invalid_body(None, "url is required")
     url = result.get("url")
@@ -127,7 +127,8 @@ def public_validate_body(result: dict) -> dict:
         out["miss_reason"] = probe.public_miss_reason(result.get("miss_reason")) or result.get("miss_reason")
     if n_7d >= history.MIN_HEALTHY_N:
         success = hist.get("success_7d")
-        out["healthy"] = bool(success is not None and success > 0)
+        if success is not None:
+            out["success_7d"] = success
     return out
 
 

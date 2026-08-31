@@ -782,7 +782,11 @@ def _observed_for_pulse() -> dict:
         observed.pop("healthy", None)
         observed.pop("success_7d", None)
         observed.pop("executable_now_rate", None)
+        observed.pop("payable_rate_7d", None)
+        observed.pop("invocable_rate_7d", None)
         observed["reliability"] = "unknown"
+    observed.pop("healthy", None)
+    observed.pop("executable_now_rate", None)
     return observed
 
 
@@ -911,7 +915,7 @@ def _attach_preview_observations(hits: list[dict]) -> None:
         hit["observation"] = row
 
 
-def preview_need(need: str, prefer_network: str | None = None) -> dict:
+def preview_need(need: str, prefer_network: str | None = None, networks=None) -> dict:
     """Request-time catalog search. Never probes. Never charges. Rail-neutral unless asked."""
     raw = (need or "").strip()
     freshness = probe.now_iso()
@@ -923,14 +927,17 @@ def preview_need(need: str, prefer_network: str | None = None) -> dict:
         "discovery_matches": 0,
         "displayed": 0,
         "hits": [],
+        "discovery_via": {},
+        "discovery_exhaustive": False,
     }
     if not raw:
         empty["miss_reason"] = "invalid_need"
         return empty
     prefer = probe.normalize_prefer_network(prefer_network)
     named = prefer or named_chain(raw)
+    rails = probe.normalize_networks(networks)
     try:
-        working = catalog.query_for_need(raw, prefer_network=named)
+        working = catalog.query_for_need(raw, prefer_network=named, networks=rails)
     except Exception:
         working = {"items": []}
     items = list(working.get("items") or [])
@@ -959,8 +966,6 @@ def preview_need(need: str, prefer_network: str | None = None) -> dict:
         chain = probe._item_rail(item)
         if chain not in CHAINS:
             chain = ""
-        if named and chain != named:
-            continue
         href = _https_href(url) or (
             url if fixtures.fixture_mode() and str(url).startswith("https://") else ""
         )
@@ -997,6 +1002,8 @@ def preview_need(need: str, prefer_network: str | None = None) -> dict:
         "discovery_matches": discovery_matches,
         "displayed": len(hits),
         "hits": hits,
+        "discovery_via": catalog.public_discovery_via(working),
+        "discovery_exhaustive": catalog.discovery_exhaustive(working),
     }
     if discovery_matches > len(hits):
         body["truncated"] = True

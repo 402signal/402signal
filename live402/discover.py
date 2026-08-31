@@ -30,7 +30,7 @@ GUIDANCE = (
     "If inputSchema is missing, live may still be true with invocable:false and miss_reason no_input_schema. "
     "GET /mcp.json lists the MCP route tool (type mcp, toolName route); "
     "POST /mcp initialize and tools/list need no payment; tools/call route is the paid probe. "
-    "GET /preview?need= is a free request-time catalog search (not_probed:true). Optional prefer_network=base|solana|algorand. GET /rails lists pay-in rails. "
+    "GET /preview?need= is a free request-time catalog search (not_probed:true). Optional prefer_network=base|solana|algorand ranks across all rails; optional networks= restricts rails. GET /rails lists pay-in rails. "
     "GET /pulse and GET /dashboard are sample lookups. GET /health is {ok:true} only. "
     "POST /validate {url} (or GET /validate?url=) is an unpaid seller probe: agent-ready? Fail-closed SSRF, not a /route paywall bypass. "
     "GET /attestation is a public sha256 of a recent 402signal_observed probe batch (not on-chain). "
@@ -244,7 +244,7 @@ def openapi_spec(resource_url: str = ROUTE) -> dict:
             "prefer_network": {
                 "type": "string",
                 "enum": ["base", "solana", "algorand"],
-                "description": "Prefer this pay-in rail when ranking catalog hits.",
+                "description": "Prefer this pay-in rail when ranking. Searches all supported rails; does not restrict to this rail. Use networks to restrict.",
             },
             "objective": {
                 "type": "string",
@@ -273,7 +273,7 @@ def openapi_spec(resource_url: str = ROUTE) -> dict:
             "networks": {
                 "type": "array",
                 "items": {"type": "string", "enum": ["base", "solana", "algorand"]},
-                "description": "Restrict selectable hits to these pay-in rails.",
+                "description": "Restrict searchable and selectable rails to this set. Unlike prefer_network, other rails are not queried.",
             },
         },
         "required": ["need"],
@@ -487,7 +487,7 @@ def openapi_spec(resource_url: str = ROUTE) -> dict:
                     "operationId": "previewNeed",
                     "tags": ["Public"],
                     "summary": "Preview catalog hits without probing them",
-                    "description": "Unpaid request-time catalog search. Returns discovery_matches, displayed hits, seller claims, and a read-only 402Signal observation when history exists. not_probed is always true. Does not probe and does not charge. Paid POST /route remains the fail-closed 402 probe.",
+                    "description": "Unpaid request-time catalog search. Returns discovery_matches, displayed hits, seller claims, and a read-only 402Signal observation when history exists. not_probed is always true. Does not probe and does not charge. Paid POST /route remains the fail-closed 402 probe. prefer_network ranks across all rails; networks restricts which rails are queried.",
                     "parameters": [
                         {
                             "in": "query",
@@ -501,7 +501,19 @@ def openapi_spec(resource_url: str = ROUTE) -> dict:
                             "name": "prefer_network",
                             "required": False,
                             "schema": {"type": "string", "enum": ["base", "solana", "algorand"]},
-                            "description": "Prefer this pay-in rail when ranking cached hits.",
+                            "description": "Prefer this pay-in rail when ranking. Searches all supported rails; does not restrict to this rail. Use networks to restrict.",
+                        },
+                        {
+                            "in": "query",
+                            "name": "networks",
+                            "required": False,
+                            "schema": {
+                                "type": "array",
+                                "items": {"type": "string", "enum": ["base", "solana", "algorand"]},
+                            },
+                            "style": "form",
+                            "explode": True,
+                            "description": "Restrict searchable rails to this set. Repeat or comma-separate. Unlike prefer_network, other rails are not queried.",
                         },
                     ],
                     "responses": {
@@ -520,6 +532,18 @@ def openapi_spec(resource_url: str = ROUTE) -> dict:
                                             "displayed": {"type": "integer"},
                                             "truncated": {"type": "boolean"},
                                             "total": {"type": ["integer", "null"]},
+                                            "discovery_via": {
+                                                "type": "object",
+                                                "additionalProperties": {
+                                                    "type": "string",
+                                                    "enum": ["search", "pages", "error", "fixture"],
+                                                },
+                                                "description": "Per-rail how matches were returned. Compact; no internals.",
+                                            },
+                                            "discovery_exhaustive": {
+                                                "type": "boolean",
+                                                "description": "True only when every queried rail was untruncated and upstream_total equals returned.",
+                                            },
                                             "hits": {"type": "array"},
                                             "miss_reason": {"type": "string", "enum": miss_enum},
                                         },
@@ -608,7 +632,7 @@ def openapi_spec(resource_url: str = ROUTE) -> dict:
                     "operationId": "validateSellerGet",
                     "tags": ["Public"],
                     "summary": "Ask if a seller URL is agent-ready",
-                    "description": "Unpaid dual-probe of the seller URL. Fail-closed SSRF. Not a /route payment bypass. Omit healthy unless n_7d >= 10 observed.",
+                    "description": "Unpaid dual-probe of the seller URL. Fail-closed SSRF. Not a /route payment bypass. Never emits a binary healthy flag.",
                     "parameters": [
                         {
                             "in": "query",
@@ -634,7 +658,7 @@ def openapi_spec(resource_url: str = ROUTE) -> dict:
                     "operationId": "validateSeller",
                     "tags": ["Public"],
                     "summary": "Ask if a seller URL is agent-ready",
-                    "description": "Unpaid dual-probe of the seller URL. Fail-closed SSRF. Not a /route payment bypass. Omit healthy unless n_7d >= 10 observed.",
+                    "description": "Unpaid dual-probe of the seller URL. Fail-closed SSRF. Not a /route payment bypass. Never emits a binary healthy flag.",
                     "requestBody": {
                         "required": True,
                         "content": {
@@ -858,7 +882,7 @@ HTTP 200 = live URL plus target contract. HTTP 503 = typed miss_reason.
 ## Paid
 
 - POST /route  $0.01 USDC on Base, Solana, or Algorand
-- We support Base, Solana, and Algorand. Ranking is rail-neutral unless prefer_network or a named chain is requested.
+- We support Base, Solana, and Algorand. Ranking is rail-neutral unless prefer_network or a named chain is requested. prefer_network ranks that rail first but still searches all three catalogs. networks=[solana] restricts discovery to that rail.
 - Body: {"need": "what you want", "url": "https://optional", "prefer_network": "base|solana|algorand", "objective": "best|cheapest|fastest|most_reliable", "max_amount_atomic": 0, "max_price_usd": 0, "max_latency_ms": 0, "require_invocable": false, "networks": ["base"]}
 - Agents that intend to pay should POST /route, not GET.
 - GET /route with Accept: application/json (or no Accept) returns HTTP 402 so crawlers can index payment. Browsers that send Accept: text/html get a human page.
@@ -869,6 +893,8 @@ HTTP 200 = live URL plus target contract. HTTP 503 = typed miss_reason.
 - miss_reason enum: no_candidates, no_402_envelope, no_payto, reachable_200, probe_timeout, quote_expired, invalid_need, upstream_5xx, ssrf, no_input_schema, constraints_unmet, probe_budget_exhausted, probe_limit_reached
 - Paid /route also returns discovery_matches, candidates_considered, candidates_probed, candidate_evaluation_complete, stop_reason, probe_budget_exhausted. candidate_evaluation_complete is true only when every ranked candidate in this request's working set was probed (not the global catalog). stop_reason is winner_selected | candidate_set_exhausted | probe_limit_reached | probe_budget_exhausted | constraints_unmet. probe_limit_reached means ranked candidates remained after MAX_PROBE with budget still open; it is not no_candidates. probe_budget_exhausted means ranked candidates remained when the 55s budget ended; it is not no_candidates.
 - compared[] rows include success_7d and n_7d. success_7d is null when n_7d < 3. Agents can tell 3/3 from 400/400; thin perfect scores do not outrank mature almost-perfect on best or most_reliable.
+- Discovery shortlist keeps need/capability score primary. History only reorders close scores, with freshness bands on prior success (<5m / <1h / <24h / older). A stale 402 cannot leapfrog a substantially better semantic match.
+- GET /pulse observed facts are n_7d, success_7d, payable_rate_7d, invocable_rate_7d. Rates are omitted below n=10. No binary healthy. No executable_now_rate.
 - POST /mcp tools/call name=route is the same paid probe (unpaid tools/call also 402s)
 - MCP bazaar type is mcp, toolName is route. Live MCP: https://402signal.com/mcp and /mcp.json
 
@@ -877,8 +903,8 @@ HTTP 200 = live URL plus target contract. HTTP 503 = typed miss_reason.
 - GET /  human homepage
 - GET /dashboard  sample lookups per chain (Base / Solana / Algorand)
 - GET /pulse  same snapshot as JSON, including samples[]
-- GET /preview?need=weather  request-time catalog search + discovery_matches + displayed + seller claims + read-only 402Signal observation (not_yet_observed when never independently probed). not_probed:true (does not probe, does not charge). Optional prefer_network=base|solana|algorand. HEAD 200 on /llms.txt /openapi.json /mcp.json /preview /rails /pulse.
-- POST /validate {"url":"https://seller.example/x402"}  unpaid dual-probe: is this seller agent-ready? Also GET /validate?url=. Fail-closed SSRF. Not a /route paywall bypass. Readiness + claimed vs observed + flags. healthy omitted unless n_7d >= 10 observed.
+- GET /preview?need=weather  request-time catalog search + discovery_matches + displayed + seller claims + read-only 402Signal observation (not_yet_observed when never independently probed). not_probed:true (does not probe, does not charge). Optional prefer_network=base|solana|algorand ranks across all rails; optional networks=solana restricts rails. discovery_via is a compact per-rail search|pages|error|fixture map. discovery_exhaustive is true only when the returned set is known complete. HEAD 200 on /llms.txt /openapi.json /mcp.json /preview /rails /pulse.
+- POST /validate {"url":"https://seller.example/x402"}  unpaid dual-probe: is this seller agent-ready? Also GET /validate?url=. Fail-closed SSRF. Not a /route paywall bypass. Readiness + claimed vs observed + flags. Never a binary healthy flag.
 - GET /attestation  public sha256 of a recent 402signal_observed probe batch (batch_id, created_at, n, algo, hash). Not on-chain. Optional ?batch_id=.
 - GET /rails  three pay-in networks, asset, amountAtomic, facilitators, feePayers, maxTimeoutSeconds, per-rail up+latency
 - GET /health  {"ok":true}

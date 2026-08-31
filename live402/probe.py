@@ -690,6 +690,32 @@ def normalize_prefer_network(raw) -> str | None:
     return None
 
 
+def normalize_networks(raw) -> tuple[str, ...] | None:
+    """Restrict searchable rails. None / empty / invalid → all supported rails.
+
+    Unlike prefer_network, this is a hard allowlist of which catalogs to query.
+    """
+    if raw is None or raw == "":
+        return None
+    if isinstance(raw, str):
+        items = [part.strip() for part in raw.split(",")]
+    elif isinstance(raw, (list, tuple, set, frozenset)):
+        items = list(raw)
+    else:
+        return None
+    seen: set[str] = set()
+    rails: list[str] = []
+    for item in items:
+        name = normalize_prefer_network(item if isinstance(item, str) else str(item).strip())
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        rails.append(name)
+    if not rails:
+        return None
+    return tuple(rail for rail in PREFER_NETWORKS if rail in seen)
+
+
 def _settlement_score(item: dict | None) -> int:
     """Numeric catalog traction used to rank live hits. Unknown -> 0."""
     raw = _traction(item)
@@ -1537,15 +1563,22 @@ def _fetch_one_catalog(rail: str, url: str, timeout: float) -> list[dict]:
 def fetch_discovery(
     need: str = "",
     prefer_network: str | None = None,
+    networks=None,
     limit: int = 20,
 ) -> list[dict]:
     """Need-scoped discovery. Never loads a 44k in-process index.
 
-    limit is kept for compat and is not a world-catalog page size.
+    prefer_network is ranking-only (passed through for callers). networks
+    restricts which rails are queried. limit is kept for compat.
     """
     _ = limit
     from live402 import catalog as catalog_mod
-    return list(catalog_mod.query_for_need(need, prefer_network).get("items") or [])
+    return list(
+        catalog_mod.query_for_need(
+            need, prefer_network=prefer_network, networks=networks
+        ).get("items")
+        or []
+    )
 
 
 def _discovery_unavailable_miss(objective: str) -> dict:
@@ -1657,10 +1690,46 @@ def _selection_set(probed: list) -> list:
     return live_hits
 
 
-def _history_boost_shortlist(ranked: list[dict]) -> list[dict]:
-    """Cheap sqlite join: prefer recently-successful URLs inside the ranked window.
+# History may reorder only among close need scores. Wider than one token
+# hit (~10) so a near-tie can move; narrower than a capability match (100).
+HISTORY_CLOSE_SCORE = 20
+HISTORY_FRESH_STRONG_S = 5 * 60
+HISTORY_FRESH_USEFUL_S = 60 * 60
+HISTORY_FRESH_WEAK_S = 24 * 60 * 60
 
-    Does not rewrite rank_resources. prefer_network / need score stay primary.
+
+def _success_freshness_band(last_success_402, now: int | None = None) -> int:
+    """0 older/none, 1 <24h weak, 2 <1h useful, 3 <5m strong. No ML."""
+    if last_success_402 is None or last_success_402 == "":
+        return 0
+    try:
+        ts = int(last_success_402)
+    except (TypeError, ValueError):
+        return 0
+    if now is None:
+        now = int(time.time())
+    age = now - ts
+    if age < 0:
+        age = 0
+    if age < HISTORY_FRESH_STRONG_S:
+        return 3
+    if age < HISTORY_FRESH_USEFUL_S:
+        return 2
+    if age < HISTORY_FRESH_WEAK_S:
+        return 1
+    return 0
+
+
+def _history_boost_shortlist(
+    ranked: list[dict],
+    need: str = "",
+    prefer_network: str | None = None,
+) -> list[dict]:
+    """Cheap sqlite join: history reorders only among close need scores.
+
+    Capability/need score and original rank stay primary. Stale last_success_402
+    is historical context only and cannot leapfrog a substantially better match.
+    prefer_network still groups first when requested; otherwise rail-neutral.
     """
     if len(ranked) <= 1:
         return ranked
@@ -1675,23 +1744,65 @@ def _history_boost_shortlist(ranked: list[dict]) -> list[dict]:
         return ranked
     if not hints:
         return ranked
-    indexed = list(enumerate(head))
-
-    def sort_key(pair):
-        idx, item = pair
+    prefer = normalize_prefer_network(prefer_network)
+    now = int(time.time())
+    meta = []
+    for idx, item in enumerate(head):
         hint = hints.get(_resource_url(item)) or {}
-        last_ok = 1 if hint.get("last_success_402") else 0
         n_7d = 0
         try:
             n_7d = int(hint.get("n_7d") or 0)
         except (TypeError, ValueError):
             n_7d = 0
-        mature = 1 if n_7d >= 10 else 0
-        weak = 1 if n_7d >= 3 else 0
-        return (last_ok, mature, weak, n_7d, -idx)
+        rail = _item_rail(item)
+        meta.append(
+            {
+                "idx": idx,
+                "item": item,
+                "score": score_need(need, item) if need else 0,
+                "prefer_hit": 1 if prefer and rail == prefer else 0,
+                "fresh": _success_freshness_band(hint.get("last_success_402"), now),
+                "mature": 1 if n_7d >= 10 else 0,
+                "weak": 1 if n_7d >= 3 else 0,
+                "n_7d": n_7d,
+            }
+        )
 
-    indexed.sort(key=sort_key, reverse=True)
-    return [item for _idx, item in indexed] + tail
+    def reorder_group(group: list[dict]) -> list[dict]:
+        if not group:
+            return []
+        # Score stays primary: cluster from the best need score down so a
+        # substantially better match cannot sit behind a worse one.
+        group = sorted(group, key=lambda row: (-row["score"], row["idx"]))
+        clusters: list[list[dict]] = []
+        current = [group[0]]
+        head_score = group[0]["score"]
+        for row in group[1:]:
+            if abs(head_score - row["score"]) < HISTORY_CLOSE_SCORE:
+                current.append(row)
+            else:
+                clusters.append(current)
+                current = [row]
+                head_score = row["score"]
+        clusters.append(current)
+        out: list[dict] = []
+        for cluster in clusters:
+            cluster.sort(
+                key=lambda row: (
+                    row["fresh"],
+                    row["mature"],
+                    row["weak"],
+                    row["n_7d"] if (row["mature"] or row["weak"]) else 0,
+                    -row["idx"],
+                ),
+                reverse=True,
+            )
+            out.extend(cluster)
+        return out
+
+    preferred = [row for row in meta if row["prefer_hit"]]
+    other = [row for row in meta if not row["prefer_hit"]]
+    return [row["item"] for row in reorder_group(preferred) + reorder_group(other)] + tail
 
 
 def _finalize_routed_probe(result: dict, item: dict, need: str) -> dict:
@@ -1843,12 +1954,13 @@ def route_need(
     prefer = normalize_prefer_network(prefer_network)
     obj = select.parse_objective(objective)
     cons = constraints if isinstance(constraints, dict) else {}
+    rails = cons.get("rails") if isinstance(cons, dict) else None
     try:
-        items = fetch_discovery(need, prefer_network=prefer)
+        items = fetch_discovery(need, prefer_network=prefer, networks=rails)
     except Exception:
         return _discovery_unavailable_miss(obj)
     ranked = rank_resources(need, items, prefer_network=prefer)
-    ranked = _history_boost_shortlist(ranked)
+    ranked = _history_boost_shortlist(ranked, need=need, prefer_network=prefer)
     discovery_matches = len(ranked)
     probed: list[dict] = []
     last = None

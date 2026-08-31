@@ -331,9 +331,12 @@ class Handler(SimpleHTTPRequestHandler):
             qs = parse_qs(parsed.query)
             need = (qs.get("need") or [""])[0]
             prefer = (qs.get("prefer_network") or [""])[0]
+            networks: list[str] = []
+            for raw in qs.get("networks") or []:
+                networks.extend(part.strip() for part in str(raw).split(",") if part.strip())
             return self._json(
                 200,
-                pulse.preview_need(need, prefer_network=prefer),
+                pulse.preview_need(need, prefer_network=prefer, networks=networks or None),
                 extra_headers={"Cache-Control": "no-store"},
             )
         if parsed.path == "/rails":

@@ -24,7 +24,7 @@ INPUT_SCHEMA = {
         "prefer_network": {
             "type": "string",
             "enum": ["base", "solana", "algorand"],
-            "description": "Prefer this pay-in rail when ranking catalog hits.",
+            "description": "Prefer this pay-in rail when ranking. Searches all supported rails; does not restrict to this rail. Use networks to restrict.",
         },
         "objective": {
             "type": "string",
@@ -53,7 +53,7 @@ INPUT_SCHEMA = {
         "networks": {
             "type": "array",
             "items": {"type": "string", "enum": ["base", "solana", "algorand"]},
-            "description": "Restrict selectable hits to these pay-in rails.",
+            "description": "Restrict searchable and selectable rails to this set. Unlike prefer_network, other rails are not queried.",
         },
     },
     "required": ["need"],
@@ -126,7 +126,12 @@ PREVIEW_INPUT_SCHEMA = {
         "prefer_network": {
             "type": "string",
             "enum": ["base", "solana", "algorand"],
-            "description": "Prefer this pay-in rail when ranking cached hits.",
+            "description": "Prefer this pay-in rail when ranking. Searches all supported rails; does not restrict to this rail. Use networks to restrict.",
+        },
+        "networks": {
+            "type": "array",
+            "items": {"type": "string", "enum": ["base", "solana", "algorand"]},
+            "description": "Restrict searchable rails to this set. Unlike prefer_network, other rails are not queried.",
         },
     },
     "required": ["need"],
@@ -143,6 +148,8 @@ PREVIEW_OUTPUT_SCHEMA = {
         "displayed": {"type": "integer"},
         "truncated": {"type": "boolean"},
         "total": {"type": ["integer", "null"]},
+        "discovery_via": {"type": "object"},
+        "discovery_exhaustive": {"type": "boolean"},
         "hits": {"type": "array"},
         "miss_reason": {"type": ["string", "null"]},
     },
@@ -260,7 +267,8 @@ def _preview_result(args: dict) -> dict:
     if isinstance(args, dict) and isinstance(args.get("need"), str):
         need = args.get("need") or ""
     prefer = args.get("prefer_network") if isinstance(args, dict) else None
-    return pulse.preview_need(need, prefer_network=prefer)
+    networks = args.get("networks") if isinstance(args, dict) else None
+    return pulse.preview_need(need, prefer_network=prefer, networks=networks)
 
 
 def handle_mcp(payload: dict, headers, resource_url: str) -> tuple[int, dict, dict | None]:

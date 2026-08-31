@@ -158,7 +158,7 @@ BAZAAR_MCP = {
                     "prefer_network": {
                         "type": "string",
                         "enum": ["base", "solana", "algorand"],
-                        "description": "Prefer this pay-in rail when ranking catalog hits.",
+                        "description": "Prefer this pay-in rail when ranking. Searches all supported rails; does not restrict to this rail. Use networks to restrict.",
                     },
                 },
                 "required": ["need"],

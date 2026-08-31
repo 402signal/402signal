@@ -10,7 +10,7 @@ from urllib.parse import parse_qs, urlparse
 
 os.environ.setdefault("LIVE402_FIXTURE", "1")
 
-from live402 import catalog, fixtures, probe
+from live402 import catalog, fixtures, probe, select
 
 
 CDP = "https://api.cdp.coinbase.com/platform/v2/x402/discovery/resources"
@@ -410,13 +410,22 @@ class CatalogIndexTests(unittest.TestCase):
         )
         self.assertIsNone(catalog.page_url("https://evil.example/discovery/resources", 100, 0))
 
-    def test_prefer_network_scopes_rails(self):
+    def test_prefer_network_still_queries_all_rails(self):
         calls = []
 
         def fake_payload(url, timeout, read_limit=None):
             calls.append(url)
+            host = urlparse(url).hostname or ""
+            if "payai" in host:
+                row = _item("https://wx.example/sol-weather", "weather")
+                row["accepts"] = [{"network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp", "payTo": "So1", "amount": "10000"}]
+            elif "goplausible" in host:
+                row = _item("https://wx.example/algo-weather", "weather")
+                row["accepts"] = [{"network": "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=", "payTo": "AL1", "amount": "10000"}]
+            else:
+                row = _item("https://wx.example/base-weather", "weather")
             return {
-                "resources": [_item("https://wx.example/forecast", "weather")],
+                "resources": [row],
                 "partialResults": False,
                 "searchMethod": "hybrid",
             }
@@ -424,12 +433,125 @@ class CatalogIndexTests(unittest.TestCase):
         with patch("live402.catalog.fixtures.fixture_mode", return_value=False), patch(
             "live402.probe._fetch_catalog_payload", side_effect=fake_payload
         ):
-            working = catalog.query_for_need("weather", prefer_network="base")
+            working = catalog.query_for_need("weather", prefer_network="solana")
         self.assertTrue(calls)
-        self.assertTrue(all("api.cdp.coinbase.com" in u for u in calls))
-        self.assertFalse(any("payai" in u or "goplausible" in u for u in calls))
-        self.assertEqual(working["by_rail"]["solana"], [])
+        self.assertTrue(any("api.cdp.coinbase.com" in u for u in calls))
+        self.assertTrue(any("payai" in u for u in calls))
+        self.assertTrue(any("goplausible" in u for u in calls))
+        rails_present = {probe._item_rail(i) for i in working["items"]}
+        self.assertIn("base", rails_present)
+        self.assertIn("solana", rails_present)
+        self.assertIn("algorand", rails_present)
+        self.assertTrue(working["by_rail"]["base"])
+        self.assertTrue(working["by_rail"]["solana"])
+        self.assertTrue(working["by_rail"]["algorand"])
+
+    def test_networks_restricts_rails_queried(self):
+        calls = []
+
+        def fake_payload(url, timeout, read_limit=None):
+            calls.append(url)
+            return {
+                "resources": [_item("https://wx.example/sol-weather", "weather")],
+                "partialResults": False,
+                "searchMethod": "hybrid",
+            }
+
+        with patch("live402.catalog.fixtures.fixture_mode", return_value=False), patch(
+            "live402.probe._fetch_catalog_payload", side_effect=fake_payload
+        ):
+            working = catalog.query_for_need("weather", networks=["solana"])
+        self.assertTrue(calls)
+        self.assertTrue(all("payai" in u for u in calls))
+        self.assertFalse(any("api.cdp.coinbase.com" in u for u in calls))
+        self.assertFalse(any("goplausible" in u for u in calls))
+        self.assertEqual(working["by_rail"]["base"], [])
         self.assertEqual(working["by_rail"]["algorand"], [])
+        self.assertTrue(working["by_rail"]["solana"])
+        rails_present = {probe._item_rail(i) for i in working["items"]}
+        self.assertEqual(rails_present, {"solana"})
+        self.assertEqual(working["via"].get("solana"), "search")
+        self.assertNotIn("base", working["via"])
+        self.assertNotIn("algorand", working["via"])
+
+    def test_prefer_network_fixture_keeps_other_rails(self):
+        self.assertTrue(fixtures.fixture_mode())
+        working = catalog.query_for_need("weather", prefer_network="solana")
+        rails_present = {probe._item_rail(i) for i in working["items"]}
+        self.assertIn("base", rails_present)
+        self.assertIn("algorand", rails_present)
+
+    def test_networks_fixture_drops_other_rails(self):
+        self.assertTrue(fixtures.fixture_mode())
+        working = catalog.query_for_need("weather", networks=["solana"])
+        rails_present = {probe._item_rail(i) for i in working["items"]}
+        self.assertTrue(rails_present)
+        self.assertEqual(rails_present, {"solana"})
+        self.assertEqual(working["by_rail"]["base"], [])
+        self.assertEqual(working["by_rail"]["algorand"], [])
+
+    def test_discovery_telemetry_search_vs_pages_and_exhaustive(self):
+        calls = []
+
+        def fake_payload(url, timeout, read_limit=None):
+            calls.append(url)
+            host = urlparse(url).hostname or ""
+            path = urlparse(url).path
+            if "payai" in host and path.endswith("/search"):
+                return {"error": "nope"}
+            if "payai" in host:
+                return {
+                    "items": [_item("https://wx.example/sol-page", "weather")],
+                    "pagination": {"limit": 100, "offset": 0, "total": 1},
+                }
+            if "goplausible" in host and path.endswith("/search"):
+                return {
+                    "resources": [_item("https://wx.example/algo-search", "weather")],
+                    "partialResults": False,
+                    "pagination": {"limit": 20, "offset": 0, "total": 1},
+                }
+            return {
+                "resources": [_item("https://wx.example/base-search", "weather")],
+                "partialResults": False,
+                "searchMethod": "hybrid",
+                "pagination": {"limit": 20, "offset": 0, "total": 1},
+            }
+
+        with patch("live402.catalog.fixtures.fixture_mode", return_value=False), patch(
+            "live402.probe._fetch_catalog_payload", side_effect=fake_payload
+        ):
+            working = catalog.query_for_need("weather")
+        disc = working.get("discovery") or {}
+        self.assertEqual(disc["base"]["via"], "search")
+        self.assertEqual(disc["solana"]["via"], "pages")
+        self.assertEqual(disc["algorand"]["via"], "search")
+        self.assertEqual(disc["base"]["returned"], 1)
+        self.assertEqual(disc["base"]["upstream_total"], 1)
+        self.assertFalse(disc["base"]["truncated"])
+        self.assertTrue(catalog.discovery_exhaustive(working))
+        self.assertEqual(
+            catalog.public_discovery_via(working),
+            {"base": "search", "solana": "pages", "algorand": "search"},
+        )
+
+    def test_discovery_not_exhaustive_when_total_unknown_or_truncated(self):
+        def fake_payload(url, timeout, read_limit=None):
+            items = [_item("https://wx.example/w%d" % i, "weather") for i in range(catalog.SEARCH_LIMIT)]
+            return {
+                "resources": items,
+                "partialResults": True,
+                "searchMethod": "hybrid",
+            }
+
+        with patch("live402.catalog.fixtures.fixture_mode", return_value=False), patch(
+            "live402.probe._fetch_catalog_payload", side_effect=fake_payload
+        ):
+            working = catalog.query_for_need("weather", networks=["base"])
+        row = (working.get("discovery") or {}).get("base") or {}
+        self.assertEqual(row.get("via"), "search")
+        self.assertTrue(row.get("truncated"))
+        self.assertIsNone(row.get("upstream_total"))
+        self.assertFalse(catalog.discovery_exhaustive(working))
 
     def test_merge_items_reuses_by_rail_dicts(self):
         item = catalog.slim_item(_item("https://a.example/x", "alpha"), "base")
@@ -490,8 +612,8 @@ class CatalogIndexTests(unittest.TestCase):
     def test_route_need_one_scoped_query_not_world_ingest(self):
         calls = []
 
-        def fake_query(need, prefer_network=None):
-            calls.append((need, prefer_network))
+        def fake_query(need, prefer_network=None, networks=None):
+            calls.append((need, prefer_network, networks))
             return {
                 "items": [
                     catalog.slim_item(
@@ -521,11 +643,53 @@ class CatalogIndexTests(unittest.TestCase):
             "live402.probe.probe_url", side_effect=fake_probe
         ):
             body = probe.route_need("weather", prefer_network="base")
-        self.assertEqual(calls, [("weather", "base")])
+        self.assertEqual(calls, [("weather", "base", None)])
         get_idx.assert_not_called()
         fetch.assert_not_called()
         self.assertTrue(body.get("live"))
         self.assertEqual(body.get("url"), "https://wx.example/forecast")
+
+    def test_route_need_passes_networks_restriction(self):
+        calls = []
+
+        def fake_query(need, prefer_network=None, networks=None):
+            calls.append((need, prefer_network, networks))
+            return {
+                "items": [
+                    catalog.slim_item(
+                        _item("https://wx.example/sol-weather", "hourly weather forecast"),
+                        "solana",
+                    )
+                ]
+            }
+
+        def fake_probe(url, catalog_item=None, deadline=None, **kwargs):
+            return {
+                "live": True,
+                "url": url,
+                "payTo": "So1",
+                "invocable": False,
+                "status": 402,
+                "has_402_challenge": True,
+                "probed_at": "2026-08-31T00:00:00Z",
+                "latency_ms": 10,
+                "rail": "solana",
+            }
+
+        cons = select.parse_constraints({"networks": ["solana"]})
+        with patch("live402.catalog.fixtures.fixture_mode", return_value=False), patch(
+            "live402.probe.fixtures.fixture_mode", return_value=False
+        ), patch("live402.catalog.query_for_need", side_effect=fake_query), patch(
+            "live402.probe.probe_url", side_effect=fake_probe
+        ):
+            body = probe.route_need(
+                "weather", prefer_network="solana", constraints=cons
+            )
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][0], "weather")
+        self.assertEqual(calls[0][1], "solana")
+        self.assertEqual(set(calls[0][2] or []), {"solana"})
+        self.assertTrue(body.get("live"))
 
 
 if __name__ == "__main__":

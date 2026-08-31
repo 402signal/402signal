@@ -226,7 +226,8 @@
     const shownLabel = shown === 1 ? "1 shown" : shown + " shown";
     let text = "DISCOVERED · " + shownLabel;
     if (Number.isFinite(matches) && matches > shown) {
-      text += " · " + matches + " discovery matches";
+      const exhaustive = parsed && parsed.discovery_exhaustive === true;
+      text += " · " + matches + (exhaustive ? " discovery matches" : " matches returned by discovery");
     }
     heading.textContent = text;
     results.appendChild(heading);

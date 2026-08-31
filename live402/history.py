@@ -1099,7 +1099,7 @@ def _iso_ts(ts) -> str | None:
 
 
 def pulse_observed() -> dict:
-    """7d snapshot from 402signal_observed only. Thin windows omit healthy / percents / ENR."""
+    """7d snapshot from 402signal_observed only. Facts, never a binary healthy/ENR."""
     out = {"n_7d": 0, "reliability": "unknown", "source": SOURCE_OBSERVED}
     try:
         now = int(time.time())
@@ -1144,11 +1144,10 @@ def pulse_observed() -> dict:
             out["reliability"] = "unknown"
             return out
         out["success_7d"] = (ok_live / n_7d) if n_7d else None
-        out["healthy"] = bool(ok_live > 0)
         if n_pay >= MIN_HEALTHY_N:
-            out["executable_now_rate"] = ok_pay / n_pay
-        elif n_inv >= MIN_HEALTHY_N:
-            out["executable_now_rate"] = ok_inv / n_inv
+            out["payable_rate_7d"] = ok_pay / n_pay
+        if n_inv >= MIN_HEALTHY_N:
+            out["invocable_rate_7d"] = ok_inv / n_inv
         out.pop("reliability", None)
         return out
     except Exception:

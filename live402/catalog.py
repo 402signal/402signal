@@ -788,6 +788,107 @@ def _slim_payload_items(payload, rail: str) -> list[dict]:
     return items
 
 
+def _empty_discovery_row(via: str = "search", error: str | None = None) -> dict:
+    return {
+        "via": "error" if error else via,
+        "returned": 0,
+        "upstream_total": None,
+        "truncated": False,
+        "error": error,
+    }
+
+
+def _discovery_row(result: dict | None, default_via: str = "search") -> dict:
+    """Internal per-rail completeness. via is search|pages|error|fixture."""
+    src = result if isinstance(result, dict) else {}
+    err = src.get("error")
+    via = src.get("via") or default_via
+    if err:
+        via = "error"
+    if via not in ("search", "pages", "error", "fixture"):
+        via = "error" if err else default_via
+    items = list(src.get("items") or [])
+    raw_total = src.get("upstream_total")
+    if raw_total is None:
+        raw_total = src.get("total")
+    try:
+        total = int(raw_total) if raw_total is not None else None
+    except (TypeError, ValueError):
+        total = None
+    return {
+        "via": via,
+        "returned": len(items),
+        "upstream_total": total,
+        "truncated": bool(src.get("truncated")),
+        "error": err,
+    }
+
+
+def discovery_exhaustive(working: dict | None) -> bool:
+    """True only when every queried rail is untruncated and upstream_total == returned."""
+    if not isinstance(working, dict):
+        return False
+    disc = working.get("discovery")
+    if not isinstance(disc, dict) or not disc:
+        return False
+    saw = False
+    for row in disc.values():
+        if not isinstance(row, dict):
+            continue
+        saw = True
+        if row.get("error"):
+            return False
+        if row.get("truncated"):
+            return False
+        total = row.get("upstream_total")
+        returned = row.get("returned")
+        if total is None or returned is None:
+            return False
+        try:
+            if int(total) != int(returned):
+                return False
+        except (TypeError, ValueError):
+            return False
+    return saw
+
+
+def public_discovery_via(working: dict | None) -> dict:
+    """Compact safe via map. No error strings, hosts, or other internals."""
+    out: dict[str, str] = {}
+    if not isinstance(working, dict):
+        return out
+    disc = working.get("discovery")
+    if not isinstance(disc, dict):
+        via = working.get("via")
+        if isinstance(via, dict):
+            disc = {rail: {"via": via.get(rail)} for rail in via}
+        else:
+            return out
+    for rail in _RAILS:
+        row = disc.get(rail)
+        label = None
+        if isinstance(row, dict):
+            label = row.get("via")
+        elif isinstance(row, str):
+            label = row
+        if label in ("search", "pages", "error", "fixture"):
+            out[rail] = label
+    return out
+
+
+def _search_truncation(payload, items: list, requested_limit: int) -> tuple[bool, int | None]:
+    pag = parse_pagination(payload, requested_limit=requested_limit)
+    total = pag.get("total")
+    n = len(items)
+    if total is not None and n < int(total):
+        return True, total
+    if n >= requested_limit:
+        return True, total
+    if isinstance(payload, dict) and payload.get("partialResults") is True:
+        return True, total
+    return False, total
+
+
 def _search_rail(rail: str, need: str, url_substring: str | None = None) -> dict:
     """One search request. Does not walk resources pages."""
     base = SEARCH_BASES.get(rail) or ""
@@ -801,18 +902,24 @@ def _search_rail(rail: str, need: str, url_substring: str | None = None) -> dict
         url_substring=url_substring,
     )
     if not url:
-        return {"items": [], "error": "not_allowlisted", "via": "search"}
+        return {**_empty_discovery_row("search", "not_allowlisted"), "items": []}
     timeout = max(probe.probe_timeout(), 8.0)
     try:
         payload = probe._fetch_catalog_payload(url, timeout, read_limit=PAGE_READ_LIMIT)
     except Exception:
-        return {"items": [], "error": "fetch_failed", "via": "search"}
+        return {**_empty_discovery_row("search", "fetch_failed"), "items": []}
     if not _looks_like_search_payload(payload):
-        return {"items": [], "error": "no_search", "via": "search"}
+        return {**_empty_discovery_row("search", "no_search"), "items": []}
+    items = _slim_payload_items(payload, rail)
+    truncated, total = _search_truncation(payload, items, SEARCH_LIMIT)
     return {
-        "items": _slim_payload_items(payload, rail),
+        "items": items,
         "error": None,
         "via": "search",
+        "total": total,
+        "upstream_total": total,
+        "truncated": truncated,
+        "returned": len(items),
     }
 
 
@@ -824,16 +931,18 @@ def _first_pages_rail(rail: str) -> dict:
             base = url
             break
     if not base:
-        return {"items": [], "error": "not_allowlisted", "via": "pages"}
+        return {**_empty_discovery_row("pages", "not_allowlisted"), "items": []}
     result = fetch_rail(rail, base, max_pages=QUERY_MAX_PAGES, max_items=QUERY_MAX_ITEMS)
-    result["via"] = "pages"
+    result["via"] = "error" if result.get("error") else "pages"
+    result["upstream_total"] = result.get("total")
+    result["returned"] = len(list(result.get("items") or []))
     return result
 
 
 def query_rail(rail: str, need: str, url_substring: str | None = None) -> dict:
     """Search this rail, else first pages. CDP is search-only (no 14k walk)."""
     if rail not in _RAILS:
-        return {"items": [], "error": "unknown_rail", "via": "search"}
+        return {**_empty_discovery_row("search", "unknown_rail"), "items": []}
     searched = _search_rail(rail, need, url_substring=url_substring)
     if rail == "base":
         return searched
@@ -845,12 +954,20 @@ def query_rail(rail: str, need: str, url_substring: str | None = None) -> dict:
     return searched
 
 
-def query_for_need(need: str, prefer_network: str | None = None) -> dict:
+def query_for_need(
+    need: str,
+    prefer_network: str | None = None,
+    networks=None,
+) -> dict:
     """Need-scoped working set. Never stores a 44k index. Never walks MAX_ITEMS.
 
-    prefer_network scopes which rails are queried. Unscoped queries all three,
-    each capped at QUERY_MAX_ITEMS — caps do not accumulate into one 30k bag.
+    prefer_network is ranking-only and does not restrict which rails are
+    queried. networks restricts eligible/searchable rails to that set.
+    Unscoped queries all three, each capped at QUERY_MAX_ITEMS — caps do
+    not accumulate into one 30k bag.
     """
+    _ = prefer_network  # ranking happens in rank_resources / preview / route
+    rails = probe.normalize_networks(networks) or _RAILS
     if fixtures.fixture_mode():
         by_rail: dict[str, list] = {rail: [] for rail in _RAILS}
         for item in fixtures.load_resources():
@@ -859,53 +976,71 @@ def query_for_need(need: str, prefer_network: str | None = None) -> dict:
             rail = probe._item_rail(item)
             if rail not in _RAILS:
                 rail = "base"
+            if rail not in rails:
+                continue
             row = dict(item)
             row["_rail"] = rail
             by_rail[rail].append(row)
-        prefer = probe.normalize_prefer_network(prefer_network)
-        if prefer:
-            by_rail = {r: (by_rail.get(r) or [] if r == prefer else []) for r in _RAILS}
         items = _merge_items(by_rail)
+        discovery = {
+            rail: {
+                "via": "fixture",
+                "returned": len(by_rail.get(rail) or []),
+                "upstream_total": len(by_rail.get(rail) or []),
+                "truncated": False,
+                "error": None,
+            }
+            for rail in rails
+        }
         return {
             "items": items,
             "by_rail": by_rail,
-            "totals": {},
+            "totals": {rail: discovery[rail]["upstream_total"] for rail in rails},
             "truncated": {},
             "complete": True,
             "errors": {},
-            "via": {rail: "fixture" for rail in _RAILS},
+            "via": {rail: "fixture" for rail in rails},
+            "discovery": discovery,
         }
 
     q = _clip_need_query(need)
-    prefer = probe.normalize_prefer_network(prefer_network)
-    rails = (prefer,) if prefer else _RAILS
     by_rail: dict[str, list] = {rail: [] for rail in _RAILS}
     errors: dict = {}
     via: dict = {}
     truncated: dict = {}
+    totals: dict = {}
+    discovery: dict = {}
     if not q:
         return {
             "items": [],
             "by_rail": by_rail,
-            "totals": {},
+            "totals": totals,
             "truncated": truncated,
             "complete": False,
             "errors": {"need": "invalid_need"},
             "via": via,
+            "discovery": discovery,
         }
 
     for rail in rails:
         try:
             result = query_rail(rail, q)
         except Exception:
-            result = {"items": [], "error": "fetch_failed", "via": "search"}
+            result = {**_empty_discovery_row("search", "fetch_failed"), "items": []}
         got = list(result.get("items") or [])
         # Per-rail cap. Do not let leftovers from one rail raise another rail's cap.
-        by_rail[rail] = got[:QUERY_MAX_ITEMS]
-        via[rail] = result.get("via") or "search"
-        if result.get("truncated"):
+        capped = got[:QUERY_MAX_ITEMS]
+        by_rail[rail] = capped
+        row = _discovery_row({**result, "items": capped}, result.get("via") or "search")
+        if len(got) > QUERY_MAX_ITEMS:
+            row["truncated"] = True
+        discovery[rail] = row
+        via[rail] = row["via"]
+        if row.get("truncated"):
             truncated[rail] = True
-        err = result.get("error")
+        if row.get("upstream_total") is not None:
+            totals[rail] = row["upstream_total"]
+        err = row.get("error")
         if err:
             errors[rail] = err
 
@@ -913,11 +1048,12 @@ def query_for_need(need: str, prefer_network: str | None = None) -> dict:
     return {
         "items": items,
         "by_rail": by_rail,
-        "totals": {},
+        "totals": totals,
         "truncated": truncated,
         "complete": not errors,
         "errors": errors,
         "via": via,
+        "discovery": discovery,
     }
 
 
