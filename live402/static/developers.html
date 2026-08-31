@@ -50,7 +50,7 @@
             <span>Unpaid <code>POST /route</code></span>
             <button type="button" class="btn secondary" id="copy-curl">Copy</button>
           </div>
-          <pre class="code" id="curl-route">curl -sS -D - https://402signal.com/route -H 'Content-Type: application/json' -d '{"need":"weather"}'</pre>
+          <pre class="code" id="curl-route">curl -sS -D - https://402signal.com/route -H 'Content-Type: application/json' -d '{"need":"YOUR_NEED"}'</pre>
         </div>
         <p>A paid check returns HTTP 200 with a route and evidence (<code>live</code>, <code>url</code>, <code>invocable</code>, <code>target</code>), or HTTP 503 with a typed <code>miss_reason</code>.</p>
       </section>

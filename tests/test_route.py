@@ -395,7 +395,7 @@ class PaywallTests(unittest.TestCase):
         self.assertIn("/pulse", devs)
         self.assertNotIn("For agents", html)
         self.assertIn("https://402signal.com/route", devs)
-        self.assertIn('{"need":"weather"}', devs)
+        self.assertIn('{"need":"YOUR_NEED"}', devs)
         self.assertIn("/openapi.json", html)
         self.assertIn("https://402signal.com/mcp", devs)
         self.assertIn("/.well-known/x402.json", devs)

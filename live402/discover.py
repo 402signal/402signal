@@ -748,28 +748,28 @@ def openapi_spec(resource_url: str = ROUTE) -> dict:
             "curl": (
                 "curl -sS -D - https://402signal.com/route "
                 "-H 'Content-Type: application/json' "
-                "-d '{\"need\":\"weather\"}'\n"
+                "-d '{\"need\":\"YOUR_NEED\"}'\n"
                 "# HTTP 402 + PAYMENT-REQUIRED. Sign accepts[0], then:\n"
                 "curl -sS https://402signal.com/route "
                 "-H 'Content-Type: application/json' "
                 "-H \"PAYMENT-SIGNATURE: $SIG\" "
-                "-d '{\"need\":\"weather\"}'\n"
+                "-d '{\"need\":\"YOUR_NEED\"}'\n"
                 "# HTTP 200 live+target or HTTP 503 miss_reason"
             ),
             "fetch": (
                 "const r = await fetch('https://402signal.com/route', "
                 "{method:'POST', headers:{'Content-Type':'application/json'}, "
-                "body: JSON.stringify({need:'weather'})});\n"
+                "body: JSON.stringify({need:'YOUR_NEED'})});\n"
                 "// r.status === 402. Sign, then retry:\n"
                 "const paid = await fetch('https://402signal.com/route', "
                 "{method:'POST', headers:{'Content-Type':'application/json', "
-                "'PAYMENT-SIGNATURE': sig}, body: JSON.stringify({need:'weather'})});\n"
+                "'PAYMENT-SIGNATURE': sig}, body: JSON.stringify({need:'YOUR_NEED'})});\n"
                 "// paid.status === 200 or 503"
             ),
             "mcp": (
                 "POST https://402signal.com/mcp\n"
                 '{"jsonrpc":"2.0","id":1,"method":"tools/call",'
-                '"params":{"name":"route","arguments":{"need":"weather"}}}\n'
+                '"params":{"name":"route","arguments":{"need":"YOUR_NEED"}}}\n'
                 "# unpaid HTTP 402. Sign, retry the same tools/call with PAYMENT-SIGNATURE. "
                 "200 live+target or 503 miss_reason."
             ),
@@ -865,16 +865,16 @@ HTTP 200 = live URL plus target contract. HTTP 503 = typed miss_reason.
 Unpaid 402 → sign accepts[0] → PAYMENT-SIGNATURE → 200 or 503.
 
 curl:
-  curl -sS -D - https://402signal.com/route -H 'Content-Type: application/json' -d '{"need":"weather"}'
-  curl -sS https://402signal.com/route -H 'Content-Type: application/json' -H "PAYMENT-SIGNATURE: $SIG" -d '{"need":"weather"}'
+  curl -sS -D - https://402signal.com/route -H 'Content-Type: application/json' -d '{"need":"YOUR_NEED"}'
+  curl -sS https://402signal.com/route -H 'Content-Type: application/json' -H "PAYMENT-SIGNATURE: $SIG" -d '{"need":"YOUR_NEED"}'
 
 Fetch:
-  const r = await fetch("https://402signal.com/route", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({need:"weather"})});
-  const paid = await fetch("https://402signal.com/route", {method:"POST", headers:{"Content-Type":"application/json","PAYMENT-SIGNATURE": sig}, body: JSON.stringify({need:"weather"})});
+  const r = await fetch("https://402signal.com/route", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({need:"YOUR_NEED"})});
+  const paid = await fetch("https://402signal.com/route", {method:"POST", headers:{"Content-Type":"application/json","PAYMENT-SIGNATURE": sig}, body: JSON.stringify({need:"YOUR_NEED"})});
 
 MCP tools/call:
   POST https://402signal.com/mcp
-  {"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"route","arguments":{"need":"weather"}}}
+  {"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"route","arguments":{"need":"YOUR_NEED"}}}
   unpaid HTTP 402; retry the same body with PAYMENT-SIGNATURE.
 
 Wallet checklist: USDC 6 decimals; include extra.feePayer on Solana/Algorand; POST-not-GET; v1 network is base, v2 accepts[].network is CAIP-2 eip155:8453. Copy the target facilitator from accepts[].extra.facilitator. Do not default to x402.org.
