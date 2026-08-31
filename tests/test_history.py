@@ -610,7 +610,7 @@ class PulsePeekTests(unittest.TestCase):
             refresh.assert_not_called()
             query.assert_not_called()
             self.assertTrue(payload.get("ok"))
-            self.assertEqual(payload.get("index_status"), "upstream")
+            self.assertIn(payload.get("index_status"), ("upstream-live", "shadow-warm", "both"))
             self.assertIn("chains", payload)
             for chain in ("base", "solana", "algorand"):
                 self.assertIn(chain, payload["chains"])
@@ -625,7 +625,7 @@ class PulsePeekTests(unittest.TestCase):
             payload = pulse._collect()
             query.assert_not_called()
             fetch.assert_not_called()
-        self.assertEqual(payload.get("index_status"), "upstream")
+        self.assertIn(payload.get("index_status"), ("upstream-live", "shadow-warm", "both"))
         for chain in ("base", "solana", "algorand"):
             self.assertIsNone(payload["chains"][chain].get("count"))
             self.assertNotEqual(payload["chains"][chain].get("count"), 14376)
@@ -650,7 +650,7 @@ class PulsePeekTests(unittest.TestCase):
             refresh.assert_not_called()
             query.assert_not_called()
         self.assertLess(elapsed, 0.5)
-        self.assertEqual(payload.get("index_status"), "upstream")
+        self.assertIn(payload.get("index_status"), ("upstream-live", "shadow-warm", "both"))
 
     def test_concurrent_get_pulse_one_collect(self):
         started = threading.Event()
@@ -665,7 +665,7 @@ class PulsePeekTests(unittest.TestCase):
                 "ok": True,
                 "updated_at": "2026-08-30T00:00:00Z",
                 "cached_s": 15,
-                "index_status": "upstream",
+                "index_status": "upstream-live",
                 "chains": {},
                 "samples": [],
                 "observed": {"n_7d": 0, "reliability": "unknown", "source": "402signal_observed"},
@@ -680,7 +680,7 @@ class PulsePeekTests(unittest.TestCase):
             elapsed = time.monotonic() - t0
             self.assertLess(elapsed, 0.5)
             self.assertEqual(len(calls), 1)
-            self.assertEqual(second.get("index_status"), "upstream")
+            self.assertEqual(second.get("index_status"), "upstream-live")
             release.set()
             t1.join(5)
         self.assertEqual(len(calls), 1)
@@ -695,10 +695,11 @@ class PulsePeekTests(unittest.TestCase):
             get_idx.assert_not_called()
             refresh.assert_not_called()
             query.assert_not_called()
-        self.assertEqual(payload.get("index_status"), "upstream")
+        self.assertIn(payload.get("index_status"), ("upstream-live", "shadow-warm", "both"))
         self.assertNotEqual(payload.get("index_status"), "ready")
         self.assertNotEqual(payload.get("index_status"), "pending")
         self.assertNotEqual(payload.get("index_status"), "refreshing")
+        self.assertNotEqual(payload.get("index_status"), "upstream")
         for chain in ("base", "solana", "algorand"):
             src = payload["chains"][chain]["source"]
             self.assertTrue(src.get("ok"))

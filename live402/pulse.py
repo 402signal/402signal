@@ -729,10 +729,65 @@ def _chain_payload(chain: str, items: list[dict], source: dict) -> dict:
     return payload
 
 
+INDEX_UPSTREAM = "upstream-live"
+INDEX_SHADOW = "shadow-warm"
+INDEX_BOTH = "both"
+INDEX_FIXTURE = "fixture"
+INDEX_STATUSES = (INDEX_UPSTREAM, INDEX_SHADOW, INDEX_BOTH, INDEX_FIXTURE)
+
+
+def _shadow_warm() -> bool:
+    """True when the process-local shadow catalog has at least one active row.
+
+    Cheap sqlite count. Never publishes a listing total. Never walks catalogs.
+    """
+    try:
+        from live402 import shadow as shadow_mod
+
+        return shadow_mod.resource_count(shadow_mod.STATUS_ACTIVE) > 0
+    except Exception:
+        return False
+
+
+def _upstream_configured() -> bool:
+    try:
+        return any(probe.catalog_url_allowed(url) for _rail, url in probe.pulse_catalogs())
+    except Exception:
+        return False
+
+
+def index_status(*, fixture: bool = False) -> str:
+    """Honest discovery surface. Does not imply 'no local catalog'.
+
+    upstream-live: allowlisted upstream catalogs, shadow not yet warm.
+    shadow-warm: local shadow has rows, upstream catalogs not configured.
+    both: upstream catalogs plus a warm shadow.
+    fixture: offline fixture catalog.
+    Never ready/pending/refreshing. Never a listing count or sqlite path.
+    """
+    if fixture:
+        return INDEX_FIXTURE
+    warm = _shadow_warm()
+    upstream = _upstream_configured()
+    if warm and upstream:
+        return INDEX_BOTH
+    if warm:
+        return INDEX_SHADOW
+    return INDEX_UPSTREAM
+
+
+def _upstream_insight(chain: str) -> str:
+    """True after PR14. No RAM-world claim, no sqlite path, no invented totals."""
+    label = CHAIN_LABELS.get(chain, chain)
+    return (
+        f"{label} discovery queries current upstream catalogs and a local "
+        "shadow catalog. Pulse does not publish listing totals."
+    )
+
+
 def _upstream_chain(chain: str, url: str) -> dict:
     """Honest unknown totals. Do not invent a local 14k from a missing mirror."""
     host = (urlparse(url).hostname or "").lower()
-    label = CHAIN_LABELS.get(chain, chain)
     return {
         "count": None,
         "source": {
@@ -741,10 +796,7 @@ def _upstream_chain(chain: str, url: str) -> dict:
             "catalog": "upstream",
         },
         "themes": [],
-        "insight": (
-            f"{label} catalog is queried at request time; "
-            "402signal does not store a local index."
-        ),
+        "insight": _upstream_insight(chain),
         "samples": [],
     }
 
@@ -791,13 +843,13 @@ def _observed_for_pulse() -> dict:
 
 
 def _upstream_payload() -> dict:
-    """Observed-only pulse. No local catalog totals. Never waits on discovery."""
+    """Observed-only pulse. No published catalog totals. Never waits on discovery."""
     chains = _upstream_chains()
     return {
         "ok": True,
         "updated_at": probe.now_iso(),
         "cached_s": CACHE_TTL,
-        "index_status": "upstream",
+        "index_status": index_status(),
         "chains": chains,
         "samples": _mixed_samples(chains),
         "observed": _observed_for_pulse(),
@@ -826,7 +878,7 @@ def _collect() -> dict:
             "ok": True,
             "updated_at": probe.now_iso(),
             "cached_s": CACHE_TTL,
-            "index_status": "fixture",
+            "index_status": index_status(fixture=True),
             "chains": chains,
             "samples": samples,
             "observed": _observed_for_pulse(),

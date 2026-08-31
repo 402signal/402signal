@@ -602,7 +602,7 @@ class PaywallTests(unittest.TestCase):
             self.assertEqual(status, 200)
             body = json.loads(raw)
             self.assertTrue(body.get("ok"))
-            self.assertEqual(body.get("index_status"), "upstream")
+            self.assertIn(body.get("index_status"), ("upstream-live", "shadow-warm", "both"))
             self.assertIn("chains", body)
             self.assertNotIn("listings", body)
             self.assertIn("samples", body)
