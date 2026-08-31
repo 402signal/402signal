@@ -238,9 +238,25 @@ def openapi_spec(resource_url: str = ROUTE) -> dict:
                     "status": {"type": ["integer", "null"]},
                 },
             },
+            "reputation": {
+                "type": "object",
+                "description": (
+                    "Transparent components first (observed, usage, tenure, stability, "
+                    "source_count), then V1 reputation_score, reputation_confidence, "
+                    "and scoring_model_id/hash. Score is never returned without components. "
+                    "No public 0-100 catalog badge. Unique payer addresses are never listed."
+                ),
+            },
             "objective": {
                 "type": "string",
-                "enum": ["best", "cheapest", "fastest", "most_reliable"],
+                "enum": [
+                    "best",
+                    "cheapest",
+                    "fastest",
+                    "most_reliable",
+                    "lowest_total_cost",
+                    "fastest_settlement",
+                ],
             },
             "compared": {
                 "type": "array",
@@ -262,6 +278,14 @@ def openapi_spec(resource_url: str = ROUTE) -> dict:
                         "invocable": {"type": "boolean"},
                         "selected": {"type": "boolean"},
                         "selected_payment": {"type": ["object", "null"]},
+                        "reputation": {"type": ["object", "null"]},
+                        "economics": {
+                            "type": ["object", "null"],
+                            "description": (
+                                "Rail economics for the selected_payment option. Every field "
+                                "has provenance: 402signal_observed, protocol_reference, or unknown."
+                            ),
+                        },
                     },
                 },
             },
@@ -287,8 +311,15 @@ def openapi_spec(resource_url: str = ROUTE) -> dict:
             },
             "objective": {
                 "type": "string",
-                "enum": ["best", "cheapest", "fastest", "most_reliable"],
-                "description": "Best-of-N ranking among live probes. Unknown values fall back to best.",
+                "enum": [
+                    "best",
+                    "cheapest",
+                    "fastest",
+                    "most_reliable",
+                    "lowest_total_cost",
+                    "fastest_settlement",
+                ],
+                "description": "Best-of-N ranking. lowest_total_cost fails closed when a fee is unknown. fastest_settlement is settlement/finality, not probe RTT.",
             },
             "max_amount_atomic": {
                 "type": "integer",
@@ -328,6 +359,34 @@ def openapi_spec(resource_url: str = ROUTE) -> dict:
                 "type": "integer",
                 "minimum": 0,
                 "description": "Require history n_7d at least this large. Unknown or smaller fails closed.",
+            },
+            "min_observed_success": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1,
+                "description": "Require observed success_7d when n_7d >= 3. Unknown fails closed.",
+            },
+            "min_reputation_score": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1,
+                "description": "Require V1 reputation_score. Unknown fails closed. Never guessed from vague NL.",
+            },
+            "min_reputation_confidence": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1,
+                "description": "Require reputation_confidence. n_7d < 10 is low confidence.",
+            },
+            "max_total_cost_usd": {
+                "type": "number",
+                "minimum": 0,
+                "description": "Merchant price plus known fees. Unknown fee fails closed.",
+            },
+            "max_settlement_latency_ms": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Settlement/finality bound. Not probe RTT. Unknown fails closed.",
             },
             "search_depth": {
                 "type": "string",
@@ -951,7 +1010,7 @@ HTTP 200 = live URL plus target contract. HTTP 503 = typed miss_reason.
 
 - POST /route  $0.01 USDC on Base, Solana, or Algorand
 - We support Base, Solana, and Algorand. Ranking is rail-neutral unless prefer_network or a named chain is requested. prefer_network ranks that rail first but still searches all three catalogs. networks=[solana] restricts discovery to that rail.
-- Body: {"need": "what you want", "url": "https://optional", "prefer_network": "base|solana|algorand", "objective": "best|cheapest|fastest|most_reliable", "max_amount_atomic": 0, "max_price_usd": 0, "max_latency_ms": 0, "max_probe_latency_ms": 0, "max_service_latency_ms": 0, "min_observations": 0, "require_invocable": false, "networks": ["base"], "search_depth": "standard|thorough", "max_candidates_to_probe": 7, "policy": "weather under $0.01 and 300ms"}
+- Body: {"need": "what you want", "url": "https://optional", "prefer_network": "base|solana|algorand", "objective": "best|cheapest|fastest|most_reliable|lowest_total_cost|fastest_settlement", "max_amount_atomic": 0, "max_price_usd": 0, "max_total_cost_usd": 0, "max_latency_ms": 0, "max_probe_latency_ms": 0, "max_service_latency_ms": 0, "max_settlement_latency_ms": 0, "min_observations": 0, "min_observed_success": 0, "min_reputation_score": 0, "min_reputation_confidence": 0, "require_invocable": false, "networks": ["base"], "search_depth": "standard|thorough", "max_candidates_to_probe": 7, "policy": "weather under $0.01 and 300ms"}
 - Agents that intend to pay should POST /route, not GET.
 - GET /route with Accept: application/json (or no Accept) returns HTTP 402 so crawlers can index payment. Browsers that send Accept: text/html get a human page.
 - Unpaid → HTTP 402 (amount 10000 atomic = $0.01, 6 decimals)
@@ -963,7 +1022,7 @@ HTTP 200 = live URL plus target contract. HTTP 503 = typed miss_reason.
 - Paid miss → HTTP 503 {live:false, miss_reason}
 - miss_reason enum: no_candidates, no_402_envelope, no_payto, reachable_200, probe_timeout, quote_expired, invalid_need, upstream_5xx, ssrf, no_input_schema, constraints_unmet, probe_budget_exhausted, probe_limit_reached
 - Paid /route also returns discovery_matches, candidates_discovered, candidates_considered, candidates_probed, candidate_evaluation_complete, probe_ceiling, stop_reason, probe_budget_exhausted, interpreted_constraints, unresolved_constraints. candidate_evaluation_complete is true only when every ranked candidate in this request's working set was probed (not the global catalog). stop_reason is winner_selected | candidate_set_exhausted | probe_limit_reached | probe_budget_exhausted | constraints_unmet. Typical probe plan is 3 then +2–4; hard ceiling is 20. probe_limit_reached means ranked candidates remained after this request's probe_ceiling with budget still open; it is not no_candidates. probe_budget_exhausted means ranked candidates remained when the 55s budget ended; it is not no_candidates. max_latency_ms is a probe-RTT alias. Catalog rows stay slim; only top finalists are hydrated with claimed schemas (not observed payment options).
-- compared[] rows include success_7d and n_7d. success_7d is null when n_7d < 3. Agents can tell 3/3 from 400/400; thin perfect scores do not outrank mature almost-perfect on best or most_reliable.
+- compared[] rows include success_7d, n_7d, reputation components (and score+confidence+scoring_model_id/hash), and rail economics for the selected_payment option. success_7d is null when n_7d < 3. n_7d < 10 means low reputation_confidence and no public reliability %. Unique payer address lists are never returned. lowest_total_cost fails closed when a fee is unknown (merchant price is not total cost). fastest_settlement uses settlement/finality, never probe RTT. Same scoring function on Base, Solana, and Algorand — no algo_bonus. Vague "high reputation" stays unresolved; "established usage" / "strong observed evidence" compile to min_observations=10. Settlement / total cost compile only with a numeric bound.
 - Discovery shortlist keeps need/capability score primary. History only reorders close scores, with freshness bands on prior success (<5m / <1h / <24h / older). A stale 402 cannot leapfrog a substantially better semantic match.
 - GET /pulse observed facts are n_7d, success_7d, payable_rate_7d, invocable_rate_7d. Rates are omitted below n=10. No binary healthy. No executable_now_rate.
 - POST /mcp tools/call name=route is the same paid probe (unpaid tools/call also 402s)

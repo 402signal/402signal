@@ -26,16 +26,35 @@ class CompilePolicyTests(unittest.TestCase):
         self.assertEqual(out["interpreted_constraints"]["max_service_latency_ms"], 400)
         self.assertNotIn("max_probe_latency_ms", out["interpreted_constraints"])
 
-    def test_reputation_and_settlement_are_unresolved(self):
+    def test_high_reputation_unresolved_settlement_with_number_compiles(self):
         out = policy.compile_policy(
             "weather under $0.01 with high reputation and settlement under 2s"
         )
         self.assertAlmostEqual(out["interpreted_constraints"]["max_price_usd"], 0.01)
+        self.assertEqual(out["interpreted_constraints"]["max_settlement_latency_ms"], 2000)
         names = {row["name"] for row in out["unresolved_constraints"]}
         self.assertIn("min_reputation_score", names)
-        self.assertIn("max_settlement_latency_ms", names)
         self.assertNotIn("min_reputation_score", out["interpreted_constraints"])
+
+    def test_settlement_without_number_is_unresolved(self):
+        out = policy.compile_policy("weather with fast settlement")
+        names = {row["name"] for row in out["unresolved_constraints"]}
+        self.assertIn("max_settlement_latency_ms", names)
         self.assertNotIn("max_settlement_latency_ms", out["interpreted_constraints"])
+
+    def test_established_usage_compiles_to_min_observations(self):
+        out = policy.compile_policy("weather with established usage")
+        self.assertEqual(out["interpreted_constraints"]["min_observations"], 10)
+        self.assertNotIn("min_reputation_score", out["interpreted_constraints"])
+        strong = policy.compile_policy("weather with strong observed evidence")
+        self.assertEqual(strong["interpreted_constraints"]["min_observations"], 10)
+
+    def test_total_cost_with_number_compiles(self):
+        out = policy.compile_policy("weather with total cost under $0.02")
+        self.assertAlmostEqual(out["interpreted_constraints"]["max_total_cost_usd"], 0.02)
+        vague = policy.compile_policy("weather with low total cost")
+        names = {row["name"] for row in vague["unresolved_constraints"]}
+        self.assertIn("max_total_cost_usd", names)
 
     def test_vague_cheap_fast_unresolved(self):
         out = policy.compile_policy("cheap fast weather")
@@ -128,7 +147,7 @@ class EngineUsesStructuredOnlyTests(unittest.TestCase):
         }
         self.assertTrue(select.passes_constraints(hit, cons))
         structured = policy.merge_constraints({"need": "weather", "min_reputation_score": 0.9})
-        self.assertEqual(structured["unmeasured"], ("min_reputation_score",))
+        self.assertEqual(structured["unmeasured"], ())
         self.assertFalse(select.passes_constraints(hit, structured))
 
 

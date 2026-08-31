@@ -50,7 +50,7 @@ Body:
 - No valid payment and `LOCAL_FREE` unset → **HTTP 402**. One 402 lists three accepts (Base, Solana, Algorand) plus the bazaar extension. We do not probe.
 - Valid payment: verify with the matching facilitator, then probe, then settle. An unverified header never opens the gate.
 - If `url` is set: must be `https`. Unpaid probe is GET, then POST `{}` if GET was not a live 402, then POST the catalog-declared input body when one is present. Seller-body tightening (never send seller-declared bodies; GET first; POST `{}` only if justified; typed `unsafe_to_probe`) and DNS IP-pin (`getaddrinfo` then urllib re-resolve is TOCTOU) are held for 402security. ~4s timeout. Response includes `live`, `status`, `latency_ms`, `has_402_challenge`, `selected_payment`, and a `health` snapshot. 402Signal settles the $0.01 routing payment; it does not pay the selected merchant.
-- If only `need`: federated need-scoped search (local FTS on `catalog.sqlite` + Coinbase / PayAI / GoPlausible) at request time (CDP `/discovery/search`; PayAI / GoPlausible search or a small first-pages fetch), union/dedupe/rank that working set, hydrate only the top ~5–10 finalists with claimed method/schema/toolName (bounded, TTL, optional gzip on disk — never a 44k RAM schema index), then probe adaptively (first 3, expand 2–4 if no winner; hard ceiling 20). Return the best currently observed live option (not the first live URL, not a catalog-only rail). Live hits are write-through upserted onto disk. Catalog claims stay on `claimed.payment_options` and `catalog.sqlite` `accept_claims`; `target.accepts` and selection use the current HTTP 402 envelope only. Claimed schemas are not observed payment options. If none live → **HTTP 503** `{ "live": false, "tried": n }` after settle (they paid for an honest miss). Optional structured constraints: `max_price_usd`, `max_probe_latency_ms`, `max_service_latency_ms` (historical p50, not probe RTT), `require_invocable`, `networks`, `min_observations`. `max_latency_ms` is a probe-RTT alias. Unknown measured values fail closed. Optional `policy` / need phrasing such as `weather under $0.01 and 300ms` compiles to structured constraints; unresolved safety-critical phrases are returned, never guessed. The engine uses structured values only.
+- If only `need`: federated need-scoped search (local FTS on `catalog.sqlite` + Coinbase / PayAI / GoPlausible) at request time (CDP `/discovery/search`; PayAI / GoPlausible search or a small first-pages fetch), union/dedupe/rank that working set, hydrate only the top ~5–10 finalists with claimed method/schema/toolName (bounded, TTL, optional gzip on disk — never a 44k RAM schema index), then probe adaptively (first 3, expand 2–4 if no winner; hard ceiling 20). Return the best currently observed live option (not the first live URL, not a catalog-only rail). Live hits are write-through upserted onto disk. Catalog claims stay on `claimed.payment_options` and `catalog.sqlite` `accept_claims`; `target.accepts` and selection use the current HTTP 402 envelope only. Claimed schemas are not observed payment options. If none live → **HTTP 503** `{ "live": false, "tried": n }` after settle (they paid for an honest miss). Optional structured constraints: `max_price_usd`, `max_total_cost_usd` (merchant + known fees; unknown fee fails closed), `max_probe_latency_ms`, `max_service_latency_ms` (historical p50, not probe RTT), `max_settlement_latency_ms` (settlement/finality, not probe RTT), `require_invocable`, `networks`, `min_observations`, `min_observed_success`, `min_reputation_score`, `min_reputation_confidence`. `max_latency_ms` is a probe-RTT alias. Unknown measured values fail closed. Optional `objective`: `best` / `cheapest` / `fastest` / `most_reliable` / `lowest_total_cost` / `fastest_settlement`. Optional `policy` / need phrasing such as `weather under $0.01 and 300ms` compiles to structured constraints; "established usage" / "strong observed evidence" compile to `min_observations=10`; vague "high reputation" stays unresolved; settlement / total-cost language compiles only with a numeric bound. The engine uses structured values only. Paid `/route` and unpaid `/preview` include transparent `reputation` components (observed / usage / tenure / stability / source_count) plus V1 `reputation_score`, `reputation_confidence`, and `scoring_model_id` / `scoring_model_hash`. Rail `economics` (merchant price, fees, settlement/finality) sit on the selected payment option and on `compared[]`, each field labeled `402signal_observed`, `protocol_reference`, or `unknown`. Same model on Base, Solana, and Algorand — no algo bonus. Catalog is not a 0–100 badge. Pulse stays facts; rates stay hidden below `n=10`. Unique payer addresses are never listed. Most usage/settlement/unique-payer fields are unknown on first ship because 402Signal has probe history, not a settlement ledger.
 - Dead upstream is **503** with the snapshot, never a fake live URL.
 - `LIVE402_FIXTURE=1` uses `live402/data/fixtures.json`. No network.
 - Paid **HTTP 200** includes `target: { method, inputSchema, outputSchema, accepts, facilitator, amountAtomic, displayAmount, timeoutSeconds }` (envelope accepts only) and `selected_payment: { rail, network, asset, amount_atomic, display_amount, normalized_usd, payTo, facilitator }` for the exact observed option that won. `payable` requires a complete observed option; `invocable` is payable plus input schema. If schema is missing, `live` may still be true with `invocable: false` and `miss_reason: "no_input_schema"`. `accepts[].extra.facilitator` is copied as `{url, feePayer, caip2, scheme}` — do not default to x402.org.
@@ -68,6 +68,34 @@ Body:
 - `POST /route` is rate-limited in memory (~60/min per IP, higher burst for Coinbase / PayAI / GoPlausible user-agents). `GET /preview` and unpaid MCP `tools/call preview` share a looser limiter (~180/min per IP, at least 2× the route cap). `GET /pulse` and `GET /rails` each have their own ~180/min per-IP limiter (same ballpark as preview, still looser than paid `/route`). `GET /health` stays unlimited `{ok:true}`. `429` when exceeded. Payment headers are redacted in logs. Responses send `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, `Strict-Transport-Security: max-age=31536000` (no includeSubDomains; www is a CNAME and Fly has no extra hostnames), and `Content-Security-Policy: default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'self'; img-src 'self' data:; base-uri 'self'; frame-ancestors 'none'`. script-src stays `'self'` (no CDN, no vendor wallet scripts). connect-src is `'self'` only; homepage Base pay POSTs `/route`. HEAD 200 on `/llms.txt` `/openapi.json` `/mcp.json` `/preview` `/rails` `/pulse`. Payment resource / OpenAPI `servers` / MCP resource are pinned to `https://402signal.com` (Host is not reflected). Probe DNS (`getaddrinfo`) times out in 2s; urllib may re-resolve (TOCTOU). Seller-body tightening and DNS IP-pin are held for 402security.
 
 Clients send v2 `PAYMENT-SIGNATURE` (base64 `PaymentPayload`) or v1 `X-PAYMENT`. Success/settle echo is `PAYMENT-RESPONSE`.
+
+## Reputation V1 and rail economics
+
+Components come first. A score is never returned without them.
+
+| Component | What it is | What it is not |
+|---|---|---|
+| observed | probe success count, n, distinct days, freshness, outcome stability | uptime, a health badge |
+| usage | `402signal_observed` probe counts only | reputation, settlements (unknown — no ledger), unique payers (omitted — no identities) |
+| tenure | first seen, days listed | quality |
+| stability | payTo / price / schema / rail changes | a guarantee |
+| source_count | independent catalog sources | popularity |
+
+**V1 score** (0–1, chain-neutral, documented in `live402/reputation.py` and the sqlite `scoring_models` log):
+
+- observed_performance **0.50** — the only reliability-like signal we measure. Popularity cannot dominate.
+- stability **0.20** — recent identity/quote churn is a risk signal.
+- tenure **0.10** — age ≠ quality. Log-capped at 365 days.
+- usage **0.10** — log-capped probe counts (`log1p(n)/log1p(100)`). 0 probes and unknown usage are both dropped so 0 does not look worse than unknown. Settlements and unique payers are never faked from probes.
+- distribution **0.10** — `min(source_count, 3) / 3`. Not in catalog ≠ 0 sources.
+
+Missing components are dropped and lower `reputation_confidence`. `n_7d < 10` caps confidence at 0.35. No public reliability % below `n=10`. Same function on Base, Solana, and Algorand. No `algo_bonus`.
+
+**Economics** (same keys on every rail, provenance on every field):
+
+- `402signal_observed` — we measured it (merchant price from the current 402 option).
+- `protocol_reference` — a cited official figure (Base L2 inclusion ~2s; Algorand block finality 2.82s). Solana wall-clock finality is unknown (no current official ms).
+- `unknown` — missing. Chain fees and facilitator fees are unknown in USD (no FX oracle). `lowest_total_cost` / `max_total_cost_usd` fail closed. `fastest_settlement` / `max_settlement_latency_ms` use settlement or protocol finality, never probe RTT.
 
 ## Rails
 
@@ -144,6 +172,8 @@ live402/            package (server, route, probe, payment, facilitator, fixture
 live402/shadow.py    on-disk catalog.sqlite (claims + FTS5). Not 402signal_observed.
 live402/hydrate.py   finalist claimed-contract cache (bounded, TTL, gzip). Not 44k RAM schemas.
 live402/policy.py    NL → structured constraints. Engine uses structured values only.
+live402/reputation.py transparent components + documented V1 score + scoring-model hash.
+live402/economics.py  rail economics with provenance. Same model for Base / Solana / Algorand.
 live402/static/     GET / homepage (app.js, styles, dashboard.js)
 live402/algod.py    pinned algod suggestedParams for the unpaid Algorand 402 extra
 live402/data/       fixture catalog

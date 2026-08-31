@@ -28,8 +28,15 @@ INPUT_SCHEMA = {
         },
         "objective": {
             "type": "string",
-            "enum": ["best", "cheapest", "fastest", "most_reliable"],
-            "description": "Best-of-N ranking among live probes. Unknown values fall back to best.",
+            "enum": [
+                "best",
+                "cheapest",
+                "fastest",
+                "most_reliable",
+                "lowest_total_cost",
+                "fastest_settlement",
+            ],
+            "description": "Best-of-N ranking among live probes. lowest_total_cost fails closed when a fee is unknown. fastest_settlement is settlement/finality, not probe RTT. Unknown values fall back to best.",
         },
         "max_amount_atomic": {
             "type": "integer",
@@ -69,6 +76,34 @@ INPUT_SCHEMA = {
             "type": "integer",
             "minimum": 0,
             "description": "Require history n_7d at least this large. Unknown or smaller fails closed.",
+        },
+        "min_observed_success": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "description": "Require observed success_7d at least this large when n_7d >= 3. Unknown fails closed.",
+        },
+        "min_reputation_score": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "description": "Require V1 reputation_score at least this large. Score is never returned without components. Unknown fails closed.",
+        },
+        "min_reputation_confidence": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "description": "Require reputation_confidence at least this large. n_7d < 10 is low confidence. Unknown fails closed.",
+        },
+        "max_total_cost_usd": {
+            "type": "number",
+            "minimum": 0,
+            "description": "Merchant price plus known fees. Unknown fee fails closed. Do not treat merchant price as total cost.",
+        },
+        "max_settlement_latency_ms": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Settlement/finality bound. Not probe RTT and not service p50. Unknown fails closed.",
         },
         "search_depth": {
             "type": "string",
@@ -170,7 +205,18 @@ OUTPUT_SCHEMA = {
         },
         "latency_ms": {"type": ["integer", "null"]},
         "schema_source": {"type": ["string", "null"], "enum": ["envelope", "catalog", "bazaar", None]},
-        "objective": {"type": "string", "enum": ["best", "cheapest", "fastest", "most_reliable"]},
+        "reputation": {"type": "object"},
+        "objective": {
+            "type": "string",
+            "enum": [
+                "best",
+                "cheapest",
+                "fastest",
+                "most_reliable",
+                "lowest_total_cost",
+                "fastest_settlement",
+            ],
+        },
         "compared": {"type": "array"},
     },
 }

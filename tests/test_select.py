@@ -91,7 +91,17 @@ class ParseTests(unittest.TestCase):
         self.assertEqual(select.parse_objective("cheapest"), "cheapest")
         self.assertEqual(select.parse_objective("fastest"), "fastest")
         self.assertEqual(select.parse_objective("most_reliable"), "most_reliable")
-        self.assertEqual(select.OBJECTIVES, ("best", "cheapest", "fastest", "most_reliable"))
+        self.assertEqual(
+            select.OBJECTIVES,
+            (
+                "best",
+                "cheapest",
+                "fastest",
+                "most_reliable",
+                "lowest_total_cost",
+                "fastest_settlement",
+            ),
+        )
 
     def test_parse_constraints_invalid_is_unconstrained(self):
         empty = select.parse_constraints({})
@@ -363,18 +373,28 @@ class ConstraintTests(unittest.TestCase):
         self.assertFalse(select.passes_constraints(zero, cons))
         self.assertTrue(select.passes_constraints(enough, cons))
 
-    def test_unmeasured_constraints_fail_closed(self):
-        hit = _hit(url="https://rep.example/x", history=_hist(n_7d=40, success_7d=0.99))
-        self.assertTrue(select.passes_constraints(hit, select.parse_constraints({})))
-        for key in (
-            "min_observed_success",
-            "min_reputation_score",
-            "max_settlement_latency_ms",
-        ):
-            cons = select.parse_constraints({key: 1})
-            self.assertEqual(cons["unmeasured"], (key,))
-            self.assertFalse(select.passes_constraints(hit, cons))
-            self.assertIsNone(select.pick_winner([hit], "best", cons))
+    def test_unknown_reputation_and_success_fail_closed(self):
+        unknown = _hit(url="https://rep-unk.example/x", history=_hist())
+        known = _hit(
+            url="https://rep-ok.example/x",
+            history=_hist(n_7d=40, success_7d=0.99),
+        )
+        cons_success = select.parse_constraints({"min_observed_success": 0.8})
+        self.assertEqual(cons_success["unmeasured"], ())
+        self.assertFalse(select.passes_constraints(unknown, cons_success))
+        self.assertTrue(select.passes_constraints(known, cons_success))
+        cons_rep = select.parse_constraints({"min_reputation_score": 0.2})
+        self.assertEqual(cons_rep["unmeasured"], ())
+        self.assertTrue(select.passes_constraints(known, cons_rep))
+        cons_settle = select.parse_constraints({"max_settlement_latency_ms": 5000})
+        self.assertEqual(cons_settle["unmeasured"], ())
+        # Solana finality is unknown; Base has a protocol_reference figure.
+        sol = _hit(url="https://sol-settle.example/x", rail="solana", history=_hist(n_7d=40, success_7d=0.99))
+        base = _hit(url="https://base-settle.example/x", rail="base", history=_hist(n_7d=40, success_7d=0.99))
+        self.assertFalse(select.passes_constraints(sol, cons_settle))
+        self.assertTrue(select.passes_constraints(base, cons_settle))
+        cons_tight = select.parse_constraints({"max_settlement_latency_ms": 1000})
+        self.assertFalse(select.passes_constraints(base, cons_tight))
 
 
 class ComparisonTests(unittest.TestCase):
