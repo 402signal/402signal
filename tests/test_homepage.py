@@ -227,6 +227,7 @@ class HomepageProductTests(unittest.TestCase):
         self.assertIn("index_status", js)
         self.assertIn("pending", js)
         self.assertIn("refreshing", js)
+        self.assertIn('status !== "ready"', js)
         self.assertIn('fetch("/pulse"', js)
         self.assertNotIn("healthy", js)
         self.assertNotIn("executable_now_rate", js)

@@ -128,7 +128,8 @@
   function pulseCatalogCounts(pulse) {
     if (!pulse || typeof pulse !== "object") return null;
     if (pulse.ok === false) return null;
-    if (isRefreshingPulse(pulse)) return null;
+    const status = String(pulse.index_status || "ready").toLowerCase();
+    if (status !== "ready") return null;
     const chains = pulse.chains;
     if (!chains || typeof chains !== "object") return null;
     const out = [];
