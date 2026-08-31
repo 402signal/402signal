@@ -227,6 +227,17 @@ def _observed_amount(snap: dict) -> str | None:
     return _amount_from_accepts(_envelope(snap).get("accepts"))
 
 
+def _observed_payable(snap: dict) -> bool:
+    """payable iff live and at least one complete CURRENT observed option. Fail closed."""
+    if not isinstance(snap, dict) or not snap.get("live"):
+        return False
+    env = _envelope(snap)
+    for opt in payment.payment_options_from_result(snap):
+        if payment.is_complete_payment_option(opt, env):
+            return True
+    return False
+
+
 def _price_option(amount, snap: dict, rail=None) -> dict | None:
     opts = payment.payment_options_from_result(snap if isinstance(snap, dict) else {})
     if opts:
@@ -501,7 +512,7 @@ def _write_probe_row(dest: str, snap: dict, meta: dict) -> None:
     pay_to = _payto(snap)
     amount = _observed_amount(snap)
     schema_present = _observed_schema_present(snap)
-    payable = 1 if (live and pay_to) else 0
+    payable = 1 if _observed_payable(snap) else 0
     if schema_present is not None:
         invocable = 1 if (payable and schema_present) else 0
         invocable_known = True
@@ -642,15 +653,17 @@ def record_probe(url: str, snap: dict | None = None) -> dict:
         return meta
 
 
-def persist_route_batch(batch_id: str | None, results: list | None) -> None:
+def persist_route_batch(batch_id: str | None, results: list | None) -> dict:
     """Coordinator: write accepted route observations, then seal. Never raises.
 
+    Returns {url: write_meta} so the winner can be rehydrated with change state.
     Stragglers that later call record_probe with this batch_id are ignored.
     """
+    metas: dict = {}
     try:
         bid = _ok_batch_id(batch_id)
         if not bid:
-            return
+            return metas
         rows = []
         for raw in results or []:
             if not isinstance(raw, dict):
@@ -661,19 +674,23 @@ def persist_route_batch(batch_id: str | None, results: list | None) -> None:
             rows.append(raw)
         with _lock:
             if _is_sealed_unlocked(bid):
-                return
+                return metas
             for raw in rows:
                 snap = dict(raw)
                 snap["batch_id"] = bid
                 dest = _text(snap.get("url"))
                 meta = {"payTo_flipped": False, "price_flipped": False, "schema_flipped": False}
                 _write_probe_row(dest, snap, meta)
+                metas[dest] = meta
+                if meta.get("payTo_flipped"):
+                    raw["payTo_changed"] = True
             _seal_unlocked(bid)
             conn = _connect()
             conn.commit()
             _chmod_db_files(_conn_path or db_path())
+        return metas
     except Exception:
-        return
+        return metas
 
 
 def record_claim(url: str, fields: dict | None = None, *, source=None, rail=None, ts=None, batch_id=None) -> None:
@@ -947,9 +964,11 @@ def _has_schema(result: dict) -> bool:
 def compute_readiness(result: dict, n_7d: int = 0) -> str:
     """discovered | payable | invocable | recently_verified. Never fake healthy."""
     _ = n_7d
-    pay_to = _text(result.get("payTo"))
     live = bool(result.get("live"))
-    payable = bool(live and pay_to)
+    if "payable" in result and result.get("payable") is not None:
+        payable = bool(result.get("payable"))
+    else:
+        payable = _observed_payable(result) if live else False
     this_probe = result.get("verified_seconds_ago", 0) == 0
     if payable and _has_schema(result):
         return "invocable"
@@ -983,6 +1002,8 @@ def _empty_claimed() -> dict:
         "schema_present": None,
         "facilitator": None,
         "claimed_at": None,
+        "payment_options": None,
+        "accepts": None,
     }
 
 
@@ -1036,12 +1057,25 @@ def attach_to_result(result: dict | None, meta: dict | None = None) -> dict:
         latest = latest_observations(url) if url else {"claimed": {}, "observed": {}}
         claimed_rows = latest.get("claimed") or {}
         observed_rows = latest.get("observed") or {}
+        prior_claimed = result.get("claimed") if isinstance(result.get("claimed"), dict) else {}
         claimed = _empty_claimed()
         claimed["payTo"] = _as_side_value(claimed_rows.get("payTo"))
+        if claimed["payTo"] is None:
+            claimed["payTo"] = prior_claimed.get("payTo")
         claimed["amount"] = _as_side_value(claimed_rows.get("amount"))
+        if claimed["amount"] is None:
+            claimed["amount"] = prior_claimed.get("amount")
         claimed["schema_present"] = _as_side_value(claimed_rows.get("schema_present"), as_int=True)
+        if claimed["schema_present"] is None:
+            claimed["schema_present"] = prior_claimed.get("schema_present")
         claimed["facilitator"] = _as_side_value(claimed_rows.get("facilitator"))
+        if claimed["facilitator"] is None:
+            claimed["facilitator"] = prior_claimed.get("facilitator")
         claimed["claimed_at"] = _side_ts(claimed_rows)
+        if prior_claimed.get("payment_options"):
+            claimed["payment_options"] = prior_claimed["payment_options"]
+        if prior_claimed.get("accepts"):
+            claimed["accepts"] = prior_claimed["accepts"]
         observed = _empty_observed()
         observed["http_status"] = _as_side_value(observed_rows.get("http_status"), as_int=True)
         observed["payTo"] = _as_side_value(observed_rows.get("payTo"))
@@ -1060,6 +1094,14 @@ def attach_to_result(result: dict | None, meta: dict | None = None) -> dict:
             result["payTo_changed"] = True
         if result.get("payTo_changed"):
             result["risk"] = ["payTo_changed"]
+        changes = {}
+        for key in ("payTo_changed_at", "price_changed_at", "schema_changed_at"):
+            val = summ.get(key)
+            if val is not None:
+                iso = _iso_ts(val)
+                changes[key] = iso if iso else val
+        if changes:
+            result["changes"] = changes
         result["history"] = {
             "success_24h": summ.get("success_24h"),
             "success_7d": summ.get("success_7d"),
