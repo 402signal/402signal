@@ -36,8 +36,9 @@ GUIDANCE = (
     "GET /attestation is a public sha256 of a recent 402signal_observed probe batch (not on-chain). "
     "Probe budget is under 60s; a hang returns 503 JSON with miss_reason probe_timeout. "
     "If ranked candidates remain when the budget ends, miss_reason is probe_budget_exhausted "
-    "(not no_candidates). If MAX_PROBE is hit with ranked candidates still untested and "
+    "(not no_candidates). If the request probe ceiling is hit with ranked candidates still untested and "
     "budget remaining, miss_reason/stop_reason is probe_limit_reached (not no_candidates). "
+    "Typical probe plan is a first tranche of 3, then 2–4 more if no winner. Hard ceiling is 20. "
     "GET /preview adds discovery_matches, displayed, and a read-only "
     "observation from 402signal_observed history (not_yet_observed when never probed). "
     "Upstream probe is GET, then POST {} if GET was not a live 402, then POST the "
@@ -172,9 +173,16 @@ def openapi_spec(resource_url: str = ROUTE) -> dict:
             "probed_at": {"type": "string"},
             "tried": {"type": "integer"},
             "discovery_matches": {"type": "integer"},
+            "candidates_discovered": {"type": "integer"},
             "candidates_considered": {"type": "integer"},
             "candidates_probed": {"type": "integer"},
+            "probe_ceiling": {
+                "type": "integer",
+                "description": "Per-request probe cap (typical 7, thorough 15, hard server ceiling 20).",
+            },
             "probe_budget_exhausted": {"type": "boolean"},
+            "interpreted_constraints": {"type": "object"},
+            "unresolved_constraints": {"type": "array"},
             "candidate_evaluation_complete": {
                 "type": "boolean",
                 "description": (
@@ -194,8 +202,8 @@ def openapi_spec(resource_url: str = ROUTE) -> dict:
                 "description": (
                     "Why this request stopped probing. winner_selected may leave "
                     "ranked candidates untested (candidate_evaluation_complete=false). "
-                    "probe_limit_reached means MAX_PROBE hit with untested ranked "
-                    "candidates remaining and the 55s budget still open."
+                    "probe_limit_reached means this request's probe_ceiling was hit "
+                    "with untested ranked candidates remaining and the 55s budget still open."
                 ),
             },
             "payTo": {"type": ["string", "null"]},
@@ -295,7 +303,17 @@ def openapi_spec(resource_url: str = ROUTE) -> dict:
             "max_latency_ms": {
                 "type": "integer",
                 "minimum": 0,
-                "description": "Drop live hits whose known latency exceeds this bound. Unknown latency fails closed.",
+                "description": "Compatibility alias for max_probe_latency_ms (this request's probe RTT). Unknown latency fails closed.",
+            },
+            "max_probe_latency_ms": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Drop live hits whose known probe RTT exceeds this bound. Not historical service/p50 latency.",
+            },
+            "max_service_latency_ms": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Drop live hits whose historical p50 latency exceeds this bound. Unknown p50 fails closed.",
             },
             "require_invocable": {
                 "type": "boolean",
@@ -305,6 +323,25 @@ def openapi_spec(resource_url: str = ROUTE) -> dict:
                 "type": "array",
                 "items": {"type": "string", "enum": ["base", "solana", "algorand"]},
                 "description": "Restrict searchable and selectable rails to this set. Unlike prefer_network, other rails are not queried.",
+            },
+            "min_observations": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Require history n_7d at least this large. Unknown or smaller fails closed.",
+            },
+            "search_depth": {
+                "type": "string",
+                "enum": ["standard", "thorough"],
+                "description": "standard: first 3 then expand 2–4 (typical cap 7). thorough may expand further. Hard server ceiling is 20.",
+            },
+            "max_candidates_to_probe": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "Requested probe cap, hard-capped at 20.",
+            },
+            "policy": {
+                "type": "string",
+                "description": "Natural-language constraints compiled into structured values. Unresolved phrases are returned, never guessed.",
             },
         },
         "required": ["need"],
@@ -914,7 +951,7 @@ HTTP 200 = live URL plus target contract. HTTP 503 = typed miss_reason.
 
 - POST /route  $0.01 USDC on Base, Solana, or Algorand
 - We support Base, Solana, and Algorand. Ranking is rail-neutral unless prefer_network or a named chain is requested. prefer_network ranks that rail first but still searches all three catalogs. networks=[solana] restricts discovery to that rail.
-- Body: {"need": "what you want", "url": "https://optional", "prefer_network": "base|solana|algorand", "objective": "best|cheapest|fastest|most_reliable", "max_amount_atomic": 0, "max_price_usd": 0, "max_latency_ms": 0, "require_invocable": false, "networks": ["base"]}
+- Body: {"need": "what you want", "url": "https://optional", "prefer_network": "base|solana|algorand", "objective": "best|cheapest|fastest|most_reliable", "max_amount_atomic": 0, "max_price_usd": 0, "max_latency_ms": 0, "max_probe_latency_ms": 0, "max_service_latency_ms": 0, "min_observations": 0, "require_invocable": false, "networks": ["base"], "search_depth": "standard|thorough", "max_candidates_to_probe": 7, "policy": "weather under $0.01 and 300ms"}
 - Agents that intend to pay should POST /route, not GET.
 - GET /route with Accept: application/json (or no Accept) returns HTTP 402 so crawlers can index payment. Browsers that send Accept: text/html get a human page.
 - Unpaid → HTTP 402 (amount 10000 atomic = $0.01, 6 decimals)
@@ -925,7 +962,7 @@ HTTP 200 = live URL plus target contract. HTTP 503 = typed miss_reason.
 - If inputSchema is missing: live may be true, invocable false, miss_reason no_input_schema
 - Paid miss → HTTP 503 {live:false, miss_reason}
 - miss_reason enum: no_candidates, no_402_envelope, no_payto, reachable_200, probe_timeout, quote_expired, invalid_need, upstream_5xx, ssrf, no_input_schema, constraints_unmet, probe_budget_exhausted, probe_limit_reached
-- Paid /route also returns discovery_matches, candidates_considered, candidates_probed, candidate_evaluation_complete, stop_reason, probe_budget_exhausted. candidate_evaluation_complete is true only when every ranked candidate in this request's working set was probed (not the global catalog). stop_reason is winner_selected | candidate_set_exhausted | probe_limit_reached | probe_budget_exhausted | constraints_unmet. probe_limit_reached means ranked candidates remained after MAX_PROBE with budget still open; it is not no_candidates. probe_budget_exhausted means ranked candidates remained when the 55s budget ended; it is not no_candidates.
+- Paid /route also returns discovery_matches, candidates_discovered, candidates_considered, candidates_probed, candidate_evaluation_complete, probe_ceiling, stop_reason, probe_budget_exhausted, interpreted_constraints, unresolved_constraints. candidate_evaluation_complete is true only when every ranked candidate in this request's working set was probed (not the global catalog). stop_reason is winner_selected | candidate_set_exhausted | probe_limit_reached | probe_budget_exhausted | constraints_unmet. Typical probe plan is 3 then +2–4; hard ceiling is 20. probe_limit_reached means ranked candidates remained after this request's probe_ceiling with budget still open; it is not no_candidates. probe_budget_exhausted means ranked candidates remained when the 55s budget ended; it is not no_candidates. max_latency_ms is a probe-RTT alias. Catalog rows stay slim; only top finalists are hydrated with claimed schemas (not observed payment options).
 - compared[] rows include success_7d and n_7d. success_7d is null when n_7d < 3. Agents can tell 3/3 from 400/400; thin perfect scores do not outrank mature almost-perfect on best or most_reliable.
 - Discovery shortlist keeps need/capability score primary. History only reorders close scores, with freshness bands on prior success (<5m / <1h / <24h / older). A stale 402 cannot leapfrog a substantially better semantic match.
 - GET /pulse observed facts are n_7d, success_7d, payable_rate_7d, invocable_rate_7d. Rates are omitted below n=10. No binary healthy. No executable_now_rate.

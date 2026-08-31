@@ -44,7 +44,17 @@ INPUT_SCHEMA = {
         "max_latency_ms": {
             "type": "integer",
             "minimum": 0,
-            "description": "Drop live hits whose known latency exceeds this bound.",
+            "description": "Compatibility alias for max_probe_latency_ms (this request's probe RTT). Unknown latency fails closed.",
+        },
+        "max_probe_latency_ms": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Drop live hits whose known probe RTT exceeds this bound. Not service/p50 latency.",
+        },
+        "max_service_latency_ms": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Drop live hits whose historical p50 latency exceeds this bound. Unknown p50 fails closed. Not probe RTT.",
         },
         "require_invocable": {
             "type": "boolean",
@@ -54,6 +64,25 @@ INPUT_SCHEMA = {
             "type": "array",
             "items": {"type": "string", "enum": ["base", "solana", "algorand"]},
             "description": "Restrict searchable and selectable rails to this set. Unlike prefer_network, other rails are not queried.",
+        },
+        "min_observations": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Require history n_7d at least this large. Unknown or smaller fails closed.",
+        },
+        "search_depth": {
+            "type": "string",
+            "enum": ["standard", "thorough"],
+            "description": "standard probes a first 3 then expands 2–4 (typical cap 7). thorough may expand further. Hard server ceiling is 20.",
+        },
+        "max_candidates_to_probe": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Requested probe cap. Hard-capped at 20. Typical requests stay well below.",
+        },
+        "policy": {
+            "type": "string",
+            "description": "Natural-language constraints compiled into structured values. Unresolved safety-critical phrases are returned, never guessed.",
         },
     },
     "required": ["need"],
@@ -121,10 +150,14 @@ OUTPUT_SCHEMA = {
         },
         "tried": {"type": "integer"},
         "discovery_matches": {"type": "integer"},
+        "candidates_discovered": {"type": "integer"},
         "candidates_considered": {"type": "integer"},
         "candidates_probed": {"type": "integer"},
+        "probe_ceiling": {"type": "integer"},
         "probe_budget_exhausted": {"type": "boolean"},
         "candidate_evaluation_complete": {"type": "boolean"},
+        "interpreted_constraints": {"type": "object"},
+        "unresolved_constraints": {"type": "array"},
         "stop_reason": {
             "type": "string",
             "enum": [

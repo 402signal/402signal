@@ -348,8 +348,12 @@ class ObservedInvariantTests(_IsolatedCatalog):
         body = pulse.preview_need("weather")
         self.assertTrue(body.get("not_probed"))
         self.assertNotIn("selected_payment", body)
+        self.assertNotIn("candidates_probed", body)
+        self.assertNotIn("probe_ceiling", body)
+        self.assertNotIn("stop_reason", body)
         for hit in body.get("hits") or []:
             self.assertNotIn("selected_payment", hit)
+            self.assertNotIn("inputSchema", hit)
 
     def test_ssrf_allowlist_unchanged(self):
         self.assertEqual(
