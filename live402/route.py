@@ -48,6 +48,8 @@ def run_probe(body: dict) -> tuple[int, dict]:
         result["candidates_considered"] = 1
         result["candidates_probed"] = 1
         result["probe_budget_exhausted"] = False
+        result["candidate_evaluation_complete"] = True
+        result["stop_reason"] = "winner_selected" if result.get("live") else "candidate_set_exhausted"
         result.setdefault("payTo", None)
         result.setdefault("traction", "unknown")
         if result.get("live"):

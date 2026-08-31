@@ -179,8 +179,10 @@ class ObjectivePickTests(unittest.TestCase):
         flipped = _hit(url="https://flip.example/x", payTo_changed=True)
         self.assertTrue(select.enough_evidence([one], "best", None))
         self.assertFalse(select.enough_evidence([flipped], "best", None))
-        self.assertFalse(select.enough_evidence([one], "cheapest", None))
+        self.assertTrue(select.enough_evidence([one], "cheapest", None))
         self.assertTrue(select.enough_evidence([one, two], "cheapest", None))
+        self.assertTrue(select.enough_evidence([one], "fastest", None))
+        self.assertTrue(select.enough_evidence([one], "most_reliable", None))
         self.assertFalse(select.enough_evidence([], "best", None))
 
     def test_no_rail_bias_first_equal_live_wins(self):
@@ -276,9 +278,11 @@ class ComparisonTests(unittest.TestCase):
         winner = select.pick_winner([a, b], "most_reliable", None)
         rows = select.comparison([a, b], winner)
         self.assertEqual(len(rows), 2)
-        self.assertIsNone(rows[0]["reliability"])
-        self.assertIsNot(rows[0]["reliability"], 0.0)
-        self.assertEqual(rows[1]["reliability"], 0.5)
+        self.assertIsNone(rows[0]["success_7d"])
+        self.assertIsNot(rows[0]["success_7d"], 0.0)
+        self.assertEqual(rows[0]["n_7d"], 0)
+        self.assertEqual(rows[1]["success_7d"], 0.5)
+        self.assertEqual(rows[1]["n_7d"], 3)
         self.assertTrue(rows[1]["selected"])
         self.assertFalse(rows[0]["selected"])
         for key in (
@@ -286,13 +290,48 @@ class ComparisonTests(unittest.TestCase):
             "rail",
             "amount_atomic",
             "latency_ms",
-            "reliability",
+            "success_7d",
+            "n_7d",
             "readiness",
             "live",
             "invocable",
             "selected",
         ):
             self.assertIn(key, rows[0])
+        self.assertNotIn("reliability", rows[0])
+
+    def test_comparison_exposes_n_so_thin_perfect_is_not_400_of_400(self):
+        thin = _hit(
+            url="https://thin.example/x",
+            history=_hist(success_7d=1.0, n_7d=3),
+            latency=10,
+            amount=10000,
+        )
+        mature = _hit(
+            url="https://mature.example/x",
+            history=_hist(success_7d=0.995, n_7d=400),
+            latency=10,
+            amount=10000,
+        )
+        winner = select.pick_winner([thin, mature], "best", None)
+        self.assertIs(winner, mature)
+        winner_rel = select.pick_winner([thin, mature], "most_reliable", None)
+        self.assertIs(winner_rel, mature)
+        rows = select.comparison([thin, mature], winner)
+        by_url = {row["url"]: row for row in rows}
+        self.assertEqual(by_url[thin["url"]]["success_7d"], 1.0)
+        self.assertEqual(by_url[thin["url"]]["n_7d"], 3)
+        self.assertAlmostEqual(by_url[mature["url"]]["success_7d"], 0.995)
+        self.assertEqual(by_url[mature["url"]]["n_7d"], 400)
+        self.assertTrue(by_url[mature["url"]]["selected"])
+        self.assertFalse(by_url[thin["url"]]["selected"])
+        two = _hit(
+            url="https://two.example/x",
+            history=_hist(success_7d=1.0, n_7d=2),
+        )
+        thin_row = select.comparison([two], two)[0]
+        self.assertIsNone(thin_row["success_7d"])
+        self.assertEqual(thin_row["n_7d"], 2)
 
 
 class RouteNeedSelectTests(unittest.TestCase):
@@ -316,6 +355,29 @@ class RouteNeedSelectTests(unittest.TestCase):
                 os.remove(path)
             except OSError:
                 pass
+
+    def _seed_history(self, url, n_ok=0, n_fail=0):
+        snap_ok = {
+            "live": True,
+            "status": 402,
+            "latency_ms": 10,
+            "has_402_challenge": True,
+            "payTo": "0xabc",
+            "probed_at": probe.now_iso(),
+        }
+        snap_fail = {
+            "live": False,
+            "status": None,
+            "latency_ms": 10,
+            "has_402_challenge": False,
+            "payTo": None,
+            "miss_reason": "no_402_envelope",
+            "probed_at": probe.now_iso(),
+        }
+        for _ in range(n_ok):
+            history.record_probe(url, dict(snap_ok))
+        for _ in range(n_fail):
+            history.record_probe(url, dict(snap_fail))
 
     def _item(self, url, description="weather forecast", network="base", amount="10000", pay_to="0xabc"):
         return {
@@ -385,8 +447,11 @@ class RouteNeedSelectTests(unittest.TestCase):
         selected = [row for row in compared if row.get("selected")]
         self.assertEqual(len(selected), 1)
         self.assertEqual(selected[0].get("url"), cheap["url"])
-        self.assertIsNone(compared[0].get("reliability"))
-        self.assertIsNot(compared[0].get("reliability"), 0.0)
+        self.assertIsNone(compared[0].get("success_7d"))
+        self.assertIsNot(compared[0].get("success_7d"), 0.0)
+        self.assertEqual(compared[0].get("n_7d"), 0)
+        self.assertEqual(result.get("stop_reason"), "winner_selected")
+        self.assertTrue(result.get("candidate_evaluation_complete"))
 
     def test_fastest_wins_lower_latency(self):
         slow = self._item("https://slow.example/weather")
@@ -426,6 +491,8 @@ class RouteNeedSelectTests(unittest.TestCase):
         compared = result.get("compared") or []
         self.assertGreaterEqual(len(compared), 2)
         self.assertFalse(any(row.get("selected") for row in compared))
+        self.assertEqual(result.get("stop_reason"), "constraints_unmet")
+        self.assertTrue(result.get("candidate_evaluation_complete"))
 
     def test_default_objective_first_equal_live_wins(self):
         first = self._item("https://first.example/weather", network="solana")
@@ -447,7 +514,7 @@ class RouteNeedSelectTests(unittest.TestCase):
         self.assertGreaterEqual(result.get("tried"), 1)
         self.assertGreaterEqual(result.get("candidates_probed") or result.get("tried"), 1)
 
-    def test_best_early_stops_without_waiting_stragglers(self):
+    def test_best_finishes_first_tranche_before_selecting(self):
         fast = self._item("https://fast.example/weather")
         slow_a = self._item("https://slow-a.example/weather")
         slow_b = self._item("https://slow-b.example/weather")
@@ -458,7 +525,7 @@ class RouteNeedSelectTests(unittest.TestCase):
             started.append(url)
             if "fast" in url:
                 return self._live(url, latency=5)
-            time.sleep(0.35)
+            time.sleep(0.12)
             return self._live(url, latency=80)
 
         t0 = time.monotonic()
@@ -466,11 +533,12 @@ class RouteNeedSelectTests(unittest.TestCase):
         elapsed = time.monotonic() - t0
         self.assertTrue(result.get("live"))
         self.assertEqual(result.get("url"), fast["url"])
-        self.assertLess(elapsed, 0.3)
-        self.assertLessEqual(result.get("candidates_probed"), 2)
+        self.assertGreaterEqual(elapsed, 0.1)
+        self.assertEqual(result.get("candidates_probed"), 3)
+        self.assertEqual(set(started), {fast["url"], slow_a["url"], slow_b["url"]})
         self.assertFalse(result.get("probe_budget_exhausted"))
-        self.assertIsNotNone(result.get("url"))
-        self.assertTrue(result.get("live"))
+        self.assertEqual(result.get("stop_reason"), "winner_selected")
+        self.assertTrue(result.get("candidate_evaluation_complete"))
 
     def test_best_keeps_first_ranked_when_second_returns_first(self):
         first = self._item("https://first-slow.example/weather")
@@ -487,28 +555,119 @@ class RouteNeedSelectTests(unittest.TestCase):
         self.assertEqual(result.get("url"), first["url"])
         self.assertGreaterEqual(result.get("candidates_probed") or 0, 2)
 
-    def test_cheapest_stops_after_two_viable_without_waiting_straggler(self):
+    def test_cheapest_waits_for_in_flight_cheaper(self):
         dear = self._item("https://dear-cmp.example/weather", amount="9000")
-        cheap = self._item("https://cheap-cmp.example/weather", amount="1000")
+        mid = self._item("https://mid-cmp.example/weather", amount="1000")
         extra = self._item("https://extra-cmp.example/weather", amount="500")
 
         def fake_probe(url, catalog_item=None, deadline=None, **kwargs):
             _ = catalog_item, deadline
             if "extra-cmp" in url:
-                time.sleep(0.4)
+                time.sleep(0.15)
                 return self._live(url, amount=500, latency=10)
             if "dear-cmp" in url:
                 return self._live(url, amount=9000, latency=10)
             return self._live(url, amount=1000, latency=10)
 
         t0 = time.monotonic()
-        result = self._route([dear, cheap, extra], fake_probe, objective="cheapest")
+        result = self._route([dear, mid, extra], fake_probe, objective="cheapest")
         elapsed = time.monotonic() - t0
         self.assertTrue(result.get("live"))
-        self.assertEqual(result.get("url"), cheap["url"])
-        self.assertLess(elapsed, 0.3)
-        self.assertLessEqual(result.get("candidates_probed") or 0, 2)
+        self.assertEqual(result.get("url"), extra["url"])
+        self.assertGreaterEqual(elapsed, 0.12)
+        self.assertEqual(result.get("candidates_probed"), 3)
         self.assertFalse(result.get("probe_budget_exhausted"))
+        self.assertEqual(result.get("stop_reason"), "winner_selected")
+        self.assertTrue(result.get("candidate_evaluation_complete"))
+
+    def test_fastest_waits_for_in_flight_faster(self):
+        slow = self._item("https://slow-cmp.example/weather")
+        mid = self._item("https://mid-fast.example/weather")
+        extra = self._item("https://extra-fast.example/weather")
+
+        def fake_probe(url, catalog_item=None, deadline=None, **kwargs):
+            _ = catalog_item, deadline
+            if "extra-fast" in url:
+                time.sleep(0.15)
+                return self._live(url, amount=9000, latency=4)
+            if "slow-cmp" in url:
+                return self._live(url, amount=1000, latency=80)
+            return self._live(url, amount=2000, latency=40)
+
+        result = self._route([slow, mid, extra], fake_probe, objective="fastest")
+        self.assertTrue(result.get("live"))
+        self.assertEqual(result.get("url"), extra["url"])
+        self.assertEqual(result.get("candidates_probed"), 3)
+        self.assertEqual(result.get("stop_reason"), "winner_selected")
+
+    def test_most_reliable_waits_for_in_flight_mature_stronger(self):
+        weak = self._item("https://weak-rel.example/weather")
+        mid = self._item("https://mid-rel.example/weather")
+        strong = self._item("https://strong-rel.example/weather")
+        self._seed_history(weak["url"], n_ok=5, n_fail=5)
+        self._seed_history(mid["url"], n_ok=5, n_fail=5)
+        self._seed_history(strong["url"], n_ok=10, n_fail=0)
+
+        def fake_probe(url, catalog_item=None, deadline=None, **kwargs):
+            _ = catalog_item, deadline
+            if "strong-rel" in url:
+                time.sleep(0.15)
+            return self._live(url, amount=10000, latency=10)
+
+        result = self._route([weak, mid, strong], fake_probe, objective="most_reliable")
+        self.assertTrue(result.get("live"))
+        self.assertEqual(result.get("url"), strong["url"])
+        self.assertEqual(result.get("candidates_probed"), 3)
+        self.assertEqual(result.get("stop_reason"), "winner_selected")
+        compared = {row["url"]: row for row in (result.get("compared") or [])}
+        self.assertEqual(compared[strong["url"]]["n_7d"], 10)
+        self.assertEqual(compared[strong["url"]]["success_7d"], 1.0)
+        self.assertEqual(compared[weak["url"]]["n_7d"], 10)
+        self.assertEqual(compared[weak["url"]]["success_7d"], 0.5)
+
+    def test_best_waits_for_in_flight_that_beats_under_cmp_best(self):
+        payable = self._item("https://payable-first.example/weather")
+        also = self._item("https://also-pay.example/weather")
+        invocable = self._item("https://invocable-slow.example/weather")
+
+        def fake_probe(url, catalog_item=None, deadline=None, **kwargs):
+            _ = catalog_item, deadline
+            if "invocable-slow" in url:
+                time.sleep(0.15)
+                row = self._live(url, amount=10000, latency=20)
+                row["invocable"] = True
+                row["readiness"] = "invocable"
+                return row
+            return self._live(url, amount=10000, latency=5)
+
+        result = self._route([payable, also, invocable], fake_probe, objective="best")
+        self.assertTrue(result.get("live"))
+        self.assertEqual(result.get("url"), invocable["url"])
+        self.assertEqual(result.get("candidates_probed"), 3)
+        self.assertTrue(result.get("invocable"))
+        self.assertEqual(result.get("stop_reason"), "winner_selected")
+
+    def test_equal_live_hits_preserve_original_relevance_rank(self):
+        first = self._item("https://rank-a.example/weather", network="base")
+        second = self._item("https://rank-b.example/weather", network="solana")
+        third = self._item("https://rank-c.example/weather", network="algorand")
+
+        def fake_probe(url, catalog_item=None, deadline=None, **kwargs):
+            _ = catalog_item, deadline
+            if "rank-c" in url:
+                time.sleep(0.02)
+                return self._live(url, amount=10000, latency=10, rail="algorand")
+            if "rank-b" in url:
+                return self._live(url, amount=10000, latency=10, rail="solana")
+            time.sleep(0.08)
+            return self._live(url, amount=10000, latency=10, rail="base")
+
+        result = self._route([first, second, third], fake_probe, objective="best")
+        self.assertTrue(result.get("live"))
+        self.assertEqual(result.get("url"), first["url"])
+        self.assertEqual(result.get("rail"), "base")
+        self.assertEqual(result.get("candidates_probed"), 3)
+        self.assertEqual(result.get("stop_reason"), "winner_selected")
 
     def test_concurrent_tranche_fail_closed_no_unverified_winner(self):
         items = [self._item("https://dead%d.example/weather" % i) for i in range(4)]
@@ -525,6 +684,9 @@ class RouteNeedSelectTests(unittest.TestCase):
         self.assertGreaterEqual(result.get("candidates_probed") or 0, 1)
         self.assertGreaterEqual(result.get("discovery_matches") or 0, 4)
         self.assertFalse(result.get("live"))
+        self.assertEqual(result.get("stop_reason"), "candidate_set_exhausted")
+        self.assertTrue(result.get("candidate_evaluation_complete"))
+        self.assertNotEqual(result.get("miss_reason"), "probe_limit_reached")
 
     def test_probe_budget_exhausted_when_untested_remain(self):
         items = [self._item("https://n%d.example/weather" % i) for i in range(8)]
@@ -538,9 +700,46 @@ class RouteNeedSelectTests(unittest.TestCase):
         self.assertIsNone(result.get("url"))
         self.assertEqual(result.get("miss_reason"), "probe_budget_exhausted")
         self.assertTrue(result.get("probe_budget_exhausted"))
+        self.assertEqual(result.get("stop_reason"), "probe_budget_exhausted")
+        self.assertFalse(result.get("candidate_evaluation_complete"))
         self.assertGreater(result.get("candidates_considered"), result.get("candidates_probed"))
         self.assertNotEqual(result.get("miss_reason"), "no_candidates")
         self.assertGreaterEqual(result.get("discovery_matches"), 8)
+
+    def test_probe_limit_reached_when_ranked_remain_and_budget_open(self):
+        items = [self._item("https://lim%d.example/weather" % i) for i in range(14)]
+
+        def fake_probe(url, catalog_item=None, deadline=None, **kwargs):
+            _ = catalog_item, deadline
+            return self._dead(url)
+
+        result = self._route(items, fake_probe)
+        self.assertFalse(result.get("live"))
+        self.assertIsNone(result.get("url"))
+        self.assertEqual(result.get("miss_reason"), "probe_limit_reached")
+        self.assertEqual(result.get("stop_reason"), "probe_limit_reached")
+        self.assertEqual(result.get("candidates_probed"), probe.MAX_PROBE)
+        self.assertEqual(result.get("discovery_matches"), 14)
+        self.assertGreater(result.get("candidates_considered"), result.get("candidates_probed"))
+        self.assertFalse(result.get("candidate_evaluation_complete"))
+        self.assertFalse(result.get("probe_budget_exhausted"))
+        self.assertNotEqual(result.get("miss_reason"), "no_candidates")
+
+    def test_winner_selected_with_untested_ranked_is_not_evaluation_complete(self):
+        items = [self._item("https://win%d.example/weather" % i) for i in range(8)]
+
+        def fake_probe(url, catalog_item=None, deadline=None, **kwargs):
+            _ = catalog_item, deadline
+            return self._live(url, amount=10000, latency=10)
+
+        result = self._route(items, fake_probe, objective="best")
+        self.assertTrue(result.get("live"))
+        self.assertEqual(result.get("stop_reason"), "winner_selected")
+        self.assertFalse(result.get("candidate_evaluation_complete"))
+        self.assertEqual(result.get("candidates_probed"), probe.FIRST_TRANCHE)
+        self.assertEqual(result.get("discovery_matches"), 8)
+        self.assertFalse(result.get("probe_budget_exhausted"))
+        self.assertNotEqual(result.get("stop_reason"), "probe_limit_reached")
 
     def test_empty_ranked_is_no_candidates_not_budget(self):
         result = self._route([], lambda *a, **k: self._dead("https://x.example/weather"))
@@ -548,6 +747,8 @@ class RouteNeedSelectTests(unittest.TestCase):
         self.assertEqual(result.get("miss_reason"), "no_candidates")
         self.assertFalse(result.get("probe_budget_exhausted"))
         self.assertEqual(result.get("discovery_matches"), 0)
+        self.assertEqual(result.get("stop_reason"), "candidate_set_exhausted")
+        self.assertTrue(result.get("candidate_evaluation_complete"))
 
 
 if __name__ == "__main__":

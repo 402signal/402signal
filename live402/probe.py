@@ -51,6 +51,14 @@ MISS_REASONS = (
     "no_input_schema",
     "constraints_unmet",
     "probe_budget_exhausted",
+    "probe_limit_reached",
+)
+STOP_REASONS = (
+    "winner_selected",
+    "candidate_set_exhausted",
+    "probe_limit_reached",
+    "probe_budget_exhausted",
+    "constraints_unmet",
 )
 _MISS_MAP = {
     "empty_402": "no_402_envelope",
@@ -77,6 +85,7 @@ _MISS_MAP = {
     "upstream_5xx": "upstream_5xx",
     "constraints_unmet": "constraints_unmet",
     "probe_budget_exhausted": "probe_budget_exhausted",
+    "probe_limit_reached": "probe_limit_reached",
 }
 BLOCKED_HOSTS = {
     "localhost",
@@ -1408,6 +1417,8 @@ def _discovery_unavailable_miss(objective: str) -> dict:
         "candidates_considered": 0,
         "candidates_probed": 0,
         "probe_budget_exhausted": False,
+        "candidate_evaluation_complete": True,
+        "stop_reason": "candidate_set_exhausted",
         "health": {
             "live": False,
             "last_probe": probed_at,
@@ -1425,6 +1436,49 @@ def _attach_selection(body: dict, probed: list, winner, objective: str) -> dict:
     return body
 
 
+def _probed_urls(probed: list) -> set:
+    return {
+        (r or {}).get("url")
+        for r in probed
+        if isinstance(r, dict) and (r or {}).get("url")
+    }
+
+
+def _candidate_evaluation_complete(ranked: list, probed: list) -> bool:
+    """True iff every ranked candidate in THIS request's working set was probed."""
+    probed_urls = _probed_urls(probed)
+    for item in ranked or []:
+        url = _resource_url(item) if isinstance(item, dict) else None
+        if url and url not in probed_urls:
+            return False
+    return True
+
+
+def _stop_reason(
+    *,
+    winner,
+    ranked: list,
+    probed: list,
+    probe_budget_exhausted: bool,
+    some_live: bool,
+) -> str:
+    if winner:
+        return "winner_selected"
+    complete = _candidate_evaluation_complete(ranked, probed)
+    untested = not complete
+    if probe_budget_exhausted and untested:
+        return "probe_budget_exhausted"
+    if untested and len(probed) >= MAX_PROBE:
+        return "probe_limit_reached"
+    if some_live:
+        return "constraints_unmet"
+    if complete:
+        return "candidate_set_exhausted"
+    if untested:
+        return "probe_budget_exhausted" if probe_budget_exhausted else "probe_limit_reached"
+    return "candidate_set_exhausted"
+
+
 def _attach_route_funnel(
     body: dict,
     *,
@@ -1432,11 +1486,15 @@ def _attach_route_funnel(
     candidates_considered: int,
     candidates_probed: int,
     probe_budget_exhausted: bool,
+    candidate_evaluation_complete: bool,
+    stop_reason: str,
 ) -> dict:
     body["discovery_matches"] = int(discovery_matches)
     body["candidates_considered"] = int(candidates_considered)
     body["candidates_probed"] = int(candidates_probed)
     body["probe_budget_exhausted"] = bool(probe_budget_exhausted)
+    body["candidate_evaluation_complete"] = bool(candidate_evaluation_complete)
+    body["stop_reason"] = stop_reason
     return body
 
 
@@ -1538,7 +1596,7 @@ def _probe_tranche(
     batch_id: str,
     should_stop=None,
 ) -> list[dict]:
-    """Concurrent unpaid probes. max MAX_IN_FLIGHT. Stop when should_stop; ignore stragglers."""
+    """Concurrent unpaid probes. max MAX_IN_FLIGHT. Finish the tranche unless the budget expires."""
     if not items:
         return []
     if remaining_timeout(deadline) is not None and remaining_timeout(deadline) <= 0:
@@ -1639,21 +1697,6 @@ def route_need(
     def winner_now():
         return select.pick_winner(_by_rank(_selection_set(probed)), obj, cons)
 
-    def should_stop(batch_so_far: list[dict], still_pending=None) -> bool:
-        combined = probed + batch_so_far
-        if not select.enough_evidence(combined, obj, cons):
-            return False
-        if obj != "best":
-            return True
-        winner = select.pick_winner(_by_rank(_selection_set(combined)), obj, cons)
-        if not winner:
-            return False
-        wr = rank_of.get(winner.get("url") or "", 10**9)
-        for item in still_pending or []:
-            if rank_of.get(_resource_url(item), 10**9) < wr:
-                return False
-        return True
-
     while next_idx < len(ranked) and len(probed) < MAX_PROBE:
         if _budget_hit(deadline):
             probe_budget_exhausted = True
@@ -1664,7 +1707,7 @@ def route_need(
         if take <= 0:
             break
         tranche = ranked[next_idx:next_idx + take]
-        batch = _probe_tranche(tranche, need, deadline, batch_id, should_stop=should_stop)
+        batch = _probe_tranche(tranche, need, deadline, batch_id)
         if batch:
             probed.extend(batch)
             last = batch[-1]
@@ -1676,28 +1719,36 @@ def route_need(
             next_idx += take
         if select.enough_evidence(probed, obj, cons):
             break
-        if winner_now() and (next_idx >= len(ranked) or len(probed) >= MAX_PROBE):
-            break
-        if _budget_hit(deadline) and next_idx < len(ranked):
+        if _budget_hit(deadline) and not _candidate_evaluation_complete(ranked, probed):
             probe_budget_exhausted = True
             break
 
-    if _budget_hit(deadline) and next_idx < len(ranked) and not winner_now():
+    if _budget_hit(deadline) and not _candidate_evaluation_complete(ranked, probed) and not winner_now():
         probe_budget_exhausted = True
 
     winner = winner_now()
+    evaluation_complete = _candidate_evaluation_complete(ranked, probed)
+    some_live = any(isinstance(r, dict) and r.get("live") for r in probed)
+    stop_reason = _stop_reason(
+        winner=winner,
+        ranked=ranked,
+        probed=probed,
+        probe_budget_exhausted=bool(probe_budget_exhausted),
+        some_live=some_live,
+    )
     funnel = {
         "discovery_matches": discovery_matches,
         "candidates_considered": discovery_matches,
         "candidates_probed": len(probed),
         "probe_budget_exhausted": bool(probe_budget_exhausted),
+        "candidate_evaluation_complete": evaluation_complete,
+        "stop_reason": stop_reason,
     }
     if winner:
         return _attach_route_funnel(
             _attach_selection(winner, probed, winner, obj),
             **funnel,
         )
-    some_live = any(isinstance(r, dict) and r.get("live") for r in probed)
     body = {
         "live": False,
         "invocable": False,
@@ -1721,21 +1772,19 @@ def route_need(
             "status": (last or {}).get("status"),
         },
     }
-    untested = next_idx < len(ranked)
+    untested = not evaluation_complete
     if not ranked:
         body["miss_reason"] = "no_candidates"
     elif probe_budget_exhausted and untested:
         body["miss_reason"] = "probe_budget_exhausted"
+    elif untested and len(probed) >= MAX_PROBE:
+        body["miss_reason"] = "probe_limit_reached"
     elif some_live:
         body["miss_reason"] = "constraints_unmet"
     elif last and last.get("miss_reason"):
         body["miss_reason"] = public_miss_reason(last.get("miss_reason")) or last.get("miss_reason")
-    elif not probed and ranked:
-        body["miss_reason"] = "probe_budget_exhausted" if probe_budget_exhausted else "no_candidates"
-        if not probe_budget_exhausted:
-            # Ranked existed but nothing was probed and the budget is still open:
-            # treat as no usable candidate rather than leaking an internal stall.
-            body["miss_reason"] = "no_candidates"
+    elif untested:
+        body["miss_reason"] = "probe_budget_exhausted" if probe_budget_exhausted else "probe_limit_reached"
     if last:
         body["last"] = {
             "url": last.get("url"),

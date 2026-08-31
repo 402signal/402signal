@@ -36,7 +36,9 @@ GUIDANCE = (
     "GET /attestation is a public sha256 of a recent 402signal_observed probe batch (not on-chain). "
     "Probe budget is under 60s; a hang returns 503 JSON with miss_reason probe_timeout. "
     "If ranked candidates remain when the budget ends, miss_reason is probe_budget_exhausted "
-    "(not no_candidates). GET /preview adds discovery_matches, displayed, and a read-only "
+    "(not no_candidates). If MAX_PROBE is hit with ranked candidates still untested and "
+    "budget remaining, miss_reason/stop_reason is probe_limit_reached (not no_candidates). "
+    "GET /preview adds discovery_matches, displayed, and a read-only "
     "observation from 402signal_observed history (not_yet_observed when never probed)."
 )
 
@@ -143,6 +145,29 @@ def openapi_spec(resource_url: str = ROUTE) -> dict:
             "candidates_considered": {"type": "integer"},
             "candidates_probed": {"type": "integer"},
             "probe_budget_exhausted": {"type": "boolean"},
+            "candidate_evaluation_complete": {
+                "type": "boolean",
+                "description": (
+                    "True iff every ranked/need-matching candidate in this request's "
+                    "working set was probed. Does not imply global catalog completeness."
+                ),
+            },
+            "stop_reason": {
+                "type": "string",
+                "enum": [
+                    "winner_selected",
+                    "candidate_set_exhausted",
+                    "probe_limit_reached",
+                    "probe_budget_exhausted",
+                    "constraints_unmet",
+                ],
+                "description": (
+                    "Why this request stopped probing. winner_selected may leave "
+                    "ranked candidates untested (candidate_evaluation_complete=false). "
+                    "probe_limit_reached means MAX_PROBE hit with untested ranked "
+                    "candidates remaining and the 55s budget still open."
+                ),
+            },
             "payTo": {"type": ["string", "null"]},
             "payTo_changed": {"type": "boolean"},
             "verified_at": {"type": ["string", "null"]},
@@ -181,7 +206,10 @@ def openapi_spec(resource_url: str = ROUTE) -> dict:
             },
             "compared": {
                 "type": "array",
-                "description": "Slim probe rows (cap 5). Unknown rates are null, never 0.0.",
+                "description": (
+                    "Slim probe rows (cap 5). success_7d is null when n_7d < 3, "
+                    "never an invented 0.0. n_7d distinguishes 3/3 from 400/400."
+                ),
                 "items": {
                     "type": "object",
                     "properties": {
@@ -189,7 +217,8 @@ def openapi_spec(resource_url: str = ROUTE) -> dict:
                         "rail": {"type": ["string", "null"]},
                         "amount_atomic": {"type": ["integer", "null"]},
                         "latency_ms": {"type": ["integer", "null"]},
-                        "reliability": {"type": ["number", "null"]},
+                        "success_7d": {"type": ["number", "null"]},
+                        "n_7d": {"type": "integer"},
                         "readiness": {"type": ["string", "null"]},
                         "live": {"type": "boolean"},
                         "invocable": {"type": "boolean"},
@@ -832,8 +861,9 @@ HTTP 200 = live URL plus target contract. HTTP 503 = typed miss_reason.
 - Paid live hit → HTTP 200 + URL that 402s with a payment envelope + target {method,inputSchema,outputSchema,accepts,facilitator,amountAtomic,displayAmount,timeoutSeconds}
 - If inputSchema is missing: live may be true, invocable false, miss_reason no_input_schema
 - Paid miss → HTTP 503 {live:false, miss_reason}
-- miss_reason enum: no_candidates, no_402_envelope, no_payto, reachable_200, probe_timeout, quote_expired, invalid_need, upstream_5xx, ssrf, no_input_schema, constraints_unmet, probe_budget_exhausted
-- Paid /route also returns discovery_matches, candidates_considered, candidates_probed, probe_budget_exhausted. probe_budget_exhausted means ranked candidates remained when the 55s budget ended; it is not no_candidates.
+- miss_reason enum: no_candidates, no_402_envelope, no_payto, reachable_200, probe_timeout, quote_expired, invalid_need, upstream_5xx, ssrf, no_input_schema, constraints_unmet, probe_budget_exhausted, probe_limit_reached
+- Paid /route also returns discovery_matches, candidates_considered, candidates_probed, candidate_evaluation_complete, stop_reason, probe_budget_exhausted. candidate_evaluation_complete is true only when every ranked candidate in this request's working set was probed (not the global catalog). stop_reason is winner_selected | candidate_set_exhausted | probe_limit_reached | probe_budget_exhausted | constraints_unmet. probe_limit_reached means ranked candidates remained after MAX_PROBE with budget still open; it is not no_candidates. probe_budget_exhausted means ranked candidates remained when the 55s budget ended; it is not no_candidates.
+- compared[] rows include success_7d and n_7d. success_7d is null when n_7d < 3. Agents can tell 3/3 from 400/400; thin perfect scores do not outrank mature almost-perfect on best or most_reliable.
 - POST /mcp tools/call name=route is the same paid probe (unpaid tools/call also 402s)
 - MCP bazaar type is mcp, toolName is route. Live MCP: https://402signal.com/mcp and /mcp.json
 

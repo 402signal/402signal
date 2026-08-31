@@ -681,6 +681,11 @@ class PaywallTests(unittest.TestCase):
         self.assertIn("402Signal", llms)
         self.assertIn("$0.01", llms)
         self.assertIn("POST /route, not GET", llms)
+        self.assertIn("candidate_evaluation_complete", llms)
+        self.assertIn("stop_reason", llms)
+        self.assertIn("probe_limit_reached", llms)
+        self.assertIn("success_7d", llms)
+        self.assertNotIn("search_complete", llms)
         self.assertIn(
             "We support Base, Solana, and Algorand.",
             llms,
@@ -1766,9 +1771,11 @@ class ProductBriefTests(unittest.TestCase):
             "no_input_schema",
             "constraints_unmet",
             "probe_budget_exhausted",
+            "probe_limit_reached",
         }
         self.assertEqual(set(MISS_REASONS), expected)
         self.assertEqual(public_miss_reason("probe_budget_exhausted"), "probe_budget_exhausted")
+        self.assertEqual(public_miss_reason("probe_limit_reached"), "probe_limit_reached")
         self.assertEqual(public_miss_reason("empty_402"), "no_402_envelope")
         self.assertEqual(public_miss_reason("http_200_no_challenge"), "reachable_200")
         self.assertEqual(public_miss_reason("timeout"), "probe_timeout")
@@ -1789,8 +1796,30 @@ class ProductBriefTests(unittest.TestCase):
         self.assertEqual(route["inputSchema"].get("required"), ["need"])
         self.assertIn("prefer_network", (route["inputSchema"].get("properties") or {}))
         props = (route.get("outputSchema") or {}).get("properties") or {}
-        for key in ("live", "url", "invocable", "target", "miss_reason", "tried", "latency_ms", "schema_source"):
+        for key in (
+            "live",
+            "url",
+            "invocable",
+            "target",
+            "miss_reason",
+            "tried",
+            "latency_ms",
+            "schema_source",
+            "candidate_evaluation_complete",
+            "stop_reason",
+        ):
             self.assertIn(key, props)
+        self.assertIn("probe_limit_reached", (props.get("miss_reason") or {}).get("enum") or [])
+        self.assertEqual(
+            set((props.get("stop_reason") or {}).get("enum") or []),
+            {
+                "winner_selected",
+                "candidate_set_exhausted",
+                "probe_limit_reached",
+                "probe_budget_exhausted",
+                "constraints_unmet",
+            },
+        )
         bazaar = (mcp_mod.handle_mcp(
             {"jsonrpc": "2.0", "id": 2, "method": "tools/call",
              "params": {"name": "route", "arguments": {"need": "weather"}}},
@@ -1819,6 +1848,24 @@ class ProductBriefTests(unittest.TestCase):
         self.assertEqual(need_req, ["need"])
         probes = spec["paths"]["/route"]["post"]["responses"]["200"]["content"]["application/json"]["schema"]["properties"]["probes"]
         self.assertIn("items", probes)
+        live_props = spec["paths"]["/route"]["post"]["responses"]["200"]["content"]["application/json"]["schema"]["properties"]
+        self.assertIn("candidate_evaluation_complete", live_props)
+        self.assertIn("stop_reason", live_props)
+        self.assertEqual(
+            set((live_props.get("stop_reason") or {}).get("enum") or []),
+            {
+                "winner_selected",
+                "candidate_set_exhausted",
+                "probe_limit_reached",
+                "probe_budget_exhausted",
+                "constraints_unmet",
+            },
+        )
+        compared_props = ((live_props.get("compared") or {}).get("items") or {}).get("properties") or {}
+        self.assertIn("success_7d", compared_props)
+        self.assertIn("n_7d", compared_props)
+        self.assertNotIn("reliability", compared_props)
+        self.assertIn("probe_limit_reached", (live_props.get("miss_reason") or {}).get("enum") or [])
         for path, methods in spec["paths"].items():
             for method, op in methods.items():
                 if not isinstance(op, dict):

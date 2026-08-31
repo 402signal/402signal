@@ -371,11 +371,11 @@ _CMP = {
 
 
 def enough_evidence(results: list[dict], objective: str, constraints: dict | None = None) -> bool:
-    """True when more probes would not change a selectable winner for this objective.
+    """True when a completed tranche has a selectable winner; do not start another.
 
-    best: one stable (not payTo_changed) live+payTo that passes constraints.
-    cheapest/fastest/most_reliable: at least two viable hits so comparison is real.
-    payTo_changed-only windows keep looking. Fail-closed: no viable → False.
+    Call only after already-running candidates have finished. Does not cancel
+    in-flight work. best keeps looking when every viable hit is payTo_changed.
+    Fail-closed: no viable → False.
     """
     if not isinstance(results, list) or not results:
         return False
@@ -387,7 +387,7 @@ def enough_evidence(results: list[dict], objective: str, constraints: dict | Non
     stable = [r for r in viable if not r.get("payTo_changed")]
     if obj == "best":
         return bool(stable)
-    return len(stable or viable) >= 2
+    return bool(stable or viable)
 
 
 def pick_winner(results: list[dict], objective: str, constraints: dict | None = None) -> dict | None:
@@ -418,21 +418,36 @@ def _readiness_label(result) -> str | None:
     return result.get("readiness")
 
 
+def _compared_7d(result) -> tuple[int, float | None]:
+    """Factual 7d window for compared[]. Rate is None when n_7d < 3."""
+    if not isinstance(result, dict):
+        return 0, None
+    hist = result.get("history") if isinstance(result.get("history"), dict) else {}
+    n_7d = _as_int(hist.get("n_7d")) or 0
+    if n_7d < 0:
+        n_7d = 0
+    if n_7d < WEAK_MIN_N:
+        return n_7d, None
+    return n_7d, _as_float(hist.get("success_7d"))
+
+
 def comparison(results, winner) -> list[dict]:
-    """Slim rows for a later `compared` field. Cap 5. Unknown rates stay None."""
+    """Slim rows for a later `compared` field. Cap 5. n<3 → success_7d is None."""
     rows: list[dict] = []
     if not isinstance(results, list):
         return rows
     for result in results:
         if not isinstance(result, dict):
             continue
+        n_7d, success_7d = _compared_7d(result)
         rows.append(
             {
                 "url": result.get("url"),
                 "rail": result.get("rail"),
                 "amount_atomic": amount_atomic(result),
                 "latency_ms": latency_ms(result),
-                "reliability": reliability(result),
+                "success_7d": success_7d,
+                "n_7d": n_7d,
                 "readiness": _readiness_label(result),
                 "live": bool(result.get("live")),
                 "invocable": bool(result.get("invocable")),
