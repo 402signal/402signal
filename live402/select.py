@@ -4,18 +4,22 @@ from __future__ import annotations
 
 from functools import cmp_to_key
 
-from live402 import payment
+from live402 import economics, payment, reputation
 
-OBJECTIVES = ("best", "cheapest", "fastest", "most_reliable")
+OBJECTIVES = (
+    "best",
+    "cheapest",
+    "fastest",
+    "most_reliable",
+    "lowest_total_cost",
+    "fastest_settlement",
+)
 RAILS = frozenset(("base", "solana", "algorand"))
 WEAK_MIN_N = 3
 MATURE_N = 10
-# Not measured in this slice. If the caller sets one, fail closed.
-UNMEASURED_CONSTRAINTS = (
-    "min_observed_success",
-    "min_reputation_score",
-    "max_settlement_latency_ms",
-)
+# Keys we still cannot compute. Empty in this slice: settlement/reputation/success
+# are measured when data exists and fail closed when unknown.
+UNMEASURED_CONSTRAINTS = ()
 
 
 def parse_objective(raw) -> str:
@@ -124,9 +128,10 @@ def parse_constraints(body: dict) -> dict:
 
     max_latency_ms is a compatibility alias for max_probe_latency_ms (this
     request's probe RTT). max_service_latency_ms is historical p50 only —
-    never mixed with probe latency. Unknown measured values fail closed
-    when the caller set the bound. Unmeasured keys (reputation, settlement
-    success rate) fail closed if the caller set them.
+    never mixed with probe latency. max_settlement_latency_ms is
+    settlement/finality, never probe RTT. max_total_cost_usd is merchant
+    price plus known fees; unknown fee fails closed. Unknown measured
+    values fail closed when the caller set the bound.
     """
     src = body if isinstance(body, dict) else {}
     networks = src.get("networks")
@@ -135,6 +140,18 @@ def parse_constraints(body: dict) -> dict:
     max_usd = _as_float(src.get("max_price_usd"))
     if max_usd is not None and max_usd < 0:
         max_usd = None
+    max_total = _as_float(src.get("max_total_cost_usd"))
+    if max_total is not None and max_total < 0:
+        max_total = None
+    min_rep = _as_float(src.get("min_reputation_score"))
+    if min_rep is not None and min_rep < 0:
+        min_rep = None
+    min_success = _as_float(src.get("min_observed_success"))
+    if min_success is not None and (min_success < 0 or min_success > 1):
+        min_success = None
+    min_conf = _as_float(src.get("min_reputation_confidence"))
+    if min_conf is not None and (min_conf < 0 or min_conf > 1):
+        min_conf = None
     max_lat = _nonneg_int(src.get("max_latency_ms"))
     max_probe = _nonneg_int(src.get("max_probe_latency_ms"))
     if max_probe is None:
@@ -143,12 +160,17 @@ def parse_constraints(body: dict) -> dict:
     return {
         "max_amount_atomic": _nonneg_int(src.get("max_amount_atomic")),
         "max_price_usd": max_usd,
+        "max_total_cost_usd": max_total,
         "max_latency_ms": max_lat if max_lat is not None else max_probe,
         "max_probe_latency_ms": max_probe,
         "max_service_latency_ms": _nonneg_int(src.get("max_service_latency_ms")),
+        "max_settlement_latency_ms": _nonneg_int(src.get("max_settlement_latency_ms")),
         "require_invocable": _truthy(src.get("require_invocable"), False),
         "rails": _parse_rails(networks),
         "min_observations": _nonneg_int(src.get("min_observations")),
+        "min_observed_success": min_success,
+        "min_reputation_score": min_rep,
+        "min_reputation_confidence": min_conf,
         "unmeasured": unmeasured,
     }
 
@@ -351,8 +373,35 @@ def pick_selected_payment(result, objective=None, constraints=None) -> dict | No
                     [o for o in complete if o.get("amount_atomic") is not None],
                     key=lambda o: int(o["amount_atomic"]),
                 )
+    if obj == "lowest_total_cost":
+        priced = []
+        for o in complete:
+            eco = economics.for_option(o, result)
+            cost = (eco.get("total_cost_usd") or {}).get("value")
+            if cost is None:
+                continue
+            priced.append((float(cost), o))
+        if not priced:
+            return None
+        priced.sort(key=lambda x: x[0])
+        complete = [priced[0][1]]
+    elif obj == "fastest_settlement":
+        timed = []
+        for o in complete:
+            eco = economics.for_option(o, result)
+            lat = (eco.get("settlement_or_finality_ms") or {}).get("value")
+            if lat is None:
+                continue
+            timed.append((int(lat), o))
+        if not timed:
+            return None
+        timed.sort(key=lambda x: x[0])
+        complete = [timed[0][1]]
     picked = complete[0]
-    return payment.selected_payment_fields(picked)
+    fields = payment.selected_payment_fields(picked)
+    if fields:
+        fields["economics"] = economics.for_option(picked, result)
+    return fields
 
 
 def passes_constraints(result, constraints) -> bool:
@@ -390,6 +439,31 @@ def passes_constraints(result, constraints) -> bool:
     if min_obs is not None:
         n = observation_count(result)
         if n is None or n < min_obs:
+            return False
+    min_success = cons.get("min_observed_success")
+    if min_success is not None:
+        rate = reputation.observed_success_of(result)
+        if rate is None or float(rate) < float(min_success):
+            return False
+    min_rep = cons.get("min_reputation_score")
+    if min_rep is not None:
+        score = reputation.score_of(result)
+        if score is None or float(score) < float(min_rep):
+            return False
+    min_conf = cons.get("min_reputation_confidence")
+    if min_conf is not None:
+        conf = reputation.confidence_of(result)
+        if conf is None or float(conf) < float(min_conf):
+            return False
+    max_settle = cons.get("max_settlement_latency_ms")
+    if max_settle is not None:
+        settle = economics.settlement_or_finality_ms(result)
+        if settle is None or int(settle) > int(max_settle):
+            return False
+    max_total = cons.get("max_total_cost_usd")
+    if max_total is not None:
+        cost = economics.total_cost_usd(result)
+        if cost is None or float(cost) > float(max_total):
             return False
     if cons.get("require_invocable") and not result.get("invocable"):
         return False
@@ -562,6 +636,44 @@ def _cmp_most_reliable(a, b) -> int:
     return _cmp_amount_asc(a, b)
 
 
+def _total_cost(result) -> float | None:
+    return economics.total_cost_usd(result)
+
+
+def _settlement_ms(result) -> int | None:
+    return economics.settlement_or_finality_ms(result)
+
+
+def _cmp_lowest_total_cost(a, b) -> int:
+    ca, cb = _total_cost(a), _total_cost(b)
+    if ca is not None and cb is not None:
+        if ca < cb:
+            return -1
+        if ca > cb:
+            return 1
+        return _cmp_latency_asc(a, b, unknown_last=False)
+    if ca is not None:
+        return -1
+    if cb is not None:
+        return 1
+    return 0
+
+
+def _cmp_fastest_settlement(a, b) -> int:
+    sa, sb = _settlement_ms(a), _settlement_ms(b)
+    if sa is not None and sb is not None:
+        if sa < sb:
+            return -1
+        if sa > sb:
+            return 1
+        return _cmp_amount_asc(a, b)
+    if sa is not None:
+        return -1
+    if sb is not None:
+        return 1
+    return 0
+
+
 def _cmp_best(a, b) -> int:
     ta, tb = _readiness_tier(a), _readiness_tier(b)
     if ta != tb:
@@ -582,6 +694,8 @@ _CMP = {
     "cheapest": _cmp_cheapest,
     "fastest": _cmp_fastest,
     "most_reliable": _cmp_most_reliable,
+    "lowest_total_cost": _cmp_lowest_total_cost,
+    "fastest_settlement": _cmp_fastest_settlement,
     "best": _cmp_best,
 }
 
@@ -606,6 +720,12 @@ def enough_evidence(results: list[dict], objective: str, constraints: dict | Non
     if obj == "cheapest":
         pool = stable or viable
         return bool(_cheapest_comparable_subset(pool, cons))
+    if obj == "lowest_total_cost":
+        pool = stable or viable
+        return any(_total_cost(r) is not None for r in pool)
+    if obj == "fastest_settlement":
+        pool = stable or viable
+        return any(_settlement_ms(r) is not None for r in pool)
     return bool(stable or viable)
 
 
@@ -620,6 +740,14 @@ def pick_winner(results: list[dict], objective: str, constraints: dict | None = 
         return None
     if obj == "cheapest":
         remaining = _cheapest_comparable_subset(remaining, cons)
+        if not remaining:
+            return None
+    if obj == "lowest_total_cost":
+        remaining = [r for r in remaining if _total_cost(r) is not None]
+        if not remaining:
+            return None
+    if obj == "fastest_settlement":
+        remaining = [r for r in remaining if _settlement_ms(r) is not None]
         if not remaining:
             return None
     cmp_fn = _CMP.get(obj, _cmp_best)
@@ -690,6 +818,16 @@ def comparison(results, winner, objective=None, constraints=None) -> list[dict]:
         }
         if selected and pay:
             row["selected_payment"] = pay
+        rep = reputation.public_row(result)
+        if rep:
+            row["reputation"] = rep
+        eco = None
+        if pay and pay.get("economics"):
+            eco = pay.get("economics")
+        else:
+            eco = economics.for_result(result, pay)
+        if eco:
+            row["economics"] = eco
         rows.append(row)
         if len(rows) >= 5:
             break

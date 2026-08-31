@@ -1168,6 +1168,12 @@ def _finalize_probe(result: dict, batch_id: str | None = None, record: bool = Tr
             obs["payTo"] = result.get("payTo")
             obs["latency_ms"] = result.get("latency_ms")
             result["observed"] = obs
+        try:
+            from live402 import reputation as reputation_mod
+
+            reputation_mod.attach(result)
+        except Exception:
+            pass
         return result
     except Exception:
         result.setdefault("verified_at", result.get("probed_at"))
@@ -1770,6 +1776,17 @@ def _attach_selection(body: dict, probed: list, winner, objective: str, constrai
             winner["selected_payment"] = selected
             body["selected_payment"] = selected
             _align_target_with_selected(winner, selected)
+        if winner.get("reputation"):
+            body["reputation"] = winner["reputation"]
+        elif selected or winner.get("url"):
+            try:
+                from live402 import reputation as reputation_mod
+
+                reputation_mod.attach(winner)
+                if winner.get("reputation"):
+                    body["reputation"] = winner["reputation"]
+            except Exception:
+                pass
     body["compared"] = select.comparison(probed, winner, objective, constraints)
     body["tried"] = len(probed)
     return body

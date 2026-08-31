@@ -47,6 +47,13 @@ def run_probe(body: dict) -> tuple[int, dict]:
             if selected:
                 result["selected_payment"] = selected
                 probe._align_target_with_selected(result, selected)
+            if result.get("reputation") is None:
+                try:
+                    from live402 import reputation as reputation_mod
+
+                    reputation_mod.attach(result)
+                except Exception:
+                    pass
         result["need"] = need or None
         result["tried"] = 1
         result["source"] = "fixture" if fixtures.fixture_mode() else "url"

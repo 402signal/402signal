@@ -35,13 +35,34 @@ _NETWORK = re.compile(
 _NETWORK_ONLY = re.compile(r"\b(base|solana|algorand)\s+only\b", re.I)
 _INVOCABLE = re.compile(r"\b(?:require[sd]?|must\s+be|need[s]?)\s+invocable\b|\binvocable\s+only\b", re.I)
 
-# Safety-critical / unmeasured. Never invent a numeric bound from these.
+# Vague adjectives. Never invent a reputation score threshold from these.
 _UNRESOLVED_HINTS = (
     (re.compile(r"\breputat", re.I), "min_reputation_score"),
     (re.compile(r"\btrust\s*score\b", re.I), "min_reputation_score"),
     (re.compile(r"\bsettlement\b", re.I), "max_settlement_latency_ms"),
     (re.compile(r"\bsuccess(?:\s+rate)?\b", re.I), "min_observed_success"),
     (re.compile(r"\b(?:reliable|reliability)\b", re.I), "min_observed_success"),
+    (re.compile(r"\btotal\s+cost\b", re.I), "max_total_cost_usd"),
+)
+_ESTABLISHED = re.compile(
+    r"\b(?:established\s+usage|strong\s+observed\s+evidence|well[-\s]?established)\b",
+    re.I,
+)
+_TOTAL_COST = re.compile(
+    r"total\s+cost.{0,24}(?:under|below|less\s+than|at\s+most|max(?:imum)?|<=|<)\s*\$?\s*(\d+(?:\.\d+)?)",
+    re.I,
+)
+_TOTAL_COST_BARE = re.compile(
+    r"(?:under|below|less\s+than|at\s+most|max(?:imum)?|<=|<)\s*\$?\s*(\d+(?:\.\d+)?).{0,16}total\s+cost",
+    re.I,
+)
+_SETTLEMENT_MS = re.compile(
+    r"settlement.{0,24}(?:under|below|less\s+than|at\s+most|max(?:imum)?|<=|<|within)?\s*(\d+)\s*m(?:illi)?s(?:ec(?:ond)?s?)?",
+    re.I,
+)
+_SETTLEMENT_S = re.compile(
+    r"settlement.{0,24}(?:under|below|less\s+than|at\s+most|max(?:imum)?|<=|<|within)?\s*(\d+(?:\.\d+)?)\s*s(?:ec(?:ond)?s?)?\b",
+    re.I,
 )
 
 _VAGUE = (
@@ -67,7 +88,9 @@ def compile_policy(text: str | None) -> dict:
     Bare millisecond bounds map to max_probe_latency_ms (same as max_latency_ms).
     Service latency is only set when the text says service/historical/p50.
     Networks, invocable, and observation floors are set only when explicit.
-    Reputation, settlement, and success-rate language is unresolved.
+    Settlement / total-cost language compiles only with a numeric bound.
+    "established usage" / "strong observed evidence" compile to
+    min_observations=10 (mature n). Vague "high reputation" stays unresolved.
     """
     raw = " ".join(str(text or "").split())
     interpreted: dict = {}
@@ -143,14 +166,37 @@ def compile_policy(text: str | None) -> dict:
     if _INVOCABLE.search(raw):
         interpreted["require_invocable"] = True
 
+    if _ESTABLISHED.search(raw):
+        # Defensible floor: public reliability is hidden below n=10.
+        interpreted["min_observations"] = 10
+
+    settle_ms = _SETTLEMENT_MS.search(raw)
+    if settle_ms:
+        n = select._nonneg_int(settle_ms.group(1))
+        if n is not None:
+            interpreted["max_settlement_latency_ms"] = n
+    else:
+        settle_s = _SETTLEMENT_S.search(raw)
+        if settle_s:
+            n = _f(settle_s.group(1))
+            if n is not None:
+                interpreted["max_settlement_latency_ms"] = int(round(n * 1000))
+
+    total = _TOTAL_COST.search(raw) or _TOTAL_COST_BARE.search(raw)
+    if total:
+        n = _f(total.group(1))
+        if n is not None:
+            interpreted["max_total_cost_usd"] = n
+
     for rx, name in _UNRESOLVED_HINTS:
+        if name in interpreted:
+            continue
         m = rx.search(raw)
         if m:
-            note_unresolved(
-                name,
-                m.group(0),
-                "not measured; not guessed",
-            )
+            reason = "no numeric bound; not guessed"
+            if name == "min_reputation_score":
+                reason = "vague adjective; never guessed as a score threshold"
+            note_unresolved(name, m.group(0), reason)
 
     if not priced:
         for rx, name in _VAGUE:
@@ -194,7 +240,9 @@ def merge_constraints(body: dict | None, compiled: dict | None = None) -> dict:
         "min_observations",
         "min_observed_success",
         "min_reputation_score",
+        "min_reputation_confidence",
         "max_settlement_latency_ms",
+        "max_total_cost_usd",
     ):
         if key in src:
             overlay[key] = src[key]

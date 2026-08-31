@@ -913,6 +913,13 @@ def _attach_preview_observations(hits: list[dict]) -> None:
         if not isinstance(row, dict):
             row = {"status": "not_yet_observed"}
         hit["observation"] = row
+        try:
+            from live402 import reputation as reputation_mod
+
+            fake = {"url": url, "history": {"n_7d": row.get("n_7d"), "success_7d": row.get("success_7d")}}
+            hit["reputation"] = reputation_mod.attach(fake).get("reputation")
+        except Exception:
+            pass
 
 
 def preview_need(need: str, prefer_network: str | None = None, networks=None) -> dict:
