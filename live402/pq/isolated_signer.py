@@ -84,17 +84,17 @@ def _fail_closed_callback(_txn):
 def handle_request(txn: dict, signer_callback=None) -> bytes:
     """unsigned txn in, pqsig out. Fail closed if we cannot sign.
 
-    Only a PQ1 construction PaymentTxn is accepted. Anything else
-    raises before isolated_sign.
+    Only a rebuilt PQ1 construction PaymentTxn is signed. Extra keys
+    (close, rekey, lx, grp, or unknown) raise before isolated_sign.
     """
     if not isinstance(txn, dict):
         raise SignerProcessError("txn required")
     try:
-        algo_anchor.validate_unsigned_anchor(txn)
+        rebuilt = algo_anchor.canonical_unsigned_anchor(txn)
     except Exception as exc:
         raise SignerProcessError("sign_failed") from exc
     cb = signer_callback if callable(signer_callback) else _fail_closed_callback
-    return algo_anchor.isolated_sign(txn, cb, pk=algo_anchor.current_falcon_sk())
+    return algo_anchor.isolated_sign(rebuilt, cb, pk=algo_anchor.current_falcon_sk())
 
 
 def _response_line(pqsig: bytes | None = None, *, error: bool = False) -> str:

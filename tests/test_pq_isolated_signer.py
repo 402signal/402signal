@@ -302,6 +302,11 @@ class IsolatedSignerProcessTests(unittest.TestCase):
         self.assertEqual(out, b"pqsig-ok")
         self.assertEqual(len(called), 1)
         self.assertTrue(sign.called)
+        signed_txn = sign.call_args[0][0]
+        self.assertIsInstance(signed_txn, dict)
+        for key in ("close", "rekey", "lx", "grp"):
+            self.assertNotIn(key, signed_txn)
+            self.assertNotIn(key, called[0])
         self.assertNotIn(self.hex_sk, json.dumps(called[0], default=str))
 
     def test_ipc_rejects_wrong_amount_without_signing(self):
@@ -329,6 +334,26 @@ class IsolatedSignerProcessTests(unittest.TestCase):
         txn["note"] = b"\x00" * algo_anchor.NOTE_LEN
         self._assert_ipc_rejected(txn)
         txn["note"] = b"not-a-pq1-note"
+        self._assert_ipc_rejected(txn)
+
+    def test_ipc_rejects_close_without_signing(self):
+        txn = self._unsigned()
+        txn["close"] = os.urandom(32)
+        self._assert_ipc_rejected(txn)
+
+    def test_ipc_rejects_rekey_without_signing(self):
+        txn = self._unsigned()
+        txn["rekey"] = os.urandom(32)
+        self._assert_ipc_rejected(txn)
+
+    def test_ipc_rejects_lx_without_signing(self):
+        txn = self._unsigned()
+        txn["lx"] = os.urandom(32)
+        self._assert_ipc_rejected(txn)
+
+    def test_ipc_rejects_grp_without_signing(self):
+        txn = self._unsigned()
+        txn["grp"] = os.urandom(32)
         self._assert_ipc_rejected(txn)
 
 

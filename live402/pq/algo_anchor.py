@@ -124,13 +124,23 @@ def _field_bytes(val):
     raise AnchorError("not pq1 construction")
 
 
+# pay_txn fields plus amt (must be 0/absent) and flatFee (construction helper).
+# Never close/rekey/lx/grp or any other extra key.
+_ALLOWED_INBOUND_KEYS = frozenset({"type", "fee", "fv", "gen", "gh", "lv", "note", "rcv", "snd", "amt", "flatFee"})
+_FORBIDDEN_INBOUND_KEYS = frozenset({"close", "rekey", "lx", "grp"})
+
+
 def validate_unsigned_anchor(txn: dict) -> None:
     """Fail closed unless txn matches PQ1 construction. Does not sign.
 
     PaymentTxn amount=0, receiver==sender==configured public address,
     genesis testnet-v1.0 (MainNet rejected), note from encode_note.
+    Rejects close, rekey, lx, grp, and any unknown key.
     """
     if not isinstance(txn, dict):
+        raise AnchorError("not pq1 construction")
+    keys = set(txn)
+    if keys & _FORBIDDEN_INBOUND_KEYS or not keys.issubset(_ALLOWED_INBOUND_KEYS):
         raise AnchorError("not pq1 construction")
     if str(txn.get("type") or "") != "pay":
         raise AnchorError("not pq1 construction")
@@ -158,6 +168,41 @@ def validate_unsigned_anchor(txn: dict) -> None:
         decode_note(bytes(note))
     except Exception as exc:
         raise AnchorError("not pq1 construction") from exc
+
+
+def rebuild_unsigned_anchor(txn: dict) -> dict:
+    """Canonical PaymentTxn from allowed fields only. Never copies extra keys."""
+    addr = falcon_address()
+    if not addr:
+        raise AnchorError("not pq1 construction")
+    note = txn.get("note")
+    if isinstance(note, str):
+        note = bytes.fromhex(note)
+    note = bytes(note)
+    fee = max(int(txn.get("fee") or MIN_FEE), MIN_FEE)
+    first = int(txn.get("fv") or 1)
+    last = int(txn.get("lv") or (first + 1000))
+    gh = txn.get("gh")
+    if isinstance(gh, str) and gh.strip():
+        try:
+            gh = bytes.fromhex(gh)
+        except ValueError:
+            gh = base64.b64decode(gh)
+    elif isinstance(gh, (bytes, bytearray)) and gh:
+        gh = bytes(gh)
+    else:
+        gh = base64.b64decode(TESTNET_GENESIS_HASH)
+    rebuilt = algo_tx.pay_txn(addr, addr, 0, fee, first, last, TESTNET_GENESIS_ID, gh, note=note)
+    extra = set(rebuilt) - {"type", "fee", "fv", "gen", "gh", "lv", "note", "rcv", "snd"}
+    for key in extra:
+        rebuilt.pop(key, None)
+    return rebuilt
+
+
+def canonical_unsigned_anchor(txn: dict) -> dict:
+    """Validate inbound, then return a rebuilt pay_txn dict. Does not sign."""
+    validate_unsigned_anchor(txn)
+    return rebuild_unsigned_anchor(txn)
 
 
 def _genesis_hash_bytes(gen: str, gh):

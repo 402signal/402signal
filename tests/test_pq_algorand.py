@@ -137,6 +137,16 @@ class AlgorandConstructionTests(unittest.TestCase):
         with self.assertRaises(algo_anchor.AnchorError):
             algo_anchor.validate_unsigned_anchor(forged)
 
+        rebuilt = algo_anchor.canonical_unsigned_anchor(txn)
+        for key in ("close", "rekey", "lx", "grp"):
+            self.assertNotIn(key, rebuilt)
+            extra = dict(txn)
+            extra[key] = os.urandom(32)
+            with self.assertRaises(algo_anchor.AnchorError):
+                algo_anchor.validate_unsigned_anchor(extra)
+            with self.assertRaises(algo_anchor.AnchorError):
+                algo_anchor.canonical_unsigned_anchor(extra)
+
     def test_idle_does_not_build_when_size_unchanged(self):
         store.append(b"one")
         worker.save_anchor(1, 1)
