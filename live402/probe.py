@@ -36,6 +36,8 @@ PROBE_BUDGET_SECONDS = 55.0
 MAX_PROBE = 5
 FIRST_TRANCHE = 3
 MAX_IN_FLIGHT = 3
+MAX_PROCESS_PROBES = 10
+MAX_PER_HOST = 2
 READ_LIMIT = 65536
 MAX_REDIRECTS = 2
 MISS_REASONS = (
@@ -149,6 +151,114 @@ def remaining_timeout(deadline: float | None) -> float | None:
         return None
     left = float(deadline) - time.monotonic()
     return left
+
+
+_pool_lock = threading.Lock()
+_shared_pool: ThreadPoolExecutor | None = None
+_global_slots = threading.Semaphore(MAX_PROCESS_PROBES)
+_host_slots: dict[str, threading.Semaphore] = {}
+_host_slots_lock = threading.Lock()
+_inflight_lock = threading.Lock()
+_inflight = 0
+_inflight_peak = 0
+
+
+def _shared_probe_pool() -> ThreadPoolExecutor:
+    global _shared_pool
+    with _pool_lock:
+        if _shared_pool is None:
+            _shared_pool = ThreadPoolExecutor(
+                max_workers=MAX_PROCESS_PROBES,
+                thread_name_prefix="probe",
+            )
+        return _shared_pool
+
+
+def _probe_host(url: str | None) -> str | None:
+    try:
+        host = (urlparse(url or "").hostname or "").strip().lower()
+    except Exception:
+        return None
+    return host or None
+
+
+def _host_semaphore(host: str | None) -> threading.Semaphore | None:
+    if not host:
+        return None
+    with _host_slots_lock:
+        sem = _host_slots.get(host)
+        if sem is None:
+            sem = threading.Semaphore(MAX_PER_HOST)
+            _host_slots[host] = sem
+        return sem
+
+
+def process_probe_inflight() -> int:
+    with _inflight_lock:
+        return _inflight
+
+
+def process_probe_inflight_peak() -> int:
+    with _inflight_lock:
+        return _inflight_peak
+
+
+def reset_probe_inflight_peak() -> None:
+    global _inflight_peak
+    with _inflight_lock:
+        _inflight_peak = _inflight
+
+
+def acquire_probe_slot(host: str | None, deadline: float | None) -> bool:
+    """Wait for a process-wide slot without holding a host lock. Fail closed.
+
+    Per-host cap is try-acquire only while a global slot is already held; if the
+    host is busy the global slot is released and we retry. Never nests blocking
+    waits, so one slow merchant cannot deadlock unrelated probes.
+    """
+    global _inflight, _inflight_peak
+    started = time.monotonic()
+    while True:
+        left = remaining_timeout(deadline)
+        if left is not None and left <= 0:
+            return False
+        if deadline is None and (time.monotonic() - started) >= 5.0:
+            return False
+        if not _global_slots.acquire(blocking=False):
+            wait = 0.02 if left is None else min(0.02, max(0.0, left))
+            if wait <= 0:
+                return False
+            if not _global_slots.acquire(timeout=wait):
+                continue
+        host_sem = _host_semaphore(host)
+        if host_sem is not None and not host_sem.acquire(blocking=False):
+            _global_slots.release()
+            left = remaining_timeout(deadline)
+            if left is not None and left <= 0:
+                return False
+            time.sleep(0.01 if left is None else min(0.01, max(0.0, left)))
+            continue
+        with _inflight_lock:
+            _inflight += 1
+            if _inflight > _inflight_peak:
+                _inflight_peak = _inflight
+        return True
+
+
+def release_probe_slot(host: str | None) -> None:
+    global _inflight
+    host_sem = _host_semaphore(host)
+    if host_sem is not None:
+        try:
+            host_sem.release()
+        except Exception:
+            pass
+    try:
+        _global_slots.release()
+    except Exception:
+        pass
+    with _inflight_lock:
+        _inflight = max(0, _inflight - 1)
 
 
 def _request_timeout(deadline: float | None) -> float:
@@ -908,7 +1018,8 @@ def attach_catalog_fields(result: dict, item: dict | None = None) -> dict:
 def _finalize_probe(result: dict, batch_id: str | None = None, record: bool = True) -> dict:
     """Record history and attach freshness/readiness. Never raises.
 
-    record=False: unpaid validate. Do not write 402signal_observed.
+    record=False: do not write 402signal_observed (unpaid validate and route workers).
+    Route persistence is the coordinator's job after the tranche is finalized.
     """
     try:
         from live402 import history as history_mod
@@ -1597,9 +1708,9 @@ def _finalize_routed_probe(result: dict, item: dict, need: str) -> dict:
     return result
 
 
-def _probe_one_candidate(item: dict, need: str, deadline: float | None, batch_id: str) -> dict:
+def _probe_one_candidate(item: dict, need: str, deadline: float | None) -> dict:
     url = _resource_url(item)
-    result = probe_url(url, catalog_item=item, deadline=deadline, batch_id=batch_id)
+    result = probe_url(url, catalog_item=item, deadline=deadline, record=False)
     return _finalize_routed_probe(result, item, need)
 
 
@@ -1622,21 +1733,31 @@ def _probe_miss_stub(item: dict, need: str, miss_reason: str) -> dict:
     }
 
 
-def _probe_one_or_stub(item: dict, need: str, deadline: float | None, batch_id: str) -> dict:
+def _run_routed_probe(item: dict, need: str, deadline: float | None) -> dict:
+    """Worker: probe with record=False. Never persist. Never use the route batch_id."""
+    url = _resource_url(item)
+    host = _probe_host(url)
+    if not acquire_probe_slot(host, deadline):
+        return _probe_miss_stub(item, need, "probe_budget_exhausted")
     try:
-        return _probe_one_candidate(item, need, deadline, batch_id)
+        return _probe_one_candidate(item, need, deadline)
     except Exception:
         return _probe_miss_stub(item, need, "no_402_envelope")
+    finally:
+        release_probe_slot(host)
+
+
+def _probe_one_or_stub(item: dict, need: str, deadline: float | None) -> dict:
+    return _run_routed_probe(item, need, deadline)
 
 
 def _probe_tranche(
     items: list[dict],
     need: str,
     deadline: float | None,
-    batch_id: str,
     should_stop=None,
 ) -> list[dict]:
-    """Concurrent unpaid probes. max MAX_IN_FLIGHT. Finish the tranche unless the budget expires."""
+    """Concurrent unpaid probes. max MAX_IN_FLIGHT per tranche, process-wide cap."""
     if not items:
         return []
     if remaining_timeout(deadline) is not None and remaining_timeout(deadline) <= 0:
@@ -1656,42 +1777,52 @@ def _probe_tranche(
             return bool(should_stop(collected))
 
     if len(items) == 1:
-        if take(_probe_one_or_stub(items[0], need, deadline, batch_id), []):
+        if take(_probe_one_or_stub(items[0], need, deadline), []):
             return collected
         return collected
 
-    workers = min(MAX_IN_FLIGHT, len(items))
-    pool = ThreadPoolExecutor(max_workers=workers)
+    pool = _shared_probe_pool()
+    futs = {
+        pool.submit(_run_routed_probe, item, need, deadline): item
+        for item in items
+    }
+    pending = set(futs)
+    while pending:
+        if remaining_timeout(deadline) is not None and remaining_timeout(deadline) <= 0:
+            for leftover in pending:
+                leftover.cancel()
+            break
+        done, pending = wait(pending, timeout=0.05, return_when=FIRST_COMPLETED)
+        rows = []
+        for fut in done:
+            item = futs[fut]
+            try:
+                rows.append(fut.result())
+            except Exception:
+                rows.append(_probe_miss_stub(item, need, "no_402_envelope"))
+        leftover_items = pending_items(pending, futs)
+        stop = False
+        for row in rows:
+            if take(row, leftover_items):
+                stop = True
+        if stop:
+            for leftover in pending:
+                leftover.cancel()
+            pending.clear()
+            return collected
+    return collected
+
+
+def _commit_route_batch(batch_id: str, probed: list) -> None:
+    """Coordinator: persist only the finalized selection set, then seal."""
+    accepted = [row for row in probed if isinstance(row, dict)]
+    for row in accepted:
+        row["batch_id"] = batch_id
     try:
-        futs = {
-            pool.submit(_probe_one_candidate, item, need, deadline, batch_id): item
-            for item in items
-        }
-        pending = set(futs)
-        while pending:
-            if remaining_timeout(deadline) is not None and remaining_timeout(deadline) <= 0:
-                break
-            done, pending = wait(pending, timeout=0.05, return_when=FIRST_COMPLETED)
-            rows = []
-            for fut in done:
-                item = futs[fut]
-                try:
-                    rows.append(fut.result())
-                except Exception:
-                    rows.append(_probe_miss_stub(item, need, "no_402_envelope"))
-            leftover_items = pending_items(pending, futs)
-            stop = False
-            for row in rows:
-                if take(row, leftover_items):
-                    stop = True
-            if stop:
-                for leftover in pending:
-                    leftover.cancel()
-                pending.clear()
-                return collected
-        return collected
-    finally:
-        pool.shutdown(wait=False, cancel_futures=True)
+        from live402 import history as history_mod
+        history_mod.persist_route_batch(batch_id, accepted)
+    except Exception:
+        return
 
 
 def _budget_hit(deadline: float | None) -> bool:
@@ -1747,7 +1878,7 @@ def route_need(
         if take <= 0:
             break
         tranche = ranked[next_idx:next_idx + take]
-        batch = _probe_tranche(tranche, need, deadline, batch_id)
+        batch = _probe_tranche(tranche, need, deadline)
         if batch:
             probed.extend(batch)
             last = batch[-1]
@@ -1785,10 +1916,18 @@ def route_need(
         "stop_reason": stop_reason,
     }
     if winner:
-        return _attach_route_funnel(
+        body = _attach_route_funnel(
             _attach_selection(winner, probed, winner, obj),
             **funnel,
         )
+        _commit_route_batch(batch_id, probed)
+        try:
+            from live402 import history as history_mod
+            body = history_mod.attach_to_result(body)
+        except Exception:
+            pass
+        body["batch_id"] = batch_id
+        return body
     body = {
         "live": False,
         "invocable": False,
@@ -1834,4 +1973,7 @@ def route_need(
         }
         if last.get("rail"):
             body["rail"] = last.get("rail")
-    return _attach_route_funnel(_attach_selection(body, probed, None, obj), **funnel)
+    out = _attach_route_funnel(_attach_selection(body, probed, None, obj), **funnel)
+    _commit_route_batch(batch_id, probed)
+    out["batch_id"] = batch_id
+    return out

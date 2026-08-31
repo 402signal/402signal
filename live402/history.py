@@ -90,6 +90,10 @@ CREATE INDEX IF NOT EXISTS observations_url_field_ts ON observations(url, field,
 CREATE INDEX IF NOT EXISTS observations_probe_id ON observations(probe_id);
 CREATE INDEX IF NOT EXISTS observations_source_type_ts ON observations(source_type, ts);
 CREATE INDEX IF NOT EXISTS observations_batch_id ON observations(batch_id);
+CREATE TABLE IF NOT EXISTS sealed_batches (
+    batch_id TEXT PRIMARY KEY,
+    sealed_at INTEGER NOT NULL
+);
 """
 
 
@@ -441,145 +445,235 @@ def _cap_observations(cur, url: str) -> None:
         cur.executemany("DELETE FROM observations WHERE id = ?", extra)
 
 
+def _is_sealed_unlocked(batch_id: str | None) -> bool:
+    bid = _text(batch_id)
+    if not bid:
+        return False
+    conn = _connect()
+    row = conn.execute(
+        "SELECT 1 FROM sealed_batches WHERE batch_id = ? LIMIT 1",
+        (bid,),
+    ).fetchone()
+    return bool(row)
+
+
+def _seal_unlocked(batch_id: str) -> None:
+    conn = _connect()
+    conn.execute(
+        "INSERT OR IGNORE INTO sealed_batches (batch_id, sealed_at) VALUES (?, ?)",
+        (batch_id, int(time.time())),
+    )
+
+
+def batch_is_sealed(batch_id: str | None) -> bool:
+    """True if this batch_id has been sealed. Never raises."""
+    try:
+        bid = _ok_batch_id(batch_id) or _text(batch_id)
+        if not bid:
+            return False
+        with _lock:
+            return _is_sealed_unlocked(bid)
+    except Exception:
+        return False
+
+
+def seal_batch(batch_id: str | None) -> None:
+    """Seal a batch so later record_probe writes are ignored. Never raises."""
+    try:
+        bid = _ok_batch_id(batch_id) or _text(batch_id)
+        if not bid:
+            return
+        with _lock:
+            conn = _connect()
+            _seal_unlocked(bid)
+            conn.commit()
+            _chmod_db_files(_conn_path or db_path())
+    except Exception:
+        return
+
+
+def _write_probe_row(dest: str, snap: dict, meta: dict) -> None:
+    """Insert one probe + observations. Caller holds _lock. Does not commit."""
+    ts = _as_int(snap.get("ts"), None)
+    if ts is None:
+        ts = int(time.time())
+    live = 1 if snap.get("live") else 0
+    pay_to = _payto(snap)
+    amount = _observed_amount(snap)
+    schema_present = _observed_schema_present(snap)
+    payable = 1 if (live and pay_to) else 0
+    if schema_present is not None:
+        invocable = 1 if (payable and schema_present) else 0
+        invocable_known = True
+    elif live == 0:
+        invocable = 0
+        invocable_known = True
+    else:
+        invocable = 0
+        invocable_known = False
+    latency = _as_int(snap.get("latency_ms"), None)
+    miss = _text(snap.get("miss_reason"))
+    rail = _text(snap.get("rail"))
+    http_status = _as_int(snap.get("status"), None)
+    batch_id = _text(snap.get("batch_id"))
+    obs_source = _text(snap.get("source")) or "402signal"
+    claimed = _claimed_blob(snap)
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute("SELECT last_payTo, last_amount, schema_present, payTo_changed_at, price_changed_at, schema_changed_at, last_success_402 FROM url_state WHERE url = ?", (dest,))
+    row = cur.fetchone()
+    prev_pay = _text(row[0]) if row else None
+    prev_amt = _text(row[1]) if row else None
+    prev_schema = row[2] if row else None
+    pay_changed_at = row[3] if row else None
+    price_changed_at = row[4] if row else None
+    schema_changed_at = row[5] if row else None
+    last_ok = row[6] if row else None
+    if prev_pay and pay_to and not payment.payto_equal(prev_pay, pay_to, rail):
+        pay_changed_at = ts
+        meta["payTo_flipped"] = True
+    claimed_pay = _text(claimed.get("payTo")) if claimed else None
+    claimed_rail = _text(claimed.get("rail")) if claimed else None
+    if claimed_pay and pay_to and not payment.payto_equal(
+        claimed_pay, pay_to, claimed_rail or rail
+    ):
+        meta["payTo_flipped"] = True
+    if prev_amt is not None and amount is not None and _price_flipped(prev_amt, amount, snap, rail):
+        price_changed_at = ts
+        meta["price_flipped"] = True
+    if prev_schema is not None and schema_present is not None and int(prev_schema) != int(schema_present):
+        schema_changed_at = ts
+        meta["schema_flipped"] = True
+    last_pay = pay_to if pay_to else prev_pay
+    last_amt = amount if amount is not None else prev_amt
+    last_schema = int(schema_present) if schema_present is not None else prev_schema
+    if live:
+        last_ok = ts
+    cur.execute(
+        "INSERT INTO probes (url, ts, live, payable, invocable, latency_ms, payTo, amount, miss_reason, rail, schema_present) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (dest, ts, live, payable, invocable, latency, pay_to, amount, miss, rail, schema_present),
+    )
+    probe_id = cur.lastrowid
+    obs_fields = {
+        "live": live,
+        "payable": payable,
+        "latency_ms": latency,
+        "payTo": pay_to,
+        "amount": amount,
+        "http_status": http_status,
+        "schema_present": schema_present,
+    }
+    if invocable_known:
+        obs_fields["invocable"] = invocable
+    _write_observed(
+        cur,
+        probe_id=probe_id,
+        batch_id=batch_id,
+        source=obs_source,
+        rail=rail,
+        url=dest,
+        ts=ts,
+        fields=obs_fields,
+    )
+    if claimed:
+        _write_claimed(
+            cur,
+            probe_id=probe_id,
+            batch_id=batch_id,
+            source=claimed.get("source") or obs_source,
+            rail=claimed.get("rail") or rail,
+            url=dest,
+            ts=ts,
+            fields=claimed,
+        )
+    cur.execute(
+        """
+        INSERT INTO url_state (url, last_payTo, last_amount, schema_present, payTo_changed_at, price_changed_at, schema_changed_at, last_checked, last_success_402)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(url) DO UPDATE SET
+            last_payTo = excluded.last_payTo,
+            last_amount = excluded.last_amount,
+            schema_present = excluded.schema_present,
+            payTo_changed_at = excluded.payTo_changed_at,
+            price_changed_at = excluded.price_changed_at,
+            schema_changed_at = excluded.schema_changed_at,
+            last_checked = excluded.last_checked,
+            last_success_402 = excluded.last_success_402
+        """,
+        (dest, last_pay, last_amt, last_schema, pay_changed_at, price_changed_at, schema_changed_at, ts, last_ok),
+    )
+    cur.execute(
+        "SELECT id FROM probes WHERE url = ? ORDER BY ts DESC, id DESC",
+        (dest,),
+    )
+    ids = [r[0] for r in cur.fetchall()]
+    if len(ids) > PER_URL_CAP:
+        _delete_probes_and_obs(cur, ids[PER_URL_CAP:])
+    cur.execute("SELECT COUNT(*) FROM probes")
+    n = int(cur.fetchone()[0] or 0)
+    if n > GLOBAL_CAP:
+        drop = n - GLOBAL_CAP
+        cur.execute(
+            "SELECT id FROM probes ORDER BY ts ASC, id ASC LIMIT ?",
+            (drop,),
+        )
+        _delete_probes_and_obs(cur, [r[0] for r in cur.fetchall()])
+    _cap_observations(cur, dest)
+
+
 def record_probe(url: str, snap: dict | None = None) -> dict:
-    """Persist one probe. Never raises into the request path."""
+    """Persist one probe. Ignores writes to a sealed batch_id. Never raises into the request path."""
     meta = {"payTo_flipped": False, "price_flipped": False, "schema_flipped": False}
     try:
         snap = snap if isinstance(snap, dict) else {}
         dest = _text(url) or _text(snap.get("url"))
         if not dest:
             return meta
-        ts = _as_int(snap.get("ts"), None)
-        if ts is None:
-            ts = int(time.time())
-        live = 1 if snap.get("live") else 0
-        pay_to = _payto(snap)
-        amount = _observed_amount(snap)
-        schema_present = _observed_schema_present(snap)
-        payable = 1 if (live and pay_to) else 0
-        if schema_present is not None:
-            invocable = 1 if (payable and schema_present) else 0
-            invocable_known = True
-        elif live == 0:
-            invocable = 0
-            invocable_known = True
-        else:
-            invocable = 0
-            invocable_known = False
-        latency = _as_int(snap.get("latency_ms"), None)
-        miss = _text(snap.get("miss_reason"))
-        rail = _text(snap.get("rail"))
-        http_status = _as_int(snap.get("status"), None)
         batch_id = _text(snap.get("batch_id"))
-        obs_source = _text(snap.get("source")) or "402signal"
-        claimed = _claimed_blob(snap)
         with _lock:
+            if batch_id and _is_sealed_unlocked(batch_id):
+                return meta
+            _write_probe_row(dest, snap, meta)
             conn = _connect()
-            cur = conn.cursor()
-            cur.execute("SELECT last_payTo, last_amount, schema_present, payTo_changed_at, price_changed_at, schema_changed_at, last_success_402 FROM url_state WHERE url = ?", (dest,))
-            row = cur.fetchone()
-            prev_pay = _text(row[0]) if row else None
-            prev_amt = _text(row[1]) if row else None
-            prev_schema = row[2] if row else None
-            pay_changed_at = row[3] if row else None
-            price_changed_at = row[4] if row else None
-            schema_changed_at = row[5] if row else None
-            last_ok = row[6] if row else None
-            if prev_pay and pay_to and not payment.payto_equal(prev_pay, pay_to, rail):
-                pay_changed_at = ts
-                meta["payTo_flipped"] = True
-            claimed_pay = _text(claimed.get("payTo")) if claimed else None
-            claimed_rail = _text(claimed.get("rail")) if claimed else None
-            if claimed_pay and pay_to and not payment.payto_equal(
-                claimed_pay, pay_to, claimed_rail or rail
-            ):
-                meta["payTo_flipped"] = True
-            if prev_amt is not None and amount is not None and _price_flipped(prev_amt, amount, snap, rail):
-                price_changed_at = ts
-                meta["price_flipped"] = True
-            if prev_schema is not None and schema_present is not None and int(prev_schema) != int(schema_present):
-                schema_changed_at = ts
-                meta["schema_flipped"] = True
-            last_pay = pay_to if pay_to else prev_pay
-            last_amt = amount if amount is not None else prev_amt
-            last_schema = int(schema_present) if schema_present is not None else prev_schema
-            if live:
-                last_ok = ts
-            cur.execute(
-                "INSERT INTO probes (url, ts, live, payable, invocable, latency_ms, payTo, amount, miss_reason, rail, schema_present) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (dest, ts, live, payable, invocable, latency, pay_to, amount, miss, rail, schema_present),
-            )
-            probe_id = cur.lastrowid
-            obs_fields = {
-                "live": live,
-                "payable": payable,
-                "latency_ms": latency,
-                "payTo": pay_to,
-                "amount": amount,
-                "http_status": http_status,
-                "schema_present": schema_present,
-            }
-            if invocable_known:
-                obs_fields["invocable"] = invocable
-            _write_observed(
-                cur,
-                probe_id=probe_id,
-                batch_id=batch_id,
-                source=obs_source,
-                rail=rail,
-                url=dest,
-                ts=ts,
-                fields=obs_fields,
-            )
-            if claimed:
-                _write_claimed(
-                    cur,
-                    probe_id=probe_id,
-                    batch_id=batch_id,
-                    source=claimed.get("source") or obs_source,
-                    rail=claimed.get("rail") or rail,
-                    url=dest,
-                    ts=ts,
-                    fields=claimed,
-                )
-            cur.execute(
-                """
-                INSERT INTO url_state (url, last_payTo, last_amount, schema_present, payTo_changed_at, price_changed_at, schema_changed_at, last_checked, last_success_402)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(url) DO UPDATE SET
-                    last_payTo = excluded.last_payTo,
-                    last_amount = excluded.last_amount,
-                    schema_present = excluded.schema_present,
-                    payTo_changed_at = excluded.payTo_changed_at,
-                    price_changed_at = excluded.price_changed_at,
-                    schema_changed_at = excluded.schema_changed_at,
-                    last_checked = excluded.last_checked,
-                    last_success_402 = excluded.last_success_402
-                """,
-                (dest, last_pay, last_amt, last_schema, pay_changed_at, price_changed_at, schema_changed_at, ts, last_ok),
-            )
-            cur.execute(
-                "SELECT id FROM probes WHERE url = ? ORDER BY ts DESC, id DESC",
-                (dest,),
-            )
-            ids = [r[0] for r in cur.fetchall()]
-            if len(ids) > PER_URL_CAP:
-                _delete_probes_and_obs(cur, ids[PER_URL_CAP:])
-            cur.execute("SELECT COUNT(*) FROM probes")
-            n = int(cur.fetchone()[0] or 0)
-            if n > GLOBAL_CAP:
-                drop = n - GLOBAL_CAP
-                cur.execute(
-                    "SELECT id FROM probes ORDER BY ts ASC, id ASC LIMIT ?",
-                    (drop,),
-                )
-                _delete_probes_and_obs(cur, [r[0] for r in cur.fetchall()])
-            _cap_observations(cur, dest)
             conn.commit()
             _chmod_db_files(_conn_path or db_path())
         return meta
     except Exception:
         return meta
+
+
+def persist_route_batch(batch_id: str | None, results: list | None) -> None:
+    """Coordinator: write accepted route observations, then seal. Never raises.
+
+    Stragglers that later call record_probe with this batch_id are ignored.
+    """
+    try:
+        bid = _ok_batch_id(batch_id)
+        if not bid:
+            return
+        rows = []
+        for raw in results or []:
+            if not isinstance(raw, dict):
+                continue
+            dest = _text(raw.get("url"))
+            if not dest:
+                continue
+            rows.append(raw)
+        with _lock:
+            if _is_sealed_unlocked(bid):
+                return
+            for raw in rows:
+                snap = dict(raw)
+                snap["batch_id"] = bid
+                dest = _text(snap.get("url"))
+                meta = {"payTo_flipped": False, "price_flipped": False, "schema_flipped": False}
+                _write_probe_row(dest, snap, meta)
+            _seal_unlocked(bid)
+            conn = _connect()
+            conn.commit()
+            _chmod_db_files(_conn_path or db_path())
+    except Exception:
+        return
 
 
 def record_claim(url: str, fields: dict | None = None, *, source=None, rail=None, ts=None, batch_id=None) -> None:
@@ -1103,62 +1197,77 @@ def hash_canonical(canonical: str) -> str:
     return hashlib.sha256((canonical or "").encode("utf-8")).hexdigest()
 
 
-def _batch_rows(batch_id: str) -> list[dict]:
-    with _lock:
-        conn = _connect()
-        cur = conn.cursor()
-        cur.execute(
-            """
-            SELECT url, field, value, ts
-            FROM observations
-            WHERE batch_id = ? AND source_type = ?
-            ORDER BY url, field, ts, id
-            """,
-            (batch_id, SOURCE_OBSERVED),
-        )
-        fetched = cur.fetchall()
+def _batch_rows_unlocked(batch_id: str) -> list[dict]:
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT url, field, value, ts
+        FROM observations
+        WHERE batch_id = ? AND source_type = ?
+        ORDER BY url, field, ts, id
+        """,
+        (batch_id, SOURCE_OBSERVED),
+    )
     out = []
-    for url, field, value, ts in fetched:
+    for url, field, value, ts in cur.fetchall():
         out.append({"url": url, "field": field, "value": value, "ts": ts})
     return out
+
+
+def _batch_rows(batch_id: str) -> list[dict]:
+    with _lock:
+        return _batch_rows_unlocked(batch_id)
+
+
+def _latest_batch_id_unlocked() -> str | None:
+    conn = _connect()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT batch_id, MAX(ts) AS latest
+        FROM observations
+        WHERE source_type = ? AND batch_id IS NOT NULL AND batch_id != ''
+        GROUP BY batch_id
+        ORDER BY latest DESC, batch_id DESC
+        LIMIT 1
+        """,
+        (SOURCE_OBSERVED,),
+    )
+    row = cur.fetchone()
+    if not row or not row[0]:
+        return None
+    return _ok_batch_id(row[0])
 
 
 def latest_batch_id() -> str | None:
     try:
         with _lock:
-            conn = _connect()
-            cur = conn.cursor()
-            cur.execute(
-                """
-                SELECT batch_id, MAX(ts) AS latest
-                FROM observations
-                WHERE source_type = ? AND batch_id IS NOT NULL AND batch_id != ''
-                GROUP BY batch_id
-                ORDER BY latest DESC, batch_id DESC
-                LIMIT 1
-                """,
-                (SOURCE_OBSERVED,),
-            )
-            row = cur.fetchone()
-        if not row or not row[0]:
-            return None
-        return _ok_batch_id(row[0])
+            return _latest_batch_id_unlocked()
     except Exception:
         return None
 
 
 def attestation_for(batch_id: str | None = None) -> dict | None:
-    """Public hash of a 402signal_observed probe batch. Fail closed. Never on-chain."""
+    """Public hash of a 402signal_observed probe batch. Fail closed. Never on-chain.
+
+    Computing the hash seals the batch so later writes cannot change it.
+    """
     try:
-        bid = _ok_batch_id(batch_id) if batch_id else latest_batch_id()
-        if not bid:
-            return None
-        rows = _batch_rows(bid)
-        if not rows:
-            return None
-        canonical = canonical_observation_rows(rows)
-        digest = hash_canonical(canonical)
-        created = _iso_ts(min(int(r["ts"]) for r in rows if r.get("ts") is not None))
+        with _lock:
+            bid = _ok_batch_id(batch_id) if batch_id else _latest_batch_id_unlocked()
+            if not bid:
+                return None
+            rows = _batch_rows_unlocked(bid)
+            if not rows:
+                return None
+            canonical = canonical_observation_rows(rows)
+            digest = hash_canonical(canonical)
+            created = _iso_ts(min(int(r["ts"]) for r in rows if r.get("ts") is not None))
+            _seal_unlocked(bid)
+            conn = _connect()
+            conn.commit()
+            _chmod_db_files(_conn_path or db_path())
         return {
             "batch_id": bid,
             "created_at": created,
