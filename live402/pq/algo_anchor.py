@@ -8,9 +8,12 @@ Falcon signing goes through the 6PN client (pq-anchor/1). This module
 does not load a Falcon SK. send_forbidden() always raises.
 
 TestNet submit of a signer-approved SignedTxn is gated on
-LIVE402_PQ_FALCON_BROADCAST=1 (default unset). Fixture mode and CI
-never hit live algod unless a send/fetch hook is injected. MainNet
-genesis has no submit path.
+LIVE402_PQ_FALCON_BROADCAST=1. That env lives on this 402signal
+router (default unset). 402security must GO before anyone sets it
+to 1. The isolated signer never reads BROADCAST and never POSTs.
+Falcon SK must never live here. Fixture mode and CI never hit live
+algod unless a send/fetch hook is injected. MainNet genesis has no
+submit path.
 """
 
 from __future__ import annotations
@@ -54,6 +57,8 @@ NETWORK_ENV = "LIVE402_PQ_FALCON_NETWORK"
 BROADCAST_ENV = "LIVE402_PQ_FALCON_BROADCAST"
 ADDRESS_ENV = "LIVE402_PQ_FALCON_ADDRESS"
 PQSIG_MARKER = "present"
+PQSIG_SCHEME_F1 = "f1"
+_EXCLUSIVE_SIG_KEYS = frozenset({"sig", "multisig", "logicsig", "msig", "lsig"})
 _TXID_RE = re.compile(r"^[A-Z2-7]{52}$")
 _PLACEHOLDER_TXID = frozenset({"", "your_txid", "placeholder", "txid", "none", "null"})
 
@@ -336,9 +341,10 @@ def submit_allowed(
 ) -> bool:
     """True only when every TestNet submit gate is set.
 
-    Requires LIVE402_PQ_FALCON_NETWORK=testnet, BROADCAST=1, a public
-    address, and testnet-v1.0 genesis (MainNet genesis is rejected).
-    A recovered SignedTxn does not need a live signer callback.
+    Requires LIVE402_PQ_FALCON_NETWORK=testnet, router BROADCAST=1, a
+    public address, and testnet-v1.0 genesis (MainNet genesis is
+    rejected). A recovered SignedTxn does not need a live signer
+    callback. Signer never reads BROADCAST.
     """
     gen = txn_genesis_id(txn, params)
     if gen == MAINNET_GENESIS_ID or gen != TESTNET_GENESIS_ID:
@@ -553,47 +559,105 @@ def _nonzero_blob(val) -> bool:
     return True
 
 
-def _extract_pq_auth(obj: dict):
-    """Falcon/PQ authorization bytes from a chain object.
+def _field_bytes_or_empty(val) -> bytes:
+    if val is None or val == "":
+        return b""
+    if isinstance(val, (bytes, bytearray)):
+        return bytes(val)
+    return _b64(val)
 
-    The signer reply marker pqsig="present" is not authorization and
-    is never treated as transaction bytes on the chain object.
+
+def _parse_pqsig_envelope(raw):
+    """Official Algorand pqsig envelope. Codec {sch,slt,pk,sig} or indexer REST.
+
+    sch/scheme must be exactly f1 (Falcon-1024). slt/salt if present is
+    0-255. pk/public-key and sig/signature must be non-empty bytes.
+    Fail closed on missing, empty, f5, or any other scheme. A bare
+    blob (including signature.falcon) is not an envelope.
+    """
+    if not isinstance(raw, dict):
+        return None
+    if raw.get("pqsig") == PQSIG_MARKER or raw == PQSIG_MARKER:
+        return None
+    sch = raw.get("sch") if "sch" in raw else raw.get("scheme")
+    if sch is None:
+        return None
+    scheme = str(sch).strip()
+    if scheme != PQSIG_SCHEME_F1:
+        return None
+    slt = raw.get("slt") if "slt" in raw else raw.get("salt")
+    if slt is not None and slt != "":
+        try:
+            salt = int(slt)
+        except (TypeError, ValueError):
+            return None
+        if salt < 0 or salt > 255:
+            return None
+    pk = _field_bytes_or_empty(raw.get("pk") if "pk" in raw else raw.get("public-key"))
+    sig = _field_bytes_or_empty(raw.get("sig") if "sig" in raw else raw.get("signature"))
+    if not pk or not sig:
+        return None
+    if pk == PQSIG_MARKER.encode("utf-8") or sig == PQSIG_MARKER.encode("utf-8"):
+        return None
+    return bytes(sig)
+
+
+def _sig_type_value(obj: dict) -> str:
+    for key in ("sig-type", "sigType", "signature-type"):
+        if key in obj and obj.get(key) is not None and obj.get(key) != "":
+            return str(obj.get(key)).strip()
+    return ""
+
+
+def _exclusive_sig_present(sig: dict) -> bool:
+    for key in _EXCLUSIVE_SIG_KEYS:
+        if key not in sig:
+            continue
+        val = sig.get(key)
+        if val in (None, "", {}, []):
+            continue
+        if isinstance(val, (bytes, bytearray)) and not val:
+            continue
+        return True
+    return False
+
+
+def _pq_auth_from_obj(obj: dict):
+    """Positive PQ/Falcon authorization from an official pqsig envelope.
+
+    Accepts consensus SignedTxn codec tags (pqsig.{sch,slt,pk,sig}) and
+    indexer REST TransactionSignaturePQsig (signature.pqsig with
+    scheme/salt/public-key/signature). sch/scheme must be f1.
+
+    Fail closed: signature.falcon blobs, Ed25519 signature.sig, missing
+    pqsig, empty/other scheme (including f5), missing pk/sig, the 6PN
+    marker pqsig="present", and StateProof falcon-signature. Confirmed
+    chain inclusion is trusted; this does not re-implement Falcon verify.
     """
     if not isinstance(obj, dict):
         return None
-    # Signer reply shape is not a chain object.
-    if obj.get("pqsig") == PQSIG_MARKER and "signed" in obj:
+    if obj.get("pqsig") == PQSIG_MARKER:
         return None
-    candidates = []
+    sig_type = _sig_type_value(obj)
+    if sig_type and sig_type != "pqsig":
+        return None
     sig = obj.get("signature")
     if isinstance(sig, dict):
-        for key in ("falcon", "falconsig", "pqsig", "pq", "fsig"):
-            if key in sig:
-                candidates.append(sig.get(key))
-    for key in ("falcon", "falconsig", "pqsig", "fsig"):
-        if key in obj:
-            candidates.append(obj.get(key))
-    inner = obj.get("txn")
-    if isinstance(inner, dict):
-        for key in ("falcon", "falconsig", "pqsig", "fsig"):
-            if key in inner:
-                candidates.append(inner.get(key))
-        nested_sig = inner.get("signature")
-        if isinstance(nested_sig, dict):
-            for key in ("falcon", "falconsig", "pqsig", "pq", "fsig"):
-                if key in nested_sig:
-                    candidates.append(nested_sig.get(key))
-    for raw in candidates:
-        if raw is None or raw == "":
-            continue
-        if raw == PQSIG_MARKER or raw == PQSIG_MARKER.encode("utf-8"):
-            continue
-        blob = _b64(raw) if not isinstance(raw, (bytes, bytearray)) else bytes(raw)
-        if blob == PQSIG_MARKER.encode("utf-8"):
-            continue
-        if len(blob) < 8:
-            continue
-        return blob
+        if "falcon-signature" in sig or "falcon" in sig or "falconsig" in sig:
+            if "pqsig" not in sig:
+                return None
+        pq = sig.get("pqsig")
+        if pq is not None:
+            if _exclusive_sig_present(sig):
+                return None
+            parsed = _parse_pqsig_envelope(pq)
+            return parsed
+        if _exclusive_sig_present(sig):
+            return None
+        return None
+    raw = obj.get("pqsig")
+    if raw is not None:
+        return _parse_pqsig_envelope(raw)
     return None
 
 
@@ -691,11 +755,13 @@ def decode_chain_txn(obj) -> dict:
     rekey = unsigned.get("rekey-to") or unsigned.get("rekey")
     group = unsigned.get("group") or unsigned.get("grp")
     lease = unsigned.get("lease") or unsigned.get("lx")
-    pq_auth = _extract_pq_auth(obj)
+    pq_auth = _pq_auth_from_obj(obj)
     if pq_auth is None and pending is not None:
-        pq_auth = _extract_pq_auth(pending)
+        pq_auth = _pq_auth_from_obj(pending)
     if pq_auth is None and txn is not None:
-        pq_auth = _extract_pq_auth(txn)
+        pq_auth = _pq_auth_from_obj(txn)
+    if pq_auth is None and isinstance(envelope, dict) and envelope is not obj:
+        pq_auth = _pq_auth_from_obj(envelope)
     return {
         "txid": txid,
         "confirmed_round": confirmed_round,

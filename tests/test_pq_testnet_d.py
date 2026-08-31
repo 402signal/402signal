@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import inspect
 import json
 import os
 import socket
@@ -11,11 +12,12 @@ import threading
 import unittest
 from http.client import HTTPConnection
 from http.server import ThreadingHTTPServer
+from pathlib import Path
 from unittest.mock import patch
 
 os.environ.setdefault("LIVE402_FIXTURE", "1")
 
-from live402 import payment
+from live402 import catalog, payment
 from live402.pq import ORIGIN, algo_anchor, store, worker
 from live402.pq import checkpoint as ckpt
 from live402.server import Handler
@@ -31,6 +33,29 @@ _SIG_NOTE = "%s\n%s %s %s\n" % (
 )
 _SIGNED = b"STXN-authorized-A" + bytes(range(24))
 _FALCON_AUTH = b"FALCON-PQ-AUTH" + bytes(range(48))
+_FALCON_PK = b"FALCON-PK" + bytes(range(24))
+
+
+def _indexer_pqsig(*, scheme="f1", salt=0, pk=_FALCON_PK, sig=_FALCON_AUTH):
+    env = {"scheme": scheme}
+    if salt is not None:
+        env["salt"] = salt
+    if pk is not None:
+        env["public-key"] = base64.b64encode(bytes(pk)).decode("ascii") if isinstance(pk, (bytes, bytearray)) else pk
+    if sig is not None:
+        env["signature"] = base64.b64encode(bytes(sig)).decode("ascii") if isinstance(sig, (bytes, bytearray)) else sig
+    return env
+
+
+def _codec_pqsig(*, sch="f1", slt=0, pk=_FALCON_PK, sig=_FALCON_AUTH):
+    env = {"sch": sch}
+    if slt is not None:
+        env["slt"] = slt
+    if pk is not None:
+        env["pk"] = base64.b64encode(bytes(pk)).decode("ascii") if isinstance(pk, (bytes, bytearray)) else pk
+    if sig is not None:
+        env["sig"] = base64.b64encode(bytes(sig)).decode("ascii") if isinstance(sig, (bytes, bytearray)) else sig
+    return env
 
 
 def _reply(signed):
@@ -63,6 +88,8 @@ def _indexer_payload(
     lease="",
     pq_auth=_FALCON_AUTH,
     extra=None,
+    signature=None,
+    sig_type="pqsig",
 ):
     addr = sender or payment.DEFAULT_PAYTO_ALGORAND
     rcv = receiver if receiver is not None else addr
@@ -70,6 +97,8 @@ def _indexer_payload(
         store.append(b"one") if store.size() < 1 else None
         root = store.root(1)
         note = algo_anchor.encode_note(ORIGIN, 1, root)
+    if signature is None:
+        signature = {"pqsig": _indexer_pqsig(sig=bytes(pq_auth))}
     payload = {
         "current-round": confirmed_round + 1,
         "transaction": {
@@ -88,9 +117,8 @@ def _indexer_payload(
             "rekey-to": rekey,
             "group": group,
             "lease": lease,
-            "signature": {
-                "falcon": base64.b64encode(bytes(pq_auth)).decode("ascii"),
-            },
+            "signature": signature,
+            "sig-type": sig_type,
         },
     }
     if extra:
@@ -245,6 +273,20 @@ class TestNetDPlumbingTests(unittest.TestCase):
         self.assertNotEqual(posted[0], b"present")
         self.assertEqual(worker.last_confirmed()["size"], 0)
         self.assertIsNone(worker.public_anchor())
+        auth = worker.last_authorized()
+        self.assertTrue(auth["submitted"])
+        self.assertEqual(auth["txid"], _TXID)
+        again = worker.maybe_submit(
+            None,
+            self.sender,
+            {"genesisID": algo_anchor.TESTNET_GENESIS_ID},
+            now=15 * 60,
+            send_fn=send_fn,
+        )
+        self.assertTrue(again["submitted"])
+        self.assertEqual(again["txid"], _TXID)
+        self.assertEqual(posted, [_SIGNED])
+        self.assertEqual(worker.last_confirmed()["size"], 0)
 
     def test_fixture_without_mock_never_hits_live_algod(self):
         os.environ["LIVE402_PQ_FALCON_NETWORK"] = "testnet"
@@ -419,6 +461,142 @@ class TestNetDPlumbingTests(unittest.TestCase):
                 params={"genesisID": algo_anchor.TESTNET_GENESIS_ID},
             )
         )
+
+    def test_official_indexer_pqsig_f1_confirms(self):
+        self._seed_authorized()
+        note = algo_anchor.encode_note(ORIGIN, 1, store.root(1))
+        payload = _indexer_payload(note=note)
+        self.assertEqual(payload["transaction"]["signature"]["pqsig"]["scheme"], "f1")
+        out = worker.confirm_testnet_anchor(_TXID, fetch_fn=lambda _t: payload, at=50)
+        self.assertEqual(out["txid"], _TXID)
+        self.assertEqual(worker.last_confirmed()["txid"], _TXID)
+
+    def test_official_codec_pqsig_f1_confirms(self):
+        self._seed_authorized()
+        note = algo_anchor.encode_note(ORIGIN, 1, store.root(1))
+        addr = self.sender
+        payload = {
+            "id": _TXID,
+            "confirmed-round": 99,
+            "txn": {
+                "type": "pay",
+                "snd": addr,
+                "rcv": addr,
+                "amt": 0,
+                "fee": 3000,
+                "gen": algo_anchor.TESTNET_GENESIS_ID,
+                "note": base64.b64encode(note).decode("ascii"),
+            },
+            "pqsig": _codec_pqsig(),
+        }
+        out = worker.confirm_testnet_anchor(_TXID, fetch_fn=lambda _t: payload, at=50)
+        self.assertEqual(out["txid"], _TXID)
+        self.assertEqual(worker.public_anchor()["txid"], _TXID)
+
+    def test_pq_auth_rejects_non_official_envelopes(self):
+        self._seed_authorized()
+        note = algo_anchor.encode_note(ORIGIN, 1, store.root(1))
+        cases = [
+            _indexer_payload(
+                note=note,
+                signature={"falcon": base64.b64encode(_FALCON_AUTH).decode("ascii")},
+            ),
+            _indexer_payload(
+                note=note,
+                signature={"sig": base64.b64encode(b"\x11" * 64).decode("ascii")},
+                sig_type="sig",
+            ),
+            _indexer_payload(note=note, signature={}),
+            _indexer_payload(note=note, signature={"pqsig": _indexer_pqsig(scheme="")}),
+            _indexer_payload(note=note, signature={"pqsig": _indexer_pqsig(scheme="f5")}),
+            _indexer_payload(note=note, signature={"pqsig": _indexer_pqsig(pk=None, sig=_FALCON_AUTH)}),
+            _indexer_payload(note=note, signature={"pqsig": _indexer_pqsig(pk=_FALCON_PK, sig=None)}),
+            _indexer_payload(note=note, signature={"pqsig": _indexer_pqsig(pk=b"", sig=_FALCON_AUTH)}),
+            _indexer_payload(note=note, signature={"pqsig": "present"}),
+        ]
+        for payload in cases:
+            with self.assertRaises(algo_anchor.AnchorError):
+                worker.confirm_testnet_anchor(_TXID, fetch_fn=lambda _t, p=payload: p)
+            self.assertEqual(worker.last_confirmed()["size"], 0)
+
+    def test_tick_confirms_only_after_independent_fetch(self):
+        os.environ["LIVE402_PQ_FALCON_NETWORK"] = "testnet"
+        os.environ["LIVE402_PQ_FALCON_BROADCAST"] = "1"
+        self._seed_authorized()
+        posted = []
+
+        def send_fn(blob):
+            posted.append(blob)
+            return _TXID
+
+        note = algo_anchor.encode_note(ORIGIN, 1, store.root(1))
+        fetched = []
+
+        def fetch(txid):
+            fetched.append(txid)
+            return _indexer_payload(note=note)
+
+        out = worker.tick(
+            None,
+            self.sender,
+            {"genesisID": algo_anchor.TESTNET_GENESIS_ID},
+            now=15 * 60,
+            send_fn=send_fn,
+            fetch_fn=fetch,
+        )
+        self.assertEqual(posted, [_SIGNED])
+        self.assertEqual(fetched, [_TXID])
+        self.assertEqual(out["txid"], _TXID)
+        self.assertEqual(worker.last_confirmed()["txid"], _TXID)
+        worker.tick(
+            None,
+            self.sender,
+            {"genesisID": algo_anchor.TESTNET_GENESIS_ID},
+            now=15 * 60,
+            send_fn=send_fn,
+            fetch_fn=fetch,
+        )
+        self.assertEqual(posted, [_SIGNED])
+        self.assertEqual(fetched, [_TXID])
+
+    def test_tick_does_not_confirm_from_post_alone(self):
+        os.environ["LIVE402_PQ_FALCON_NETWORK"] = "testnet"
+        os.environ["LIVE402_PQ_FALCON_BROADCAST"] = "1"
+        self._seed_authorized()
+        out = worker.tick(
+            None,
+            self.sender,
+            {"genesisID": algo_anchor.TESTNET_GENESIS_ID},
+            now=15 * 60,
+            send_fn=lambda _b: _TXID,
+            fetch_fn=lambda _t: None,
+        )
+        self.assertIsNone(out)
+        self.assertTrue(worker.last_authorized()["submitted"])
+        self.assertEqual(worker.last_authorized()["txid"], _TXID)
+        self.assertEqual(worker.last_confirmed()["size"], 0)
+        self.assertIsNone(worker.public_anchor())
+
+    def test_production_loop_calls_existing_tick(self):
+        src = inspect.getsource(catalog._trickle_loop)
+        self.assertIn("pq_worker.tick", src)
+        self.assertIn("confirm_testnet_anchor", inspect.getsource(worker.tick))
+        self.assertIn("start_refresher", inspect.getsource(__import__("live402.server", fromlist=["main"]).main))
+
+    def test_broadcast_copy_is_router_env(self):
+        readme = Path(__file__).resolve().parent.parent.joinpath("README.md").read_text(encoding="utf-8")
+        self.assertNotIn("Not set on 402signal", readme)
+        self.assertIn("402signal (router) env", readme)
+        self.assertIn("402security must GO before anyone sets it to `1`", readme)
+        self.assertIn("Signer never reads BROADCAST", readme)
+        self.assertNotIn("lives on the signer", readme.lower())
+        comments = (
+            inspect.getsource(algo_anchor)
+            + inspect.getsource(worker)
+            + Path(__file__).resolve().parent.parent.joinpath("live402", "discover.py").read_text(encoding="utf-8")
+        )
+        self.assertNotIn("Not set on 402signal", comments)
+        self.assertNotIn("lives on the signer", comments.lower())
 
 
 class HomepagePqSectionTests(unittest.TestCase):

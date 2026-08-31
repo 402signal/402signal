@@ -635,6 +635,7 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
     boot_http_process()
     httpd = ThreadingHTTPServer((args.host, args.port), Handler)
+    # Existing production loop (catalog trickle + PQ tick / confirm).
     catalog.start_refresher()
     print(
         "402Signal http://%s:%s  fixture=%r local_free=%r"

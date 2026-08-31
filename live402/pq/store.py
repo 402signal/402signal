@@ -79,7 +79,9 @@ CREATE TABLE IF NOT EXISTS authorized_anchors (
     checkpoint TEXT NOT NULL,
     request_id TEXT NOT NULL,
     signed BLOB NOT NULL,
-    at INTEGER NOT NULL
+    at INTEGER NOT NULL,
+    submitted INTEGER NOT NULL DEFAULT 0,
+    txid TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS confirmed_anchors (
     tree_size INTEGER PRIMARY KEY,
@@ -140,6 +142,7 @@ def _connect() -> sqlite3.Connection:
     _chmod_db_files(path)
     _ensure_meta(conn)
     _migrate_authorized_confirmed(conn)
+    _migrate_authorized_submit(conn)
     try:
         have = _size_unlocked(conn)
         if have and not _ready_unlocked(conn, have):
@@ -193,6 +196,20 @@ def _migrate_authorized_confirmed(conn: sqlite3.Connection) -> None:
                 "ON CONFLICT(k) DO UPDATE SET v = excluded.v",
                 (json.dumps(payload),),
             )
+    conn.commit()
+
+
+def _migrate_authorized_submit(conn: sqlite3.Connection) -> None:
+    """Add submitted + txid on authorized_anchors. POST success is not confirmed."""
+    cols = {str(row[1]) for row in conn.execute("PRAGMA table_info(authorized_anchors)")}
+    if "submitted" not in cols:
+        conn.execute(
+            "ALTER TABLE authorized_anchors ADD COLUMN submitted INTEGER NOT NULL DEFAULT 0"
+        )
+    if "txid" not in cols:
+        conn.execute(
+            "ALTER TABLE authorized_anchors ADD COLUMN txid TEXT NOT NULL DEFAULT ''"
+        )
     conn.commit()
 
 
@@ -517,8 +534,8 @@ def checkpoint_at(tree_size: int) -> str:
 
 def _authorized_row(conn: sqlite3.Connection, tree_size: int) -> dict | None:
     cur = conn.execute(
-        "SELECT tree_size, origin, root, checkpoint, request_id, signed, at "
-        "FROM authorized_anchors WHERE tree_size = ?",
+        "SELECT tree_size, origin, root, checkpoint, request_id, signed, at, "
+        "submitted, txid FROM authorized_anchors WHERE tree_size = ?",
         (int(tree_size),),
     )
     row = cur.fetchone()
@@ -533,6 +550,8 @@ def _authorized_row(conn: sqlite3.Connection, tree_size: int) -> dict | None:
         "request_id": str(row[4] or ""),
         "signed": bytes(row[5]) if row[5] is not None else b"",
         "at": int(row[6] or 0),
+        "submitted": bool(int(row[7] or 0)),
+        "txid": str(row[8] or ""),
     }
 
 
@@ -558,6 +577,8 @@ def last_authorized_checkpoint() -> dict:
         "request_id": str(data.get("request_id") or ""),
         "origin": str(data.get("origin") or ""),
         "root": str(data.get("root") or ""),
+        "submitted": False,
+        "txid": "",
     }
     if size:
         row = authorized_at(size)
@@ -571,6 +592,8 @@ def last_authorized_checkpoint() -> dict:
                     "signed": row["signed"],
                     "at": row["at"] or out["at"],
                     "tree_size": row["tree_size"],
+                    "submitted": bool(row.get("submitted")),
+                    "txid": str(row.get("txid") or ""),
                 }
             )
     return out
@@ -585,20 +608,32 @@ def save_authorized_checkpoint(
     request_id: str,
     signed: bytes,
     at: int,
+    submitted: bool = False,
+    txid: str = "",
 ) -> dict:
-    """Persist AUTHORIZED only. Same checkpoint is idempotent. Different checkpoint refused."""
+    """Persist AUTHORIZED only. Same checkpoint is idempotent. Different checkpoint refused.
+
+    submitted + txid record a POST attempt. POST success is not confirmation.
+    """
     size = int(tree_size)
     root_hex = bytes(root).hex() if isinstance(root, (bytes, bytearray)) else str(root or "")
     blob = bytes(signed or b"")
     note = checkpoint if checkpoint is not None else ""
     rid = request_id if request_id is not None else ""
     when = int(at)
+    want_submitted = bool(submitted)
+    want_txid = str(txid or "").strip()
     with _lock:
         conn = _connect()
         existing = _authorized_row(conn, size)
         if existing and existing["signed"]:
             if existing["checkpoint"] != note or (existing["root"] and root_hex and existing["root"] != root_hex):
                 return existing
+            if want_submitted and want_txid:
+                conn.execute(
+                    "UPDATE authorized_anchors SET submitted = 1, txid = ? WHERE tree_size = ?",
+                    (want_txid, size),
+                )
             payload = {
                 "size": existing["tree_size"],
                 "at": existing["at"],
@@ -612,12 +647,22 @@ def save_authorized_checkpoint(
                 (json.dumps(payload),),
             )
             conn.commit()
-            return existing
+            return _authorized_row(conn, size) or existing
         conn.execute(
             "INSERT OR REPLACE INTO authorized_anchors"
-            "(tree_size, origin, root, checkpoint, request_id, signed, at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (size, origin or "", root_hex, note, rid, blob, when),
+            "(tree_size, origin, root, checkpoint, request_id, signed, at, submitted, txid) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                size,
+                origin or "",
+                root_hex,
+                note,
+                rid,
+                blob,
+                when,
+                1 if want_submitted else 0,
+                want_txid,
+            ),
         )
         payload = {
             "size": size,
@@ -642,6 +687,8 @@ def save_authorized_checkpoint(
             "request_id": rid,
             "signed": blob,
             "at": when,
+            "submitted": want_submitted,
+            "txid": want_txid,
         }
 
 

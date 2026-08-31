@@ -13,10 +13,13 @@ stays retryable. Recover only if size+origin+root+signed-note match.
 Mismatch fail-closes: no re-dial, no old SignedTxn, no overwrite.
 
 TestNet submit of the signer-approved SignedTxn is gated on
-LIVE402_PQ_FALCON_BROADCAST=1 (default unset). Signing or POST success
-never marks confirmed. confirm_testnet_anchor independently GETs the
-txn from the pinned TestNet indexer/algod, decodes, verifies, then
-persists last_confirmed.
+LIVE402_PQ_FALCON_BROADCAST=1. That env lives on this 402signal
+router (default unset). 402security must GO before anyone sets it
+to 1. The isolated signer never reads BROADCAST and never POSTs.
+Signing or POST success never marks confirmed. Recovered records
+with submitted=True and a real txid skip POST. tick() independently
+GETs the TestNet indexer after a real submitted txid, then
+confirm_testnet_anchor decodes, verifies, and persists last_confirmed.
 """
 
 from __future__ import annotations
@@ -48,6 +51,8 @@ def last_authorized() -> dict:
         "root": str(data.get("root") or ""),
         "checkpoint": str(data.get("checkpoint") or ""),
         "signed": data.get("signed") if isinstance(data.get("signed"), (bytes, bytearray)) else b"",
+        "submitted": bool(data.get("submitted")),
+        "txid": str(data.get("txid") or ""),
     }
 
 
@@ -190,11 +195,14 @@ def _recover_authorized(size: int, origin: str, root_hex: str, note: str) -> dic
         or str(existing.get("checkpoint") or "") != str(note or "")
     ):
         raise AuthorizedConflict("authorized record does not match")
+    txid = str(existing.get("txid") or "").strip()
+    submitted = bool(existing.get("submitted")) and algo_anchor._looks_like_txid(txid)
     return {
         "tree_size": int(existing["tree_size"]),
         "signed": bytes(existing["signed"]),
         "request_id": existing.get("request_id") or "",
-        "submitted": False,
+        "submitted": submitted,
+        "txid": txid if submitted else "",
         "status": "pending",
         "authorized": True,
         "confirmed": False,
@@ -236,9 +244,40 @@ def process_one(signer_callback, sender: str, params: dict | None = None, now: i
     }
 
 
+def _persist_submitted(out: dict, txid: str) -> dict:
+    """Record POST success on the authorized row. Does not write last_confirmed."""
+    size = int(out.get("tree_size") or 0)
+    existing = store.authorized_at(size) if size else None
+    if not existing:
+        return out
+    stored = store.save_authorized_checkpoint(
+        tree_size=size,
+        origin=existing["origin"],
+        root=existing["root"],
+        checkpoint=existing["checkpoint"],
+        request_id=existing.get("request_id") or out.get("request_id") or "",
+        signed=existing["signed"],
+        at=int(existing.get("at") or 0),
+        submitted=True,
+        txid=txid,
+    )
+    updated = dict(out)
+    updated["submitted"] = True
+    updated["txid"] = str(stored.get("txid") or txid)
+    updated["confirmed"] = False
+    return updated
+
+
 def _maybe_broadcast(out: dict, *, send_fn, sender: str | None, params: dict) -> dict:
-    """POST the signer-approved SignedTxn only if BROADCAST=1. Never confirms."""
+    """POST the signer-approved SignedTxn only if BROADCAST=1. Never confirms.
+
+    If the authorized record already has submitted=True and a real txid,
+    skip POST. POST success is persisted as submitted+txid only.
+    """
     if not isinstance(out, dict):
+        return out
+    have_txid = str(out.get("txid") or "").strip()
+    if out.get("submitted") and algo_anchor._looks_like_txid(have_txid):
         return out
     blob = out.get("signed")
     if not isinstance(blob, (bytes, bytearray)) or not blob:
@@ -249,11 +288,7 @@ def _maybe_broadcast(out: dict, *, send_fn, sender: str | None, params: dict) ->
     txid = algo_anchor.send_if_allowed(bytes(blob), send_fn=send_fn, sender=addr, params=params)
     if not txid:
         return out
-    updated = dict(out)
-    updated["submitted"] = True
-    updated["txid"] = txid
-    updated["confirmed"] = False
-    return updated
+    return _persist_submitted(out, txid)
 
 
 def maybe_submit(
@@ -269,8 +304,9 @@ def maybe_submit(
     A signer reply persists AUTHORIZED (request_id + SignedTxn). Does not
     advance CONFIRMED. Exact size+origin+root+signed-note recovers the blob
     (no re-dial). Mismatch fail-closes. MainNet genesis is rejected.
-    BROADCAST=1 may POST the recovered SignedTxn; POST success is not
-    confirmation.
+    Router BROADCAST=1 may POST the recovered SignedTxn unless the
+    authorized record already has submitted=True and a real txid.
+    POST success is not confirmation.
     """
     from live402.pq import signer_client
 
@@ -389,3 +425,61 @@ def confirm_testnet_anchor(
         confirmed_round=int(verified["confirmed_round"]),
         at=when,
     )
+
+
+def maybe_confirm(fetch_fn=None, at: int | None = None) -> dict | None:
+    """Confirm only after an authorized record has a real submitted txid.
+
+    Independently GETs TestNet indexer, verify_fetched_anchor, then
+    persist last_confirmed. Never uses the POST response as inclusion.
+    Placeholder and MainNet genesis are rejected by confirm_testnet_anchor.
+    """
+    auth = last_authorized()
+    txid = str(auth.get("txid") or "").strip()
+    if not auth.get("submitted") or not algo_anchor._looks_like_txid(txid):
+        return None
+    conf = last_confirmed()
+    if str(conf.get("txid") or "") == txid and int(conf.get("size") or 0) >= 1:
+        return conf
+    try:
+        return confirm_testnet_anchor(txid, fetch_fn=fetch_fn, at=at)
+    except algo_anchor.AnchorError:
+        return None
+
+
+def tick(
+    signer_callback=None,
+    sender: str | None = None,
+    params: dict | None = None,
+    now: int | None = None,
+    send_fn=None,
+    fetch_fn=None,
+    tree_size: int | None = None,
+) -> dict | None:
+    """Existing PQ worker tick. Submit if needed, then independently confirm.
+
+    Called from the catalog trickle loop (server.main → start_refresher).
+    Does not start a second loop. POST success is not confirmation.
+    """
+    try:
+        maybe_submit(
+            signer_callback,
+            sender=sender,
+            params=params,
+            now=now,
+            send_fn=send_fn,
+            tree_size=tree_size,
+        )
+    except Exception:
+        pass
+    auth = last_authorized()
+    txid = str(auth.get("txid") or "").strip()
+    if not auth.get("submitted") or not algo_anchor._looks_like_txid(txid):
+        return None
+    conf = last_confirmed()
+    if str(conf.get("txid") or "") == txid and int(conf.get("size") or 0) >= 1:
+        return conf
+    try:
+        return confirm_testnet_anchor(txid, fetch_fn=fetch_fn, at=now)
+    except algo_anchor.AnchorError:
+        return None
