@@ -5,13 +5,14 @@ Queue unsigned checkpoint requests. Falcon signing is the 6PN client
 
 Authorized vs confirmed are separate durable records:
   AUTHORIZED — signer returned a SignedTxn (request_id + blob persisted)
-  CONFIRMED  — independently observed TestNet inclusion only
+  CONFIRMED  — persisted TestNet inclusion fields (txid/round/root)
 
 A signer reply advances AUTHORIZED only. last_anchor() / public status
 read CONFIRMED only. should_build is vs CONFIRMED, so signed-but-unbroadcast
-stays retryable. Same checkpoint is idempotent; a different checkpoint at
-the same size is not authorized. send_forbidden remains the only send path.
-This SHA has no function that POSTs a signed Falcon txn.
+stays retryable. Recover only if size+origin+root+signed-note match.
+Mismatch fail-closes: no re-dial, no old SignedTxn, no overwrite.
+send_forbidden remains the only send path. This SHA has no function
+that POSTs a signed Falcon txn.
 """
 
 from __future__ import annotations
@@ -27,6 +28,10 @@ from live402.pq import store
 _queue: list[dict] = []
 
 _PLACEHOLDER_TXID = frozenset({"", "your_txid", "placeholder", "txid", "none", "null"})
+
+
+class AuthorizedConflict(RuntimeError):
+    """Stored authorized record does not match current size/origin/root/note."""
 
 
 def last_authorized() -> dict:
@@ -129,12 +134,23 @@ def clear_queue() -> None:
     _queue.clear()
 
 
-def _recover_authorized(size: int, note: str, root_hex: str) -> dict | None:
-    """Return stored SignedTxn for this size. Never replaces a different checkpoint."""
-    del note, root_hex
-    existing = store.authorized_at(size)
+def _recover_authorized(size: int, origin: str, root_hex: str, note: str) -> dict | None:
+    """Return persisted SignedTxn only if size, origin, root, and signed-note match.
+
+    No record: None (caller may dial). Mismatch: AuthorizedConflict (fail closed).
+    """
+    existing = store.authorized_at(int(size))
     if not existing or not existing.get("signed"):
         return None
+    want_root = str(root_hex or "").strip().lower()
+    have_root = str(existing.get("root") or "").strip().lower()
+    if (
+        int(existing["tree_size"]) != int(size)
+        or str(existing.get("origin") or "") != str(origin or "")
+        or have_root != want_root
+        or str(existing.get("checkpoint") or "") != str(note or "")
+    ):
+        raise AuthorizedConflict("authorized record does not match")
     return {
         "tree_size": int(existing["tree_size"]),
         "signed": bytes(existing["signed"]),
@@ -192,8 +208,9 @@ def maybe_submit(
     """6PN client only. Token unset: never dial. Never submit a Falcon txn.
 
     A signer reply persists AUTHORIZED (request_id + SignedTxn). Does not
-    advance CONFIRMED. Same checkpoint recovers the stored blob (no re-dial).
-    MainNet genesis is rejected. send_fn is ignored (no submit path).
+    advance CONFIRMED. Exact size+origin+root+signed-note recovers the blob
+    (no re-dial). Mismatch fail-closes. MainNet genesis is rejected.
+    send_fn is ignored (no submit path).
     """
     del send_fn
     from live402.pq import signer_client
@@ -216,7 +233,10 @@ def maybe_submit(
         ckpt.parse_signed_note(note)
     except ValueError:
         return None
-    recovered = _recover_authorized(size, note, root.hex())
+    try:
+        recovered = _recover_authorized(size, origin, root.hex(), note)
+    except AuthorizedConflict:
+        return None
     if recovered:
         return recovered
     if not should_build(now=now, tree_size=tree_size):
@@ -268,30 +288,30 @@ def confirm_testnet_anchor(
     origin: str | None = None,
     at: int | None = None,
 ) -> dict:
-    """Advance CONFIRMED only after an independently observed TestNet txn.
+    """Persist CONFIRMED fields. Persistence boundary only, not a verifier.
 
-    Does not POST to algod. Rejects empty or placeholder txid. Signing
-    success is not confirmation.
+    Does not POST to algod. Does not inspect TestNet. Rejects empty or
+    placeholder txid. Signing success is not confirmation.
     """
     size = int(tree_size)
     if size < 1:
-        raise algo_anchor.AnchorError("not independently confirmed")
+        raise algo_anchor.AnchorError("invalid confirmed fields")
     text = (txid or "").strip()
     low = text.lower()
     if low in _PLACEHOLDER_TXID or "placeholder" in low or text == "YOUR_TXID":
-        raise algo_anchor.AnchorError("not independently confirmed")
+        raise algo_anchor.AnchorError("invalid confirmed fields")
     rnd = int(confirmed_round)
     if rnd < 1:
-        raise algo_anchor.AnchorError("not independently confirmed")
+        raise algo_anchor.AnchorError("invalid confirmed fields")
     if isinstance(root, (bytes, bytearray)):
         root_b = bytes(root)
     else:
         try:
             root_b = bytes.fromhex(str(root or ""))
         except ValueError as exc:
-            raise algo_anchor.AnchorError("not independently confirmed") from exc
+            raise algo_anchor.AnchorError("invalid confirmed fields") from exc
     if len(root_b) != 32:
-        raise algo_anchor.AnchorError("not independently confirmed")
+        raise algo_anchor.AnchorError("invalid confirmed fields")
     when = int(at if at is not None else time.time())
     return store.save_confirmed_checkpoint(
         tree_size=size,

@@ -9,7 +9,7 @@ optional checkpoints(size PK, note TEXT)
 
 Anchor state is split:
   last_authorized_checkpoint — signer returned a SignedTxn (not on-chain)
-  last_confirmed_checkpoint  — independently observed TestNet inclusion
+  last_confirmed_checkpoint  — persisted TestNet inclusion fields (txid/round/root)
 
 Migration: new tables authorized_anchors / confirmed_anchors and meta keys
 last_authorized_checkpoint / last_confirmed_checkpoint. Confirmed defaults

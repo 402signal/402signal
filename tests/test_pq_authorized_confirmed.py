@@ -206,12 +206,13 @@ class AuthorizedConfirmedTests(unittest.TestCase):
         self._seed_note(_NOTE_A)
         port, received = self._serve([_SIGNED_A, _SIGNED_B])
         self._arm_sign(port)
-        worker.maybe_submit(
+        first = worker.maybe_submit(
             None,
             self.sender,
             {"genesisID": algo_anchor.TESTNET_GENESIS_ID},
             now=15 * 60,
         )
+        self.assertEqual(first["signed"], _SIGNED_A)
         store.save_checkpoint(1, _NOTE_B)
         with patch("socket.create_connection", side_effect=AssertionError("must not re-dial")) as dial:
             out = worker.maybe_submit(
@@ -221,9 +222,88 @@ class AuthorizedConfirmedTests(unittest.TestCase):
                 now=15 * 60,
             )
             dial.assert_not_called()
-        self.assertEqual(out["signed"], _SIGNED_A)
-        self.assertNotEqual(out["signed"], _SIGNED_B)
+        self.assertIsNone(out)
         self.assertEqual(store.authorized_at(1)["checkpoint"], _NOTE_A)
+        self.assertEqual(store.authorized_at(1)["signed"], _SIGNED_A)
+        self.assertEqual(len(received), 1)
+
+    def test_same_checkpoint_recovers_without_redial(self):
+        self._seed_note(_NOTE_A)
+        port, received = self._serve([_SIGNED_A, _SIGNED_B])
+        self._arm_sign(port)
+        first = worker.maybe_submit(
+            None,
+            self.sender,
+            {"genesisID": algo_anchor.TESTNET_GENESIS_ID},
+            now=15 * 60,
+        )
+        root_hex = store.root(1).hex()
+        recovered = worker._recover_authorized(1, store.origin() or ORIGIN, root_hex, _NOTE_A)
+        self.assertEqual(recovered["signed"], _SIGNED_A)
+        self.assertEqual(recovered["request_id"], first["request_id"])
+        with patch("socket.create_connection", side_effect=AssertionError("must not re-dial")) as dial:
+            second = worker.maybe_submit(
+                None,
+                self.sender,
+                {"genesisID": algo_anchor.TESTNET_GENESIS_ID},
+                now=15 * 60,
+            )
+            dial.assert_not_called()
+        self.assertEqual(second["signed"], _SIGNED_A)
+        self.assertEqual(len(received), 1)
+
+    def test_same_size_different_root_fail_closed(self):
+        self._seed_note(_NOTE_A)
+        port, received = self._serve([_SIGNED_A, _SIGNED_B])
+        self._arm_sign(port)
+        worker.maybe_submit(
+            None,
+            self.sender,
+            {"genesisID": algo_anchor.TESTNET_GENESIS_ID},
+            now=15 * 60,
+        )
+        other_root = "ff" * 32
+        with self.assertRaises(worker.AuthorizedConflict):
+            worker._recover_authorized(1, store.origin() or ORIGIN, other_root, _NOTE_A)
+        with patch.object(store, "root", return_value=bytes.fromhex(other_root)):
+            with patch("socket.create_connection", side_effect=AssertionError("must not re-dial")) as dial:
+                out = worker.maybe_submit(
+                    None,
+                    self.sender,
+                    {"genesisID": algo_anchor.TESTNET_GENESIS_ID},
+                    now=15 * 60,
+                )
+                dial.assert_not_called()
+        self.assertIsNone(out)
+        self.assertEqual(store.authorized_at(1)["signed"], _SIGNED_A)
+        self.assertEqual(len(received), 1)
+
+    def test_same_size_different_origin_fail_closed(self):
+        self._seed_note(_NOTE_A)
+        port, received = self._serve([_SIGNED_A, _SIGNED_B])
+        self._arm_sign(port)
+        worker.maybe_submit(
+            None,
+            self.sender,
+            {"genesisID": algo_anchor.TESTNET_GENESIS_ID},
+            now=15 * 60,
+        )
+        other = "other.example/pq/log"
+        root_hex = store.root(1).hex()
+        with self.assertRaises(worker.AuthorizedConflict):
+            worker._recover_authorized(1, other, root_hex, _NOTE_A)
+        store.meta_set("origin", other)
+        with patch("socket.create_connection", side_effect=AssertionError("must not re-dial")) as dial:
+            out = worker.maybe_submit(
+                None,
+                self.sender,
+                {"genesisID": algo_anchor.TESTNET_GENESIS_ID},
+                now=15 * 60,
+            )
+            dial.assert_not_called()
+        self.assertIsNone(out)
+        self.assertEqual(store.authorized_at(1)["origin"], ORIGIN)
+        self.assertEqual(store.authorized_at(1)["signed"], _SIGNED_A)
         self.assertEqual(len(received), 1)
 
     def test_restart_preserves_authorized_not_confirmed(self):
