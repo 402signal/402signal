@@ -1,20 +1,12 @@
 # fly.toml — single app 402signal. No extra hostnames.
 # Launch later with: fly launch --ha=false
-# Do not set auto_stop on the app process; keep that one machine running.
-# This SHA declares the isolated signer as a second process group on the
-# same app. Do not fly deploy, fly scale, or set secrets from this PR.
+# Do not set auto_stop; keep one machine running.
+# Do not fly deploy, fly scale, or set secrets from this PR.
 
 app = "402signal"
 primary_region = "iad"
 
 [build]
-
-# Isolated signer process (Ross spend-GO ~$2/mo shared-cpu-1x 256MB).
-# Unsigned txn in, pqsig out. Does not serve HTTP /route. Does not load
-# the log key. Not attached to the public HTTP service. 402QA deploys later after GO.
-[processes]
-  app = "python3 -m live402 --host 0.0.0.0 --port 8080"
-  falcon = "python3 -m live402.pq.isolated_signer"
 
 [http_service]
   internal_port = 8080
@@ -32,27 +24,18 @@ primary_region = "iad"
   timeout = "5s"
 
 [[vm]]
-  processes = ["app"]
   size = "shared-cpu-1x"
-  memory = "1gb"  # Ross GO 2026-08-30; ~$5.92/mo. Do not ship 256mb for app.
-  cpus = 1
-
-# Isolated signer only. Ross spend-GO ~$2/mo. Not in [http_service].
-# Do not fly scale. Do not deploy from this PR.
-[[vm]]
-  processes = ["falcon"]
-  size = "shared-cpu-1x"
-  memory = "256mb"
+  memory = "1gb"  # Ross GO 2026-08-30; ~$5.92/mo. Do not ship 256mb.
   cpus = 1
 
 # 1GB persistent volume for probe history + catalog.sqlite + pq-log.sqlite (Ross approved ~$0.15/mo).
 # Process-local only. Do not HTTP-serve /data or sqlite files.
-# pq-log.sqlite is a separate file. App process only — falcon does not mount /data.
+# pq-log.sqlite is a separate file.
+# No extra machines in this PR. Falcon private material is not on this app.
 # Scheduled snapshots off.
 [[mounts]]
   source = "data"
   destination = "/data"
-  processes = ["app"]
 
 [env]
   LIVE402_HISTORY_DB = "/data/live402-history.sqlite"

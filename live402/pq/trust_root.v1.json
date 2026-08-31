@@ -23,7 +23,6 @@
   "witness_signed_note_type": "0x04",
   "falcon": {
     "address_env": "LIVE402_PQ_FALCON_ADDRESS",
-    "sk_env": "LIVE402_PQ_FALCON_SK",
     "network_env": "LIVE402_PQ_FALCON_NETWORK",
     "broadcast_env": "LIVE402_PQ_FALCON_BROADCAST",
     "network": "mainnet-v1.0",

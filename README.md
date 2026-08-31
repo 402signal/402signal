@@ -83,7 +83,7 @@ If the queue is empty, the refresher takes one COLD generation page.
 - Discovery: `GET /openapi.json`, `GET /mcp.json`, `GET /.well-known/x402`, `GET /.well-known/x402.json`, `GET /robots.txt`, `GET /llms.txt`, `GET /preview`, `GET /rails`. Paid `POST /route` is documented with `x-payment-info` and HTTP 402. MCP bazaar type is `mcp` + `toolName: route`.
 - `POST /validate` (also `GET /validate?url=`) is an unpaid seller probe: is this endpoint agent-ready? Only URLs already in the catalog or fixture are probed (no arbitrary public fetch). Same unpaid helper as `/route`: GET first, justified POST `{}` only, never a catalog-declared body, DNS IP-pin, fail-closed SSRF. Does not write `402signal_observed`. Not a `/route` payment bypass. Returns readiness, claimed vs observed, flags. Never a binary `healthy` flag.
 - `GET /attestation` is a public sha256 of canonical JSON of a recent `402signal_observed` probe batch (`batch_id`, `created_at`, `n`, `algo`, `hash`). Not on-chain. No signatures or keys. Optional `?batch_id=`.
-- `GET /pq/log/checkpoint` and `GET /pq/log/tile/*` are an **experimental** C2SP transparency log (tlog-checkpoint@v1.0.0 + tlog-tiles@v0.1.0). Origin `402signal.com/pq/log`. This is product-GO for the log in CI/local. It is **not** MainNet-anchored. Falcon construction is TestNet-only (`genesisID` `testnet-v1.0`); `send_forbidden` stays the default. Optional TestNet broadcast requires `LIVE402_PQ_FALCON_NETWORK=testnet` plus `LIVE402_PQ_FALCON_BROADCAST=1` and the other submit gates — never MainNet. Paid `POST /route` may include optional `pq_trust.transparency` `{status: pending|unavailable, log_origin, index, checkpoint_size, receipt}`. `pending` means a durable leaf plus a signed checkpoint. `unavailable` means the log was down (not pending). `payment_authorization.pq_native` is always false. No `/trust` page. No homepage PQ copy. Production can turn the log ON by setting Fly secret `LIVE402_PQ_LOG_SK` (never baked into git; never auto-generated on boot). 402security must GO before that Fly secret is set, before `LIVE402_PQ_FALCON_BROADCAST=1`, and before any Falcon SK is set.
+- `GET /pq/log/checkpoint` and `GET /pq/log/tile/*` are an **experimental** C2SP transparency log (tlog-checkpoint@v1.0.0 + tlog-tiles@v0.1.0). Origin `402signal.com/pq/log`. This is product-GO for the log in CI/local. It is **not** MainNet-anchored. Falcon construction is TestNet-only (`genesisID` `testnet-v1.0`); `send_forbidden` stays the default. Paid `POST /route` may include optional `pq_trust.transparency` `{status: pending|unavailable, log_origin, index, checkpoint_size, receipt}`. `pending` means a durable leaf plus a signed checkpoint. `unavailable` means the log was down (not pending). `payment_authorization.pq_native` is always false. No `/trust` page. No homepage PQ copy. Production can turn the log ON by setting Fly secret `LIVE402_PQ_LOG_SK` (never baked into git; never auto-generated on boot). 402security must GO before that Fly secret is set.
 - `POST /route` is rate-limited in memory (~60/min per IP, higher burst for Coinbase / PayAI / GoPlausible user-agents). `GET /preview` and unpaid MCP `tools/call preview` share a looser limiter (~180/min per IP, at least 2× the route cap). `GET /pulse` and `GET /rails` each have their own ~180/min per-IP limiter (same ballpark as preview, still looser than paid `/route`). `GET /health` stays unlimited `{ok:true}`. `429` when exceeded. Payment headers are redacted in logs. Responses send `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, `Strict-Transport-Security: max-age=31536000` (no includeSubDomains; www is a CNAME and Fly has no extra hostnames), and `Content-Security-Policy: default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'self'; img-src 'self' data:; base-uri 'self'; frame-ancestors 'none'`. script-src stays `'self'` (no CDN, no vendor wallet scripts). connect-src is `'self'` only; homepage Base pay POSTs `/route`. HEAD 200 on `/llms.txt` `/openapi.json` `/mcp.json` `/preview` `/rails` `/pulse`. Payment resource / OpenAPI `servers` / MCP resource are pinned to `https://402signal.com` (Host is not reflected). Probe DNS (`getaddrinfo`) times out in 2s; the TCP/TLS connection is pinned to those SSRF-checked public IPs with TLS SNI and HTTP Host set to the original hostname (re-pinned on redirects). Seller-declared catalog bodies are never POSTed; unjustified POST `{}` is skipped; required-body misses are `unsafe_to_probe`.
 
 Clients send v2 `PAYMENT-SIGNATURE` (base64 `PaymentPayload`) or v1 `X-PAYMENT`. Success/settle echo is `PAYMENT-RESPONSE`.
@@ -150,9 +150,8 @@ Base CDP calls need `CDP_API_KEY_ID` + `CDP_API_KEY_SECRET` (or `CDP_ACCESS_TOKE
 | `LIVE402_PQ_LOG_VKEY` | unset | Ed25519 log verifier key (public). Set on boot from the public half of `LIVE402_PQ_LOG_SK` when that secret loads. Never a private key. |
 | `LIVE402_PQ_LOG_SK` | unset | Optional Ed25519 log signing seed: raw 32-byte seed as hex, or PKCS8 PEM. Fly secret only — never commit, never paste into chat. If unset (or `LIVE402_PQ_LOG=0`), receipts stay `transparency.status=unavailable`. Malformed value fails closed (no random key; `/route` still serves). Boot never generates a key. Ross/402QA sets `fly secrets set LIVE402_PQ_LOG_SK=…`; 402dev never holds it. 402security must GO before this secret is set. |
 | `LIVE402_PQ_FALCON_ADDRESS` | fly.toml (public TestNet address) | Public Algorand address for Falcon anchors. Never a private key. |
-| `LIVE402_PQ_FALCON_NETWORK` | `testnet` in fly.toml | Must be `testnet` for any submit path. MainNet is rejected. |
-| `LIVE402_PQ_FALCON_BROADCAST` | unset | `1` allows the TestNet submit helper to call algod send after every other gate passes. Default remains `send_forbidden`. 402security must GO before this is set. |
-| `LIVE402_PQ_FALCON_SK` | unset | Optional det Falcon-1024 (`f1`, not NIST FN-DSA) private key: 2305-byte hex or standard base64. Fly secret only — never commit, never paste into chat. Unset = construction only. Malformed fails closed (no autogen). Ross generates the key out of band (not Pera, not the Ed25519 `LIVE402_PQ_LOG_SK` hex). 402dev never holds it. 402security must GO before this secret is set. |
+| `LIVE402_PQ_FALCON_NETWORK` | `testnet` in fly.toml | Must be `testnet` for any leftover construction path. MainNet is rejected. |
+| `LIVE402_PQ_SIGNER_TOKEN` | unset | Shared HMAC for the 6PN signer client. Unset/empty: never dial, never sign. |
 | `LIVE402_PQ_LOG` | unset | `0` forces transparency `unavailable` even if a signer is configured. |
 | `LIVE402_HOT_REFRESH_S` | `600` (clamped 300–900) | Stale-claim threshold for the information-value refresh queue |
 | `LIVE402_WARM_REFRESH_S` | `7200` (clamped 3600–10800) | WARM refresh interval (legacy due_warm helper) |
@@ -174,16 +173,11 @@ fly launch --ha=false --name 402signal --no-deploy
 fly secrets set CDP_API_KEY_ID=… CDP_API_KEY_SECRET=…
 # After 402security GO only. Ross/402QA sets these; never paste values into chat. 402dev never holds them.
 # fly secrets set LIVE402_PQ_LOG_SK=…
-# Falcon TestNet only (not MainNet). Public address + network are fly.toml [env].
-# 402security GO before BROADCAST=1 or LIVE402_PQ_FALCON_SK.
-# Ross generates Falcon-1024 out of band (not Pera, not the Ed25519 log hex).
-# fly secrets set LIVE402_PQ_FALCON_SK=…
-# LIVE402_PQ_FALCON_BROADCAST=1
 fly deploy
 fly ips list
 ```
 
-`fly.toml` sets `app = "402signal"`, `internal_port = 8080`, `auto_stop_machines = "off"`, `min_machines_running = 1` on the **app** HTTP process (shared-cpu-1x 1GB). A second process group `falcon` is the isolated signer only (`python3 -m live402.pq.isolated_signer`; unsigned txn in, pqsig out). It does not serve HTTP `/route` and does not load `LIVE402_PQ_LOG_SK`. Ross spend-GO'd that machine: **shared-cpu-1x 256MB, about $2/mo**. Do not deploy, `fly scale`, or set secrets from this PR. The app process still defaults to `send_forbidden`. TestNet broadcast still requires `LIVE402_PQ_FALCON_NETWORK=testnet`, `LIVE402_PQ_FALCON_BROADCAST=1`, and the other submit gates.
+`fly.toml` sets `app = "402signal"`, `internal_port = 8080`, `auto_stop_machines = "off"`, `min_machines_running = 1` on the **app** HTTP process (shared-cpu-1x 1GB). One app process. Do not deploy, `fly scale`, or set secrets from this PR. `send_forbidden` stays the default.
 
 ## Namecheap BasicDNS (do not change until deploy)
 
@@ -214,5 +208,5 @@ live402/algod.py    pinned algod suggestedParams for the unpaid Algorand 402 ext
 live402/data/       fixture catalog
 tests/              unittest
 Dockerfile          Python 3.12-slim, 0.0.0.0:$PORT
-fly.toml            app 402signal; HTTP app 1GB; isolated signer 256MB (~$2/mo)
+fly.toml            app 402signal, internal_port 8080, one machine
 ```

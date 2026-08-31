@@ -1,15 +1,10 @@
 """PQ1 anchor worker on the HTTP app process.
 
-Queue unsigned checkpoint requests. Build a PaymentTxn only when the SLA
-fires. Idle: do not even build an anchor if tree size is unchanged.
+Queue unsigned checkpoint requests. Falcon signing is the 6PN client
+(pq-anchor/1). LIVE402_PQ_SIGNER_TOKEN unset: never dial, never sign.
 
-send_forbidden remains the default. maybe_submit() may call algod send
-only when every TestNet gate passes (including
-LIVE402_PQ_FALCON_BROADCAST=1 plus SK/callback). Otherwise it does not
-build or send.
-
-Isolated signing is IPC to the Fly falcon process: unsigned txn in,
-pqsig out. Fail closed if that process is down (no send).
+send_forbidden remains the only send path. This SHA has no function
+that submits a signed Falcon txn. Signer constructs the PaymentTxn.
 """
 
 from __future__ import annotations
@@ -19,6 +14,7 @@ import time
 
 from live402.pq import ANCHOR_SLA_LEAVES, ANCHOR_SLA_SECONDS, ORIGIN
 from live402.pq import algo_anchor
+from live402.pq import checkpoint as ckpt
 from live402.pq import store
 
 _queue: list[dict] = []
@@ -86,7 +82,7 @@ def clear_queue() -> None:
 
 
 def process_one(signer_callback, sender: str, params: dict | None = None, now: int | None = None) -> dict | None:
-    """Build one unsigned PaymentTxn, run the isolated callback, do not submit."""
+    """Build one unsigned PaymentTxn, run an injected callback, do not submit."""
     if not _queue:
         return None
     item = _queue.pop(0)
@@ -96,6 +92,8 @@ def process_one(signer_callback, sender: str, params: dict | None = None, now: i
         return None
     note = algo_anchor.encode_note(item["origin"], size, root)
     txn = algo_anchor.build_payment_txn(sender, note, params)
+    if str(txn.get("gen") or "") == algo_anchor.MAINNET_GENESIS_ID:
+        raise algo_anchor.AnchorError("not pq1 construction")
     pqsig = algo_anchor.isolated_sign(txn, signer_callback, pk=None)
     when = int(now if now is not None else time.time())
     save_anchor(size, when)
@@ -117,33 +115,21 @@ def maybe_submit(
     send_fn=None,
     tree_size: int | None = None,
 ) -> dict | None:
-    """Build and send only if every TestNet gate passes. Else do neither.
+    """6PN client only. Token unset: never dial. Never submit a Falcon txn.
 
-    Gates: LIVE402_PQ_FALCON_NETWORK=testnet, BROADCAST=1, address set,
-    isolated callback or loaded SK, SLA should_build, tree size changed,
-    genesis testnet-v1.0 (MainNet rejected). send_fn is a mocked algod in
-    tests; fixture mode never hits a live network.
+    MainNet genesis is rejected. send_fn is ignored (no submit path).
+    Signer constructs the PaymentTxn; this process does not send fee,
+    firstValid, sender, amount, or an unsigned txn.
     """
-    addr = algo_anchor.falcon_address(sender)
+    del send_fn
+    from live402.pq import signer_client
+
+    if not signer_client.token_configured():
+        return None
     p = dict(params) if isinstance(params, dict) else {}
     gen = str(p.get("genesisID") or p.get("genesis_id") or algo_anchor.TESTNET_GENESIS_ID)
-    if gen != algo_anchor.TESTNET_GENESIS_ID:
+    if gen == algo_anchor.MAINNET_GENESIS_ID or gen != algo_anchor.TESTNET_GENESIS_ID:
         return None
-    p["genesisID"] = algo_anchor.TESTNET_GENESIS_ID
-    if not (p.get("genesisHash") or p.get("genesis_hash")):
-        p["genesisHash"] = algo_anchor.TESTNET_GENESIS_HASH
-    cb = signer_callback
-    if not callable(cb):
-        from live402.pq import isolated_signer
-
-        cb = isolated_signer.request_pqsig
-    if not algo_anchor.submit_allowed(signer_callback=cb, sender=addr, params=p):
-        return None
-    if send_fn is None:
-        from live402 import fixtures
-
-        if fixtures.fixture_mode():
-            return None
     if not should_build(now=now, tree_size=tree_size):
         return None
     size = store.size() if tree_size is None else int(tree_size)
@@ -151,25 +137,25 @@ def maybe_submit(
         return None
     origin = store.origin() or ORIGIN
     root = store.root(size)
-    note = algo_anchor.encode_note(origin, size, root)
-    txn = algo_anchor.build_payment_txn(addr, note, p)
-    if str(txn.get("gen") or "") != algo_anchor.TESTNET_GENESIS_ID:
-        return None
+    prev = last_anchor()
+    consistency = [node.hex() for node in store.consistency_path(prev["size"], size)]
+    body = ckpt.checkpoint_body(origin, size, root)
     try:
-        pqsig = algo_anchor.isolated_sign(txn, cb, pk=algo_anchor.current_falcon_sk())
+        pqsig = signer_client.request_sign(
+            origin=origin,
+            tree_size=size,
+            root=root,
+            consistency=consistency,
+            checkpoint=body,
+            now=now,
+        )
     except Exception:
-        return None
-    txid = algo_anchor.send_if_allowed(txn, pqsig, send_fn=send_fn, sender=addr)
-    if not txid:
         return None
     when = int(now if now is not None else time.time())
     save_anchor(size, when)
     return {
         "tree_size": size,
-        "note": note,
-        "txn": txn,
         "pqsig": pqsig,
-        "submitted": True,
+        "submitted": False,
         "status": "pending",
-        "txid": txid,
     }

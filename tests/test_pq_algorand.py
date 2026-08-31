@@ -202,13 +202,12 @@ class TestNetSubmitTests(unittest.TestCase):
         os.environ["LIVE402_PQ_LOG_DB"] = os.path.join(self.tmp.name, "pq-log.sqlite")
         store.reset()
         worker.clear_queue()
-        algo_anchor.configure_falcon_sk(None)
         self.sender = payment.DEFAULT_PAYTO_ALGORAND
         self._env_keys = (
             "LIVE402_PQ_FALCON_NETWORK",
             "LIVE402_PQ_FALCON_BROADCAST",
             "LIVE402_PQ_FALCON_ADDRESS",
-            "LIVE402_PQ_FALCON_SK",
+            "LIVE402_PQ_SIGNER_TOKEN",
         )
         for key in self._env_keys:
             os.environ.pop(key, None)
@@ -217,7 +216,6 @@ class TestNetSubmitTests(unittest.TestCase):
     def _cleanup(self):
         worker.clear_queue()
         store.reset()
-        algo_anchor.configure_falcon_sk(None)
         for key in self._env_keys:
             os.environ.pop(key, None)
         os.environ.pop("LIVE402_PQ_LOG_DB", None)
@@ -243,45 +241,32 @@ class TestNetSubmitTests(unittest.TestCase):
         self.assertFalse(out["submitted"])
         self.assertEqual(sent, [])
 
-    def test_testnet_broadcast_sla_size_change_submits_via_mocked_algod(self):
+    def test_testnet_broadcast_does_not_submit_in_this_sha(self):
         self._arm_testnet()
         store.append(b"one")
         worker.save_anchor(0, 0)
         sent = []
 
         def mock_send(blob):
-            self.assertIsInstance(blob, (bytes, bytearray))
-            self.assertTrue(blob)
-            sent.append(bytes(blob))
-            return "txid-fixture"
+            sent.append(blob)
+            raise AssertionError("must not send")
 
-        def callback(_unsigned):
-            return b"pqsig-testnet"
-
-        built = []
-        real_build = algo_anchor.build_payment_txn
-
-        def wrap_build(*a, **k):
-            built.append(True)
-            return real_build(*a, **k)
-
-        with patch.object(algo_anchor, "build_payment_txn", wrap_build):
-            out = worker.maybe_submit(
-                callback,
-                self.sender,
-                _testnet_params(),
-                now=15 * 60,
-                send_fn=mock_send,
+        out = worker.maybe_submit(
+            lambda _u: b"pqsig-testnet",
+            self.sender,
+            _testnet_params(),
+            now=15 * 60,
+            send_fn=mock_send,
+        )
+        self.assertIsNone(out)
+        self.assertEqual(sent, [])
+        self.assertFalse(
+            algo_anchor.submit_allowed(
+                signer_callback=lambda _u: b"sig",
+                sender=self.sender,
+                params=_testnet_params(),
             )
-        self.assertIsNotNone(out)
-        self.assertTrue(out["submitted"])
-        self.assertEqual(out["status"], "pending")
-        self.assertNotEqual(out["status"], "state_proof_covered")
-        self.assertEqual(out["txid"], "txid-fixture")
-        self.assertEqual(out["txn"]["gen"], algo_anchor.TESTNET_GENESIS_ID)
-        self.assertNotEqual(out["txn"]["gen"], algo_anchor.MAINNET_GENESIS_ID)
-        self.assertEqual(len(sent), 1)
-        self.assertEqual(built, [True])
+        )
 
     def test_idle_size_unchanged_does_not_send(self):
         self._arm_testnet()
@@ -392,50 +377,37 @@ class TestNetSubmitTests(unittest.TestCase):
         worker.save_anchor(0, 0)
         posted = []
 
-        def boom_post(*_a, **_k):
-            posted.append(True)
-            raise AssertionError("must not POST live algod")
-
-        with patch.object(algo_anchor, "_post_testnet", boom_post):
-            out = worker.maybe_submit(
-                lambda _u: b"sig",
-                self.sender,
-                _testnet_params(),
-                now=15 * 60,
-                send_fn=None,
-            )
+        self.assertFalse(hasattr(algo_anchor, "_post_testnet"))
+        out = worker.maybe_submit(
+            lambda _u: b"sig",
+            self.sender,
+            _testnet_params(),
+            now=15 * 60,
+            send_fn=None,
+        )
         self.assertIsNone(out)
         self.assertEqual(posted, [])
 
-    def test_fly_toml_falcon_process_is_isolated(self):
+    def test_fly_toml_is_single_app_no_signer_secrets(self):
         text = Path(__file__).resolve().parent.parent.joinpath("fly.toml").read_text(encoding="utf-8")
         vm_lines = [ln for ln in text.splitlines() if ln.strip() == "[[vm]]"]
-        self.assertEqual(len(vm_lines), 2)
-        self.assertIn("[processes]", text)
-        self.assertIn('falcon = "python3 -m live402.pq.isolated_signer"', text)
-        self.assertIn('app = "python3 -m live402', text)
+        self.assertEqual(len(vm_lines), 1)
+        self.assertFalse(any(ln.strip() == "[processes]" for ln in text.splitlines()))
+        self.assertNotIn("falcon =", text)
         self.assertIn('processes = ["app"]', text)
-        self.assertIn('processes = ["falcon"]', text)
-        http_idx = text.find("\n[http_service]\n")
-        self.assertGreaterEqual(http_idx, 0)
-        http = text[http_idx + 1 :].split("[[vm]]", 1)[0]
-        self.assertIn('processes = ["app"]', http)
-        self.assertNotIn("falcon", http)
-        self.assertIn("256mb", text)
+        self.assertIn("No extra machines in this PR", text)
+        self.assertIn("do not fly deploy", text.lower())
         self.assertIn("1gb", text)
-        self.assertIn("~$2/mo", text)
-        self.assertIn("do not fly scale", text.lower())
-        self.assertIn("do not deploy", text.lower())
         self.assertNotIn("LIVE402_PQ_FALCON_SK", text)
         self.assertNotIn("LIVE402_PQ_FALCON_BROADCAST", text)
+        self.assertNotIn("LIVE402_PQ_SIGNER_TOKEN", text)
+        self.assertNotIn("LIVE402_PQ_SIGNER_ENABLE", text)
         self.assertIn("LIVE402_PQ_FALCON_NETWORK = \"testnet\"", text)
         self.assertIn("OBHYXCUVOLSTZVBN5JUFIYBD4X4ZFIAFZMWMU2P45VBYGWT26MV34IFFIU", text)
-        mounts = text.split("[[mounts]]", 1)[1]
-        self.assertIn('processes = ["app"]', mounts)
-        self.assertNotIn("falcon", mounts.split("[env]", 1)[0])
         dockerfile = Path(__file__).resolve().parent.parent.joinpath("Dockerfile").read_text(encoding="utf-8")
         self.assertNotIn("LIVE402_PQ_FALCON_BROADCAST", dockerfile)
         self.assertNotIn("LIVE402_PQ_FALCON_SK", dockerfile)
+        self.assertNotIn("LIVE402_PQ_SIGNER_TOKEN", dockerfile)
 
     def test_trust_root_not_mainnet_go_stays_true(self):
         from live402.pq import trust

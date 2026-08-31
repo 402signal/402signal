@@ -594,26 +594,9 @@ def boot_optional_log_signer() -> None:
     pq_receipt.load_signer_from_env()
 
 
-def boot_optional_falcon_sk() -> None:
-    """Load LIVE402_PQ_FALCON_SK into memory if set. Never generate a key.
-
-    The HTTP app process must not call this (Falcon SK stays on the
-    isolated `falcon` process). Tests and that process may call it.
-    Unset = construction only. Malformed fails closed (no SK).
-    Never logs or prints the secret. 402dev never holds it.
-    """
-    from live402.pq import algo_anchor
-
-    algo_anchor.load_falcon_sk_from_env()
-
-
 def boot_http_process() -> None:
-    """HTTP process boot: log signer only. Never load the Falcon SK."""
-    group = (os.environ.get("FLY_PROCESS_GROUP") or "").strip()
-    if group == "falcon":
-        raise SystemExit("app HTTP must not run in the falcon process")
+    """HTTP process boot: log signer only. Never load a Falcon SK."""
     boot_optional_log_signer()
-    # Falcon SK is loaded only by live402.pq.isolated_signer (falcon process).
 
 
 def main(argv: list[str] | None = None) -> None:
