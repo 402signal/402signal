@@ -644,6 +644,54 @@
     } catch (e) {}
   }
 
+  function fmtCount(n) {
+    if (typeof n !== "number" || !isFinite(n)) return "0";
+    return String(n);
+  }
+
+  async function loadPulseHome() {
+    const el = document.getElementById("pulse-home");
+    const empty = document.getElementById("empty-state");
+    const ctrl = typeof AbortController === "function" ? new AbortController() : null;
+    const timer = ctrl ? setTimeout(function () { ctrl.abort(); }, 8000) : null;
+    try {
+      const res = await fetch("/pulse", { cache: "no-store", signal: ctrl ? ctrl.signal : undefined });
+      if (timer) clearTimeout(timer);
+      if (!res.ok) throw new Error("pulse " + res.status);
+      const parsed = await res.json();
+      const chains = (parsed && parsed.chains) || {};
+      const rails = ["base", "solana", "algorand"];
+      const bits = [];
+      let total = 0;
+      let pending = 0;
+      rails.forEach(function (rail) {
+        const row = chains[rail] || {};
+        const n = typeof row.count === "number" ? row.count : 0;
+        const err = row.source && row.source.error;
+        const status = row.index_status || (parsed && parsed.index_status);
+        if (err === "index_pending" || err === "index_refreshing" || status === "refreshing" || status === "pending") pending += 1;
+        total += n;
+        bits.push(rail + " " + fmtCount(n));
+      });
+      const obs = (parsed && parsed.observed) || {};
+      const n7 = typeof obs.n_7d === "number" ? obs.n_7d : 0;
+      if (el) {
+        const link = ' <a href="/pulse">GET /pulse</a>';
+        if (total === 0 && pending === rails.length) {
+          el.innerHTML = "Index pending. Catalog still filling." + link;
+        } else {
+          el.innerHTML = "Catalog " + bits.join(" · ") + ". Observed n_7d " + fmtCount(n7) + " (402signal_observed)." + link;
+        }
+      }
+      if (empty && total > 0 && empty.textContent.indexOf("Pulse counts are 0") !== -1) {
+        empty.textContent = "Preview a need to see catalog hits. Unpaid probe live is still 402 on /route.";
+      }
+    } catch (e) {
+      if (timer) clearTimeout(timer);
+      if (el) el.innerHTML = 'Pulse is slow right now. <a href="/pulse">GET /pulse</a>';
+    }
+  }
+
   const chips = document.getElementById("need-chips");
   if (chips) {
     chips.addEventListener("click", function (ev) {
@@ -672,4 +720,5 @@
   setTimeout(revealPayControl, 2000);
   syncPreview();
   loadRails();
+  loadPulseHome();
 })();
