@@ -351,10 +351,14 @@ class MergePaymentOptionsTests(unittest.TestCase):
         self.assertEqual(len(opts), 2)
         usd = sorted(o["normalized_usd"] for o in opts)
         self.assertEqual(usd, [0.01, 0.02])
+        claimed = probe.attach_catalog_fields({"live": False, "payTo": None}, merged[0])
+        claimed_opts = (claimed.get("claimed") or {}).get("payment_options") or []
+        claimed_assets = {o.get("asset") for o in claimed_opts}
+        self.assertIn(payment.USDC_BASE, claimed_assets)
+        self.assertIn(payment.USDC_SOLANA_MINT, claimed_assets)
         target = probe.build_target(merged[0])
         target_assets = {a.get("asset") for a in target.get("accepts") or []}
-        self.assertIn(payment.USDC_BASE, target_assets)
-        self.assertIn(payment.USDC_SOLANA_MINT, target_assets)
+        self.assertEqual(target_assets, set())
 
 
 class PulsePriceLabelTests(unittest.TestCase):

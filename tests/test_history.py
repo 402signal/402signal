@@ -15,6 +15,27 @@ os.environ.setdefault("LIVE402_FIXTURE", "1")
 from live402 import catalog, fixtures, history, payment, probe, pulse
 
 
+def _complete_envelope(pay_to, amount="10000", rail="base"):
+    if rail == "solana":
+        network, asset = payment.SOLANA_MAINNET, payment.USDC_SOLANA_MINT
+    elif rail == "algorand":
+        network, asset = payment.ALGORAND_MAINNET, payment.USDC_ALGORAND_ASA
+    else:
+        network, asset = payment.BASE_CAIP2, payment.USDC_BASE
+    return {
+        "x402Version": 2,
+        "accepts": [
+            {
+                "scheme": "exact",
+                "network": network,
+                "asset": asset,
+                "amount": amount,
+                "payTo": pay_to,
+            }
+        ],
+    }
+
+
 def _snap(live=True, payTo="0xabc", **extra):
     row = {
         "live": bool(live),
@@ -28,6 +49,13 @@ def _snap(live=True, payTo="0xabc", **extra):
         row["miss_reason"] = extra.pop("miss_reason", "no_402_envelope")
         row["payTo"] = None
     row.update(extra)
+    if live and row.get("payTo") and not row.get("envelope") and not row.get("accepts"):
+        amount = row.get("amount") or "10000"
+        rail = row.get("rail") or "base"
+        row["envelope"] = _complete_envelope(row["payTo"], amount=amount, rail=rail)
+        row.setdefault("amount", amount)
+        row.setdefault("asset", payment.usdc_asset_for_rail(rail) or payment.USDC_BASE)
+        row.setdefault("rail", rail)
     return row
 
 
@@ -43,8 +71,22 @@ def _probe_result(pay_to="0xabc", schema=False, catalog_pay=None, url="https://w
     result = probe.health_from_probe(url, snap)
     item = {
         "url": url,
-        "accepts": [{"payTo": catalog_pay or pay_to, "amount": "10000", "network": "base"}],
+        "accepts": [
+            {
+                "payTo": catalog_pay or pay_to,
+                "amount": "10000",
+                "network": "base",
+                "asset": payment.USDC_BASE,
+            }
+        ],
     }
+    env = None
+    if pay_to:
+        env = _complete_envelope(pay_to)
+        result["envelope"] = env
+        result["amount"] = "10000"
+        result["asset"] = payment.USDC_BASE
+        result["rail"] = "base"
     if schema:
         item["inputSchema"] = {
             "type": "object",
@@ -52,7 +94,7 @@ def _probe_result(pay_to="0xabc", schema=False, catalog_pay=None, url="https://w
             "required": ["q"],
         }
     result = probe.attach_catalog_fields(result, item)
-    result = probe.attach_invocable_target(result, item)
+    result = probe.attach_invocable_target(result, item, env)
     return probe._finalize_probe(result)
 
 
@@ -447,7 +489,16 @@ class HistoryDbTests(unittest.TestCase):
         url = "https://hist.example/envelope"
         snap = _snap(live=True, payTo="0xabc")
         snap["envelope"] = {
-            "accepts": [{"amount": "10000", "payTo": "0xabc"}],
+            "x402Version": 2,
+            "accepts": [
+                {
+                    "scheme": "exact",
+                    "network": payment.BASE_CAIP2,
+                    "asset": payment.USDC_BASE,
+                    "amount": "10000",
+                    "payTo": "0xabc",
+                }
+            ],
             "inputSchema": {"type": "object", "properties": {"q": {"type": "string"}}, "required": ["q"]},
         }
         history.record_probe(url, snap)
@@ -740,26 +791,32 @@ class RankPayToChangedTests(unittest.TestCase):
 
         def fake_probe(url, catalog_item=None, deadline=None, **kwargs):
             _ = catalog_item, deadline
-            if "changed" in url:
-                return {
-                    "live": True,
-                    "url": url,
-                    "payTo": "0xnew",
-                    "payTo_changed": True,
-                    "invocable": False,
-                    "probed_at": probe.now_iso(),
-                    "risk": ["payTo_changed"],
-                    "readiness": "payable",
-                }
-            return {
+            pay_to = "0xnew" if "changed" in url else "0xabc"
+            row = {
                 "live": True,
                 "url": url,
-                "payTo": "0xabc",
-                "payTo_changed": False,
+                "payTo": pay_to,
+                "payTo_changed": "changed" in url,
                 "invocable": False,
                 "probed_at": probe.now_iso(),
                 "readiness": "payable",
+                "status": 402,
+                "has_402_challenge": True,
+                "rail": "base",
+                "amount": "10000",
+                "asset": payment.USDC_BASE,
+                "accepts": [
+                    {
+                        "network": payment.BASE_CAIP2,
+                        "asset": payment.USDC_BASE,
+                        "amount": "10000",
+                        "payTo": pay_to,
+                    }
+                ],
             }
+            if "changed" in url:
+                row["risk"] = ["payTo_changed"]
+            return row
 
         with patch("live402.probe.fetch_discovery", return_value=items), patch(
             "live402.probe.probe_url", side_effect=fake_probe

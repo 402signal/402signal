@@ -10,7 +10,7 @@ from urllib.parse import parse_qs, urlparse
 
 os.environ.setdefault("LIVE402_FIXTURE", "1")
 
-from live402 import catalog, fixtures, probe, select
+from live402 import catalog, fixtures, payment, probe, select
 
 
 CDP = "https://api.cdp.coinbase.com/platform/v2/x402/discovery/resources"
@@ -633,6 +633,17 @@ class CatalogIndexTests(unittest.TestCase):
                 "has_402_challenge": True,
                 "probed_at": "2026-08-31T00:00:00Z",
                 "latency_ms": 10,
+                "rail": "base",
+                "amount": "10000",
+                "asset": payment.USDC_BASE,
+                "accepts": [
+                    {
+                        "network": payment.BASE_CAIP2,
+                        "asset": payment.USDC_BASE,
+                        "amount": "10000",
+                        "payTo": "0xabc",
+                    }
+                ],
             }
 
         with patch("live402.catalog.fixtures.fixture_mode", return_value=False), patch(
@@ -674,6 +685,16 @@ class CatalogIndexTests(unittest.TestCase):
                 "probed_at": "2026-08-31T00:00:00Z",
                 "latency_ms": 10,
                 "rail": "solana",
+                "amount": "10000",
+                "asset": payment.USDC_SOLANA_MINT,
+                "accepts": [
+                    {
+                        "network": payment.SOLANA_MAINNET,
+                        "asset": payment.USDC_SOLANA_MINT,
+                        "amount": "10000",
+                        "payTo": "So1",
+                    }
+                ],
             }
 
         cons = select.parse_constraints({"networks": ["solana"]})
