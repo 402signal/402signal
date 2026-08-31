@@ -39,7 +39,10 @@ GUIDANCE = (
     "(not no_candidates). If MAX_PROBE is hit with ranked candidates still untested and "
     "budget remaining, miss_reason/stop_reason is probe_limit_reached (not no_candidates). "
     "GET /preview adds discovery_matches, displayed, and a read-only "
-    "observation from 402signal_observed history (not_yet_observed when never probed)."
+    "observation from 402signal_observed history (not_yet_observed when never probed). "
+    "Upstream probe is GET, then POST {} if GET was not a live 402, then POST the "
+    "catalog-declared input body when one is present. Seller-body tightening and DNS "
+    "IP-pin (getaddrinfo then urllib re-resolve is TOCTOU) are held for 402security."
 )
 
 def _origin_from_resource(resource_url: str) -> str:
@@ -660,7 +663,7 @@ def openapi_spec(resource_url: str = ROUTE) -> dict:
                     "operationId": "validateSellerGet",
                     "tags": ["Public"],
                     "summary": "Ask if a seller URL is agent-ready",
-                    "description": "Unpaid dual-probe of the seller URL. Fail-closed SSRF. Not a /route payment bypass. Never emits a binary healthy flag.",
+                    "description": "Unpaid seller probe: GET, then POST {} if GET was not live, then POST the catalog-declared body when present. Fail-closed SSRF. Not a /route payment bypass. Never emits a binary healthy flag. Seller-body tightening and DNS IP-pin are held for 402security.",
                     "parameters": [
                         {
                             "in": "query",
@@ -686,7 +689,7 @@ def openapi_spec(resource_url: str = ROUTE) -> dict:
                     "operationId": "validateSeller",
                     "tags": ["Public"],
                     "summary": "Ask if a seller URL is agent-ready",
-                    "description": "Unpaid dual-probe of the seller URL. Fail-closed SSRF. Not a /route payment bypass. Never emits a binary healthy flag.",
+                    "description": "Unpaid seller probe: GET, then POST {} if GET was not live, then POST the catalog-declared body when present. Fail-closed SSRF. Not a /route payment bypass. Never emits a binary healthy flag. Seller-body tightening and DNS IP-pin are held for 402security.",
                     "requestBody": {
                         "required": True,
                         "content": {
@@ -917,6 +920,7 @@ HTTP 200 = live URL plus target contract. HTTP 503 = typed miss_reason.
 - Unpaid → HTTP 402 (amount 10000 atomic = $0.01, 6 decimals)
 - Paid live hit → HTTP 200 + URL that 402s with a payment envelope + target {method,inputSchema,outputSchema,accepts,facilitator,amountAtomic,displayAmount,timeoutSeconds} + selected_payment {rail,network,asset,amount_atomic,display_amount,normalized_usd,payTo,facilitator}. target.accepts and selected_payment are CURRENT observed 402 options only. Catalog rails stay on claimed.payment_options and are never selected.
 - 402Signal settles the $0.01 routing payment; it does not pay the selected merchant.
+- Upstream probe is GET, then POST {} if GET was not a live 402, then POST the catalog-declared input body when one is present. Seller-body tightening and DNS IP-pin (getaddrinfo then urllib re-resolve is TOCTOU) are held for 402security.
 - payable requires a complete observed option (rail/network, amount, asset, payTo). invocable is payable + input schema. challenge_observed is HTTP 402 + parseable x402.
 - If inputSchema is missing: live may be true, invocable false, miss_reason no_input_schema
 - Paid miss → HTTP 503 {live:false, miss_reason}
@@ -934,7 +938,7 @@ HTTP 200 = live URL plus target contract. HTTP 503 = typed miss_reason.
 - GET /dashboard  sample lookups per chain (Base / Solana / Algorand)
 - GET /pulse  same snapshot as JSON, including samples[]
 - GET /preview?need=weather  request-time catalog search + discovery_matches + displayed + seller claims + read-only 402Signal observation (not_yet_observed when never independently probed). not_probed:true (does not probe, does not charge). Optional prefer_network=base|solana|algorand ranks across all rails; optional networks=solana restricts rails. discovery_via is a compact per-rail search|pages|error|fixture map. discovery_exhaustive is true only when the returned set is known complete. HEAD 200 on /llms.txt /openapi.json /mcp.json /preview /rails /pulse.
-- POST /validate {"url":"https://seller.example/x402"}  unpaid dual-probe: is this seller agent-ready? Also GET /validate?url=. Fail-closed SSRF. Not a /route paywall bypass. Readiness + claimed vs observed + flags. Never a binary healthy flag.
+- POST /validate {"url":"https://seller.example/x402"}  unpaid seller probe (GET, then POST {} if needed, then POST catalog-declared body when present): is this seller agent-ready? Also GET /validate?url=. Fail-closed SSRF. Not a /route paywall bypass. Readiness + claimed vs observed + flags. Never a binary healthy flag. Seller-body tightening and DNS IP-pin are held for 402security.
 - GET /attestation  public sha256 of a recent 402signal_observed probe batch (batch_id, created_at, n, algo, hash). Not on-chain. Optional ?batch_id=.
 - GET /rails  three pay-in networks, asset, amountAtomic, facilitators, feePayers, maxTimeoutSeconds, per-rail up+latency
 - GET /health  {"ok":true}
