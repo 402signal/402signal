@@ -266,9 +266,9 @@ def components_from_evidence(evidence: dict | None, listing: dict | None = None)
         "settlement_count": _unknown_usage_field("no_settlement_ledger"),
         "unique_payer_count": _unknown_usage_field("no_payer_identities"),
     }
+    # Usage is probe_count_7d only. Do not infer it from n_7d here: 0 and
+    # missing both omit the usage score so zero does not look worse than unknown.
     probes = _as_int(ev.get("probe_count_7d"))
-    if probes is None:
-        probes = n_7d
     if has_window and probes is not None:
         usage["probe_count"] = {
             "value": probes,

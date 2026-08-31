@@ -157,6 +157,8 @@ class SelectedPaymentTests(unittest.TestCase):
         url = "https://wx.example/selected"
         hit = _live_base_only(url, _catalog_base_and_solana(url))
         selected = select.pick_selected_payment(hit, "cheapest", None)
+        self.assertIsNotNone(selected)
+        eco = selected.pop("economics", None)
         self.assertEqual(
             selected,
             {
@@ -170,6 +172,10 @@ class SelectedPaymentTests(unittest.TestCase):
                 "facilitator": CDP,
             },
         )
+        self.assertIsInstance(eco, dict)
+        self.assertEqual(eco.get("rail"), "base")
+        self.assertEqual((eco.get("merchant_price_usd") or {}).get("value"), 0.02)
+        selected["economics"] = eco
         probe._align_target_with_selected(hit, selected)
         target = hit["target"]
         self.assertEqual(target["amountAtomic"], "20000")
