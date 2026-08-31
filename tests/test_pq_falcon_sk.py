@@ -207,10 +207,20 @@ class FalconSkEnvTests(unittest.TestCase):
         finally:
             conn.close()
 
-    def test_main_calls_falcon_boot_hook(self):
+    def test_http_app_does_not_load_falcon_sk(self):
         src = inspect.getsource(server.main)
-        self.assertIn("boot_optional_falcon_sk", src)
+        self.assertNotIn("boot_optional_falcon_sk", src)
         self.assertIn("boot_optional_log_signer", src)
+        self.assertIn("falcon process", src)
+
+        from live402.pq import isolated_signer
+
+        falcon_src = inspect.getsource(isolated_signer.main)
+        self.assertIn("boot", falcon_src)
+        self.assertNotIn("load_signer_from_env", falcon_src)
+        self.assertNotIn("boot_optional_log_signer", falcon_src)
+        self.assertNotIn("ThreadingHTTPServer", falcon_src)
+        self.assertNotIn("/route", falcon_src)
 
 
 if __name__ == "__main__":

@@ -597,8 +597,10 @@ def boot_optional_log_signer() -> None:
 def boot_optional_falcon_sk() -> None:
     """Load LIVE402_PQ_FALCON_SK into memory if set. Never generate a key.
 
-    Unset = construction only. Malformed fails closed (no SK). /route still
-    serves. Never logs or prints the secret. 402dev never holds it.
+    The HTTP app process must not call this (Falcon SK stays on the
+    isolated `falcon` process). Tests and that process may call it.
+    Unset = construction only. Malformed fails closed (no SK).
+    Never logs or prints the secret. 402dev never holds it.
     """
     from live402.pq import algo_anchor
 
@@ -610,8 +612,11 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--host", default=default_host())
     parser.add_argument("--port", type=int, default=default_port())
     args = parser.parse_args(argv)
+    group = (os.environ.get("FLY_PROCESS_GROUP") or "").strip()
+    if group == "falcon":
+        raise SystemExit("app HTTP must not run in the falcon process")
     boot_optional_log_signer()
-    boot_optional_falcon_sk()
+    # Falcon SK is loaded only by live402.pq.isolated_signer (falcon process).
     httpd = ThreadingHTTPServer((args.host, args.port), Handler)
     catalog.start_refresher()
     print(

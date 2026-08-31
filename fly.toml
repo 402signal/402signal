@@ -1,11 +1,20 @@
 # fly.toml — single app 402signal. No extra hostnames.
 # Launch later with: fly launch --ha=false
-# Do not set auto_stop; keep one machine running.
+# Do not set auto_stop on the app process; keep that one machine running.
 
 app = "402signal"
 primary_region = "iad"
 
 [build]
+
+# Isolated Falcon signer process (Ross spend-GO ~$2/mo shared-cpu-1x 256MB).
+# Unsigned txn in, pqsig out. Does not serve HTTP /route. Does not load
+# LIVE402_PQ_LOG_SK. Scale stays 0 until 402security GOs this SHA.
+# 402QA must not `fly scale` until that GO. Do not deploy from this PR.
+# Do not auto-start a second machine on merge.
+[processes]
+  app = "python3 -m live402 --host 0.0.0.0 --port 8080"
+  falcon = "python3 -m live402.pq.isolated_signer"
 
 [http_service]
   internal_port = 8080
@@ -23,22 +32,28 @@ primary_region = "iad"
   timeout = "5s"
 
 [[vm]]
+  processes = ["app"]
   size = "shared-cpu-1x"
-  memory = "1gb"  # Ross GO 2026-08-30; ~$5.92/mo. Do not ship 256mb.
+  memory = "1gb"  # Ross GO 2026-08-30; ~$5.92/mo. Do not ship 256mb for app.
+  cpus = 1
+
+# Isolated Falcon signer only. Ross spend-GO ~$2/mo. min 0 until 402security GO.
+# Not in [http_service]; will not auto-start from HTTP. Do not fly scale yet.
+[[vm]]
+  processes = ["falcon"]
+  size = "shared-cpu-1x"
+  memory = "256mb"
   cpus = 1
 
 # 1GB persistent volume for probe history + catalog.sqlite + pq-log.sqlite (Ross approved ~$0.15/mo).
 # Process-local only. Do not HTTP-serve /data or sqlite files.
 # pq-log.sqlite is a separate file. 402security must GO before Fly enablement of a log key
-# and before any Falcon spend.
-# Falcon TestNet (this PR): in-process on the existing app only. No extra
-# process group, no extra VM, do not fly scale, do not deploy.
-# Ross spend-GO'd an extra shared-cpu-1x (~$2/mo) for a later isolated
-# signer machine. That is a separate PR after this SHA GOs.
+# and before any Falcon spend. App process only — falcon does not mount /data.
 # Scheduled snapshots off.
 [[mounts]]
   source = "data"
   destination = "/data"
+  processes = ["app"]
 
 [env]
   LIVE402_HISTORY_DB = "/data/live402-history.sqlite"
