@@ -648,8 +648,11 @@ def _touch_shadow_verified(url: str | None, snap: dict | None = None) -> None:
     try:
         from live402 import shadow
 
-        shadow.mark_verified(dest)
-        if isinstance(snap, dict) and snap.get("live"):
+        ok = None
+        if isinstance(snap, dict) and "live" in snap:
+            ok = bool(snap.get("live"))
+        shadow.mark_verified(dest, ok=ok)
+        if ok:
             shadow.touch_routed([dest])
     except Exception:
         return

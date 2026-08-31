@@ -44,6 +44,20 @@ EVENT_CAP = 5_000
 FTS_LIMIT = 20
 HOT_ELIGIBLE_S = 3_600
 WARM_ELIGIBLE_S = 86_400
+# Deterministic information-value refresh. Higher first. No ML.
+REFRESH_REASONS = (
+    "recent_search",
+    "recent_route",
+    "source_disagreement",
+    "price_change",
+    "payto_change",
+    "schema_change",
+    "failed_probe",
+    "stale_observation",
+    "high_demand_capability",
+)
+QUEUE_SCAN = 20
+HIGH_DEMAND_MIN = 2
 
 _FTS_TOKEN = re.compile(r"[A-Za-z0-9_]{2,}")
 
@@ -69,6 +83,7 @@ CREATE TABLE IF NOT EXISTS resources (
     last_verified INTEGER,
     last_searched INTEGER,
     last_routed INTEGER,
+    last_probe_ok INTEGER,
     row_hash TEXT,
     status TEXT NOT NULL DEFAULT 'active',
     retired_at INTEGER,
@@ -236,6 +251,24 @@ def _chmod_db_files(path: str) -> None:
             pass
 
 
+def _ensure_columns(conn: sqlite3.Connection) -> None:
+    """Add columns introduced after the first catalog.sqlite. Never drops."""
+    try:
+        cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(resources)").fetchall()}
+    except sqlite3.Error:
+        return
+    if "last_probe_ok" not in cols:
+        try:
+            conn.execute("ALTER TABLE resources ADD COLUMN last_probe_ok INTEGER")
+        except sqlite3.OperationalError:
+            pass
+
+
+def refresh_priority_order() -> tuple[str, ...]:
+    """Documented queue order. First reason wins. Same tuple in README."""
+    return REFRESH_REASONS
+
+
 def _connect() -> sqlite3.Connection:
     global _conn, _conn_path, _fts_ok
     path = db_path()
@@ -254,6 +287,7 @@ def _connect() -> sqlite3.Connection:
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
     conn.executescript(_SCHEMA)
+    _ensure_columns(conn)
     if _fts_ok is None:
         try:
             conn.executescript(_FTS_SCHEMA)
@@ -1305,8 +1339,12 @@ def touch_routed(urls, ts: int | None = None) -> None:
     _touch_urls(urls, "last_routed", ts)
 
 
-def mark_verified(url: str, ts: int | None = None) -> None:
-    """Verification clock only. Observation rows stay in history.py."""
+def mark_verified(url: str, ts: int | None = None, ok: bool | None = None) -> None:
+    """Verification clock only. Observation rows stay in history.py.
+
+    ok=True/False records last_probe_ok for the refresh queue. Missing ok
+    leaves last_probe_ok unchanged (unknown is not a failed probe).
+    """
     dest = _text(url)
     if not dest:
         return
@@ -1314,10 +1352,16 @@ def mark_verified(url: str, ts: int | None = None) -> None:
     try:
         with _lock:
             conn = _connect()
-            conn.execute(
-                "UPDATE resources SET last_verified = ? WHERE canonical_url = ?",
-                (when, dest),
-            )
+            if ok is None:
+                conn.execute(
+                    "UPDATE resources SET last_verified = ? WHERE canonical_url = ?",
+                    (when, dest),
+                )
+            else:
+                conn.execute(
+                    "UPDATE resources SET last_verified = ?, last_probe_ok = ? WHERE canonical_url = ?",
+                    (when, 1 if ok else 0, dest),
+                )
             conn.commit()
     except Exception:
         return
@@ -1423,6 +1467,199 @@ def due_warm(limit: int = 5, ts: int | None = None) -> list[str]:
             return [r[0] for r in cur.fetchall()]
     except Exception:
         return []
+
+
+def _queue_cap(limit) -> int:
+    try:
+        return max(1, min(int(limit), QUEUE_SCAN))
+    except (TypeError, ValueError):
+        return 5
+
+
+def _due_urls_for_reason(cur, reason: str, when: int, stale: int, recent: int, change_since: int) -> list[str]:
+    """Need-scoped candidates for one reason. LIMIT QUEUE_SCAN. Never the world."""
+    scan = QUEUE_SCAN
+    if reason == "recent_search":
+        cur.execute(
+            """
+            SELECT canonical_url FROM resources
+            WHERE status = ?
+              AND COALESCE(last_searched, 0) >= ?
+              AND COALESCE(last_fetched, 0) < ?
+            ORDER BY last_searched DESC, canonical_url ASC
+            LIMIT ?
+            """,
+            (STATUS_ACTIVE, recent, stale, scan),
+        )
+    elif reason == "recent_route":
+        cur.execute(
+            """
+            SELECT canonical_url FROM resources
+            WHERE status = ?
+              AND COALESCE(last_routed, 0) >= ?
+              AND COALESCE(last_fetched, 0) < ?
+            ORDER BY last_routed DESC, canonical_url ASC
+            LIMIT ?
+            """,
+            (STATUS_ACTIVE, recent, stale, scan),
+        )
+    elif reason == "source_disagreement":
+        cur.execute(
+            """
+            SELECT r.canonical_url
+            FROM resources r
+            JOIN accept_claims a ON a.resource_id = r.id
+            WHERE r.status = ?
+              AND COALESCE(r.last_fetched, 0) < ?
+            GROUP BY r.id, r.canonical_url, a.rail
+            HAVING COUNT(DISTINCT a.source) > 1
+               AND (
+                    COUNT(DISTINCT IFNULL(a.amount_atomic, '')) > 1
+                    OR COUNT(DISTINCT IFNULL(a.payTo, '')) > 1
+               )
+            ORDER BY r.last_fetched ASC, r.canonical_url ASC
+            LIMIT ?
+            """,
+            (STATUS_ACTIVE, stale, scan),
+        )
+    elif reason == "price_change":
+        cur.execute(
+            """
+            SELECT DISTINCT e.canonical_url
+            FROM claim_events e
+            JOIN resources r ON r.canonical_url = e.canonical_url
+            WHERE e.event = ?
+              AND e.ts >= ?
+              AND r.status = ?
+              AND COALESCE(r.last_fetched, 0) < ?
+            ORDER BY e.ts DESC, e.canonical_url ASC
+            LIMIT ?
+            """,
+            (EVENT_PRICE, change_since, STATUS_ACTIVE, stale, scan),
+        )
+    elif reason == "payto_change":
+        cur.execute(
+            """
+            SELECT DISTINCT e.canonical_url
+            FROM claim_events e
+            JOIN resources r ON r.canonical_url = e.canonical_url
+            WHERE e.event = ?
+              AND e.ts >= ?
+              AND r.status = ?
+              AND COALESCE(r.last_fetched, 0) < ?
+            ORDER BY e.ts DESC, e.canonical_url ASC
+            LIMIT ?
+            """,
+            (EVENT_PAYTO, change_since, STATUS_ACTIVE, stale, scan),
+        )
+    elif reason == "schema_change":
+        cur.execute(
+            """
+            SELECT DISTINCT e.canonical_url
+            FROM claim_events e
+            JOIN resources r ON r.canonical_url = e.canonical_url
+            WHERE e.event = ?
+              AND e.ts >= ?
+              AND r.status = ?
+              AND COALESCE(r.last_fetched, 0) < ?
+            ORDER BY e.ts DESC, e.canonical_url ASC
+            LIMIT ?
+            """,
+            (EVENT_SCHEMA, change_since, STATUS_ACTIVE, stale, scan),
+        )
+    elif reason == "failed_probe":
+        cur.execute(
+            """
+            SELECT canonical_url FROM resources
+            WHERE status = ?
+              AND last_probe_ok = 0
+              AND COALESCE(last_fetched, 0) < ?
+            ORDER BY COALESCE(last_verified, 0) DESC, canonical_url ASC
+            LIMIT ?
+            """,
+            (STATUS_ACTIVE, stale, scan),
+        )
+    elif reason == "stale_observation":
+        cur.execute(
+            """
+            SELECT canonical_url FROM resources
+            WHERE status = ?
+              AND COALESCE(last_fetched, 0) < ?
+              AND (last_verified IS NULL OR last_verified < ?)
+            ORDER BY COALESCE(last_verified, 0) ASC, canonical_url ASC
+            LIMIT ?
+            """,
+            (STATUS_ACTIVE, stale, when - WARM_ELIGIBLE_S, scan),
+        )
+    elif reason == "high_demand_capability":
+        cur.execute(
+            """
+            SELECT capability FROM resources
+            WHERE status = ?
+              AND capability IS NOT NULL
+              AND TRIM(capability) != ''
+              AND capability != 'unknown'
+              AND COALESCE(last_searched, 0) >= ?
+            GROUP BY capability
+            HAVING COUNT(*) >= ?
+            ORDER BY COUNT(*) DESC, capability ASC
+            LIMIT 3
+            """,
+            (STATUS_ACTIVE, recent, HIGH_DEMAND_MIN),
+        )
+        caps = [r[0] for r in cur.fetchall() if r[0]]
+        if not caps:
+            return []
+        placeholders = ",".join("?" * len(caps))
+        cur.execute(
+            f"""
+            SELECT canonical_url FROM resources
+            WHERE status = ?
+              AND capability IN ({placeholders})
+              AND COALESCE(last_fetched, 0) < ?
+            ORDER BY COALESCE(last_searched, 0) DESC, canonical_url ASC
+            LIMIT ?
+            """,
+            (STATUS_ACTIVE, *caps, stale, scan),
+        )
+    else:
+        return []
+    return [r[0] for r in cur.fetchall() if r[0]]
+
+
+def due_valued(limit: int = 5, ts: int | None = None) -> list[dict]:
+    """Deterministic information-value queue. First matching reason wins.
+
+    Only stale claims (last_fetched older than HOT refresh). Need-scoped
+    scans (QUEUE_SCAN per reason). Never a 44k RAM rebuild. No extra
+    network. Caller still uses the existing trickle probe/discovery budget.
+    """
+    when = _as_int(ts, None) or _now()
+    cap = _queue_cap(limit)
+    stale = when - hot_refresh_s()
+    recent = when - HOT_ELIGIBLE_S
+    change_since = when - WARM_ELIGIBLE_S
+    out: list[dict] = []
+    seen: set[str] = set()
+    try:
+        with _lock:
+            conn = _connect()
+            cur = conn.cursor()
+            for reason in REFRESH_REASONS:
+                for url in _due_urls_for_reason(cur, reason, when, stale, recent, change_since):
+                    if not url or url in seen:
+                        continue
+                    seen.add(url)
+                    out.append({"url": url, "reason": reason})
+                    if len(out) >= cap:
+                        return out
+            return out
+    except Exception:
+        return []
+
+
+def due_valued_urls(limit: int = 5, ts: int | None = None) -> list[str]:
+    return [row["url"] for row in due_valued(limit, ts) if row.get("url")]
 
 
 def next_cold_source(ts: int | None = None) -> str | None:

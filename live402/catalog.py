@@ -1370,19 +1370,18 @@ def _refresh_url_claims(url: str) -> None:
 
 
 def trickle_once() -> str:
-    """One adaptive step: HOT, else WARM, else one COLD page. Never a full sweep."""
+    """One adaptive step: information-value queue, else one COLD page.
+
+    Never a full sweep. Queue order is documented in shadow.refresh_priority_order.
+    Still one existing discovery search per URL, same budget as before.
+    """
     if fixtures.fixture_mode() or _refresh_disabled():
         return "idle"
-    hot = shadow.due_hot(3)
-    if hot:
-        for url in hot:
-            _refresh_url_claims(url)
-        return "hot"
-    warm = shadow.due_warm(3)
-    if warm:
-        for url in warm:
-            _refresh_url_claims(url)
-        return "warm"
+    valued = shadow.due_valued(3)
+    if valued:
+        for row in valued:
+            _refresh_url_claims(row.get("url") or "")
+        return (valued[0].get("reason") if valued[0].get("reason") else "valued")
     src = shadow.next_cold_source()
     if src:
         ingest_one_page(src)

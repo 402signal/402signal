@@ -58,7 +58,25 @@ Body:
 - `GET /health` is **HTTP 200** `{ "ok": true }` for Fly checks. Not a paid listing. Not a rails dump.
 - `GET /preview?need=` is an unpaid request-time catalog search (`not_probed: true`, hits + prices + freshness + facilitator/method/inputSchema_present/rails_up, optional `also_on[]`). Optional `prefer_network=base|solana|algorand` ranks that rail first but still searches all three. Optional `networks=solana` (repeat or comma-separate) restricts which rails are queried. `discovery_via` is a compact per-rail how-found map; `discovery_exhaustive` is true only when the returned set is known complete. It does not probe and does not charge. Paid `POST /route` remains the fail-closed 402 probe.
 - `GET /rails` lists the three pay-in networks, asset, amountAtomic, facilitators, feePayers, maxTimeoutSeconds, and per-rail up+latency. Cached. Not stuffed into `/health`.
-- `GET /pulse` is a JSON snapshot. Catalog totals are upstream / unknown — we do not load a 44k RAM index. A disk shadow (`/data/catalog.sqlite`) stores claims separately from `402signal_observed`. Observed `n_7d` comes from `402signal_observed`. Rates (`success_7d`, `payable_rate_7d`, `invocable_rate_7d`) are omitted below `n=10`. There is no binary `healthy` and no `executable_now_rate`. Query params are ignored — no caller-supplied URLs. Cached ~15s. Fail-open: never waits on a discovery crawl. The trickle refresher never blocks `/route`.
+- `GET /pulse` is a JSON snapshot. Catalog totals stay unpublished. Discovery uses current upstream catalogs plus a process-local shadow (not a full-world RAM index). `index_status` is `upstream-live`, `shadow-warm`, `both`, or `fixture`. Observed `n_7d` comes from `402signal_observed`. Rates (`success_7d`, `payable_rate_7d`, `invocable_rate_7d`) are omitted below `n=10`. There is no binary `healthy` and no `executable_now_rate`. Query params are ignored — no caller-supplied URLs. Cached ~15s. Fail-open: never waits on a discovery crawl. The trickle refresher never blocks `/route`.
+
+## Shadow catalog refresh queue
+
+Background trickle is one bounded step at a time (a few stale URLs, or one COLD page). It does not rebuild a 44k RAM catalog and does not add network fanout beyond the existing discovery/probe budgets.
+
+Priority (first matching reason wins; then `last_fetched` / URL). Same order in `live402/shadow.py` `REFRESH_REASONS`:
+
+1. **recent_search** — searched in the last hour, claim older than `LIVE402_HOT_REFRESH_S`
+2. **recent_route** — routed in the last hour, claim stale
+3. **source_disagreement** — two catalogs disagree on amount or payTo for the same rail
+4. **price_change** — recent `price_changed` claim event
+5. **payto_change** — recent `payTo_changed` claim event
+6. **schema_change** — recent `schema_changed` claim event
+7. **failed_probe** — last independent probe was not live
+8. **stale_observation** — never verified, or last verification older than a day
+9. **high_demand_capability** — capability with at least two recently searched listings
+
+If the queue is empty, the refresher takes one COLD generation page.
 - `GET /dashboard` is the same samples as HTML. Per-chain lookups you can try; click through to prefill the homepage form. Also free.
 - GET `/` homepage is plain English: one line on what `/route` is, humans pointed at free `GET /preview`, agents at POST / MCP. Footer is 402signal.com / @402Signal. Hidden Pay $0.01 on Base (injected wallet only) signs one EIP-3009 authorization and POSTs PAYMENT-SIGNATURE. Algorand and Solana stay agent/CLI. A short “for agents” box shows `POST https://402signal.com/route` plus links to `/llms.txt`, `/preview`, `/rails`, `/openapi.json`, `/.well-known/x402.json`, and `/mcp.json`. Nav is Home / Pulse (GET `/pulse`); no `/dashboard` in homepage nav.
 - `GET /route` is split by `Accept`: browsers (`text/html`) get the human page (HTTP 200). Agents (`application/json`) and curl with no Accept get HTTP 402 + bazaar + accepts (amount 10000). Agents that intend to pay should **POST**, not GET.
@@ -127,8 +145,8 @@ Base CDP calls need `CDP_API_KEY_ID` + `CDP_API_KEY_SECRET` (or `CDP_ACCESS_TOKE
 | `LIVE402_PROBE_TIMEOUT` | `4` | probe timeout seconds |
 | `LIVE402_HISTORY_DB` | `/data/live402-history.sqlite` on Fly (`/tmp` fallback) | sqlite probe history (WAL, 0600, capped). Observed only. |
 | `LIVE402_CATALOG_DB` | `/data/catalog.sqlite` on Fly (`/tmp` fallback) | sqlite shadow catalog of CDP/PayAI/GoPlausible **claims**. Process-local on the existing `/data` volume. **Not HTTP-exposed** (no dump/download endpoint, not under `static/`, not in OpenAPI). Separate file from history. FTS5. Never a 44k RAM list. |
-| `LIVE402_HOT_REFRESH_S` | `600` (clamped 300–900) | HOT refresh for recently searched/routed URLs |
-| `LIVE402_WARM_REFRESH_S` | `7200` (clamped 3600–10800) | WARM refresh interval |
+| `LIVE402_HOT_REFRESH_S` | `600` (clamped 300–900) | Stale-claim threshold for the information-value refresh queue |
+| `LIVE402_WARM_REFRESH_S` | `7200` (clamped 3600–10800) | WARM refresh interval (legacy due_warm helper) |
 | `LIVE402_COLD_SWEEP_S` | `64800` (clamped 12–24h) | COLD rolling generation sweep cadence |
 | `LIVE402_TRICKLE_SLEEP_S` | `2` (clamped 1–30) | Sleep between trickle pages |
 | `LIVE402_CATALOG_REFRESH` | `1` | `0` disables the background trickle |
