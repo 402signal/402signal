@@ -75,9 +75,8 @@ _VECTOR_CONS_MAC = hmac.new(
     hashlib.sha256,
 ).hexdigest()
 
-# Mock SignedTxn bytes. Distinct from the pqsig marker.
+# Mock SignedTxn bytes. Distinct from the live pqsig marker "present".
 _MOCK_SIGNED_TXN = b"STXN-mock-not-pqsig" + bytes(range(32))
-_MOCK_PQSIG_MARK = b"\xab" * 16
 
 
 def _reply_line(*, tree_size=1, root=None, signed=None, pqsig=None):
@@ -86,7 +85,7 @@ def _reply_line(*, tree_size=1, root=None, signed=None, pqsig=None):
             "ok": True,
             "tree_size": tree_size,
             "root": root or _VECTOR_ROOT,
-            "pqsig": (pqsig or _MOCK_PQSIG_MARK).hex(),
+            "pqsig": signer_client.PQSIG_PRESENT if pqsig is None else pqsig,
             "signed": (signed or _MOCK_SIGNED_TXN).hex(),
         },
         separators=(",", ":"),
@@ -292,12 +291,22 @@ class SignerClientProtocolTests(unittest.TestCase):
         os.environ.pop("LIVE402_PQ_SIGNER_PORT", None)
 
     def test_reply_shape_signed_is_signedtxn_not_pqsig(self):
-        parsed = signer_client.parse_reply(_reply_line())
+        live = {
+            "ok": True,
+            "tree_size": 1,
+            "root": _VECTOR_ROOT,
+            "pqsig": "present",
+            "signed": _MOCK_SIGNED_TXN.hex(),
+        }
+        parsed = signer_client.parse_reply(json.dumps(live, separators=(",", ":")))
         self.assertEqual(set(parsed), {"ok", "tree_size", "root", "pqsig", "signed"})
         self.assertTrue(parsed["ok"])
+        self.assertEqual(parsed["pqsig"], "present")
         self.assertEqual(parsed["signed"], _MOCK_SIGNED_TXN)
-        self.assertNotEqual(parsed["signed"], _MOCK_PQSIG_MARK)
-        self.assertNotEqual(parsed["signed"], bytes.fromhex(parsed["pqsig"]))
+        self.assertIsInstance(parsed["signed"], bytes)
+        self.assertNotEqual(parsed["signed"], b"present")
+        self.assertNotEqual(parsed["signed"], parsed["pqsig"])
+        self.assertEqual(signer_client.parse_reply(_reply_line())["pqsig"], "present")
         with self.assertRaises(signer_client.SignerClientError):
             signer_client.parse_reply(
                 json.dumps(
@@ -311,7 +320,55 @@ class SignerClientProtocolTests(unittest.TestCase):
                 )
             )
         with self.assertRaises(signer_client.SignerClientError):
-            signer_client.parse_reply(json.dumps({"pqsig": _MOCK_PQSIG_MARK.hex()}))
+            signer_client.parse_reply(
+                json.dumps(
+                    {
+                        "ok": True,
+                        "tree_size": 1,
+                        "root": _VECTOR_ROOT,
+                        "pqsig": "present",
+                        "signed": b"present".hex(),
+                    }
+                )
+            )
+        with self.assertRaises(signer_client.SignerClientError):
+            signer_client.parse_reply(
+                json.dumps(
+                    {
+                        "ok": True,
+                        "tree_size": 1,
+                        "root": _VECTOR_ROOT,
+                        "pqsig": "present",
+                        "signed": "",
+                    }
+                )
+            )
+        with self.assertRaises(signer_client.SignerClientError):
+            signer_client.parse_reply(
+                json.dumps(
+                    {
+                        "ok": True,
+                        "tree_size": 1,
+                        "root": _VECTOR_ROOT,
+                        "pqsig": "present",
+                        "signed": "not-hex",
+                    }
+                )
+            )
+        with self.assertRaises(signer_client.SignerClientError):
+            signer_client.parse_reply(json.dumps({"ok": True, "pqsig": "present"}))
+        with self.assertRaises(signer_client.SignerClientError):
+            signer_client.parse_reply(
+                json.dumps(
+                    {
+                        "ok": True,
+                        "tree_size": 1,
+                        "root": _VECTOR_ROOT,
+                        "pqsig": "Present",
+                        "signed": _MOCK_SIGNED_TXN.hex(),
+                    }
+                )
+            )
 
     def test_loopback_json_line_round_trip(self):
         received = []
@@ -361,7 +418,8 @@ class SignerClientProtocolTests(unittest.TestCase):
             port=port,
         )
         self.assertEqual(out, _MOCK_SIGNED_TXN)
-        self.assertNotEqual(out, _MOCK_PQSIG_MARK)
+        self.assertNotEqual(out, b"present")
+        self.assertNotEqual(out, "present")
         self.assertEqual(len(received), 1)
         self.assertEqual(set(received[0]), set(signer_client.REQUEST_KEYS))
         self.assertEqual(received[0]["hmac"], _VECTOR_MAC)
@@ -437,7 +495,8 @@ class SignerClientProtocolTests(unittest.TestCase):
         )
         self.assertIsNotNone(out)
         self.assertEqual(out["signed"], _MOCK_SIGNED_TXN)
-        self.assertNotEqual(out["signed"], _MOCK_PQSIG_MARK)
+        self.assertNotEqual(out["signed"], b"present")
+        self.assertNotEqual(out["signed"], "present")
         self.assertFalse(out["submitted"])
         self.assertEqual(len(received), 1)
         self.assertEqual(set(received[0]), set(signer_client.REQUEST_KEYS))

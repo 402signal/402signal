@@ -15,8 +15,8 @@ JSON keys sent (exactly these; signer rejects unknown fields):
 checkpoint is the Ed25519 signed-note the log already produced, not an
 unsigned checkpoint_body. Do not send fee/firstValid/sender/amount/txn.
 
-Reply shape (076825f): {ok, tree_size, root, pqsig, signed}
-signed is hex of the full SignedTxn. pqsig is a separate marker/hex field.
+Reply shape (076825f): {ok:true, tree_size, root, pqsig:"present", signed}
+signed is hex of the full SignedTxn. pqsig is the marker "present" (not hex).
 Do not treat pqsig as the transaction bytes.
 
 LIVE402_PQ_SIGNER_TOKEN unset/empty: never dial, never sign (C1 live state).
@@ -72,8 +72,9 @@ REQUEST_KEYS = (
     "checkpoint",
     "hmac",
 )
-# Live signer 076825f reply. signed = hex SignedTxn; pqsig is not the txn.
+# Live signer 076825f reply. signed = hex SignedTxn; pqsig is the marker "present".
 REPLY_KEYS = frozenset({"ok", "tree_size", "root", "pqsig", "signed"})
+PQSIG_PRESENT = "present"
 
 
 class SignerClientError(RuntimeError):
@@ -271,7 +272,7 @@ def _recv_line(sock: socket.socket, timeout: float) -> str:
 
 
 def parse_reply(raw: str) -> dict:
-    """Live reply {ok, tree_size, root, pqsig, signed}. signed is SignedTxn hex."""
+    """Live reply {ok, tree_size, root, pqsig:"present", signed}. signed is SignedTxn hex."""
     try:
         data = json.loads(raw)
     except json.JSONDecodeError as exc:
@@ -294,19 +295,16 @@ def parse_reply(raw: str) -> dict:
     if not signed:
         raise SignerClientError("sign_failed")
     pqsig = data.get("pqsig")
-    if not isinstance(pqsig, str) or not pqsig:
+    # Live marker is "present" (case-sensitive). Not hex. Never the txn.
+    if pqsig != PQSIG_PRESENT:
         raise SignerClientError("sign_failed")
-    try:
-        pqsig_b = bytes.fromhex(pqsig)
-    except ValueError as exc:
-        raise SignerClientError("sign_failed") from exc
-    if signed == pqsig_b:
+    if signed == pqsig.encode("utf-8"):
         raise SignerClientError("sign_failed")
     return {
         "ok": True,
         "tree_size": int(data["tree_size"]),
         "root": _hex_node(data["root"]),
-        "pqsig": pqsig.lower() if not pqsig.startswith("0x") else pqsig,
+        "pqsig": PQSIG_PRESENT,
         "signed": signed,
     }
 
