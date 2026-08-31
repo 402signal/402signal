@@ -30,7 +30,11 @@ primary_region = "iad"
 # 1GB persistent volume for probe history + catalog.sqlite + pq-log.sqlite (Ross approved ~$0.15/mo).
 # Process-local only. Do not HTTP-serve /data or sqlite files.
 # pq-log.sqlite is a separate file. 402security must GO before Fly enablement of a log key
-# and before any Falcon spend. No extra machines in this PR.
+# and before any Falcon spend.
+# Falcon TestNet (this PR): in-process on the existing app only. No extra
+# [processes] entry, no extra [[vm]], do not fly scale, do not deploy.
+# Ross spend-GO'd an extra shared-cpu-1x (~$2/mo) for a later isolated
+# signer machine. That is a separate PR after this SHA GOs.
 # Scheduled snapshots off.
 [[mounts]]
   source = "data"

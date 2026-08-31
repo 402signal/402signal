@@ -1,8 +1,14 @@
-"""In-process PQ1 anchor worker. Not a new Fly app.
+"""In-process PQ1 anchor worker. Not a new Fly app or machine.
 
 Queue unsigned checkpoint requests. Build a PaymentTxn only when the SLA
 fires. Idle: do not even build an anchor if tree size is unchanged.
-Never call algod send. Ross must approve extra machines later.
+
+send_forbidden remains the default. maybe_submit() may call algod send
+only when every TestNet gate passes. Otherwise it does not build or send.
+
+Runs on the existing 402signal app only. An extra shared-cpu-1x (~$2/mo)
+isolated signer was Ross spend-GO'd for later — that is a separate PR
+after this SHA GOs. Do not fly scale from this module.
 """
 
 from __future__ import annotations
@@ -99,4 +105,65 @@ def process_one(signer_callback, sender: str, params: dict | None = None, now: i
         "pqsig": pqsig,
         "submitted": False,
         "status": "pending",
+    }
+
+
+def maybe_submit(
+    signer_callback,
+    sender: str | None = None,
+    params: dict | None = None,
+    now: int | None = None,
+    send_fn=None,
+    tree_size: int | None = None,
+) -> dict | None:
+    """Build and send only if every TestNet gate passes. Else do neither.
+
+    Gates: LIVE402_PQ_FALCON_NETWORK=testnet, BROADCAST=1, address set,
+    isolated callback or loaded SK, SLA should_build, tree size changed,
+    genesis testnet-v1.0 (MainNet rejected). send_fn is a mocked algod in
+    tests; fixture mode never hits a live network.
+    """
+    addr = algo_anchor.falcon_address(sender)
+    p = dict(params) if isinstance(params, dict) else {}
+    gen = str(p.get("genesisID") or p.get("genesis_id") or algo_anchor.TESTNET_GENESIS_ID)
+    if gen != algo_anchor.TESTNET_GENESIS_ID:
+        return None
+    p["genesisID"] = algo_anchor.TESTNET_GENESIS_ID
+    if not (p.get("genesisHash") or p.get("genesis_hash")):
+        p["genesisHash"] = algo_anchor.TESTNET_GENESIS_HASH
+    if not algo_anchor.submit_allowed(signer_callback=signer_callback, sender=addr, params=p):
+        return None
+    if send_fn is None:
+        from live402 import fixtures
+
+        if fixtures.fixture_mode():
+            return None
+    if not should_build(now=now, tree_size=tree_size):
+        return None
+    size = store.size() if tree_size is None else int(tree_size)
+    if size == last_anchor()["size"]:
+        return None
+    origin = store.origin() or ORIGIN
+    root = store.root(size)
+    note = algo_anchor.encode_note(origin, size, root)
+    txn = algo_anchor.build_payment_txn(addr, note, p)
+    if str(txn.get("gen") or "") != algo_anchor.TESTNET_GENESIS_ID:
+        return None
+    cb = signer_callback
+    if not callable(cb):
+        return None
+    pqsig = algo_anchor.isolated_sign(txn, cb, pk=algo_anchor.current_falcon_sk())
+    txid = algo_anchor.send_if_allowed(txn, pqsig, send_fn=send_fn, sender=addr)
+    if not txid:
+        return None
+    when = int(now if now is not None else time.time())
+    save_anchor(size, when)
+    return {
+        "tree_size": size,
+        "note": note,
+        "txn": txn,
+        "pqsig": pqsig,
+        "submitted": True,
+        "status": "pending",
+        "txid": txid,
     }

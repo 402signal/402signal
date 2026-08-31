@@ -1,10 +1,11 @@
-"""Algorand Falcon construction only. No send. No private keys."""
+"""Algorand Falcon construction + TestNet-gated submit. No live network."""
 
 from __future__ import annotations
 
 import os
 import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 os.environ.setdefault("LIVE402_FIXTURE", "1")
@@ -22,6 +23,18 @@ class _FakeFalconSigner:
 
     def sign(self, unsigned_txn):
         return self.signer_callback(unsigned_txn)
+
+
+def _testnet_params():
+    return {
+        "flatFee": True,
+        "fee": 3000,
+        "minFee": 3000,
+        "firstValid": 1,
+        "lastValid": 1001,
+        "genesisID": algo_anchor.TESTNET_GENESIS_ID,
+        "genesisHash": algo_anchor.TESTNET_GENESIS_HASH,
+    }
 
 
 class AlgorandConstructionTests(unittest.TestCase):
@@ -139,6 +152,237 @@ class AlgorandConstructionTests(unittest.TestCase):
         self.assertEqual(sent, [])
         with self.assertRaises(algo_anchor.AnchorError):
             algo_anchor.never_state_proof_covered("state_proof_covered")
+
+
+class TestNetSubmitTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        os.environ["LIVE402_PQ_LOG_DB"] = os.path.join(self.tmp.name, "pq-log.sqlite")
+        store.reset()
+        worker.clear_queue()
+        algo_anchor.configure_falcon_sk(None)
+        self.sender = payment.DEFAULT_PAYTO_ALGORAND
+        self._env_keys = (
+            "LIVE402_PQ_FALCON_NETWORK",
+            "LIVE402_PQ_FALCON_BROADCAST",
+            "LIVE402_PQ_FALCON_ADDRESS",
+            "LIVE402_PQ_FALCON_SK",
+        )
+        for key in self._env_keys:
+            os.environ.pop(key, None)
+        self.addCleanup(self._cleanup)
+
+    def _cleanup(self):
+        worker.clear_queue()
+        store.reset()
+        algo_anchor.configure_falcon_sk(None)
+        for key in self._env_keys:
+            os.environ.pop(key, None)
+        os.environ.pop("LIVE402_PQ_LOG_DB", None)
+        self.tmp.cleanup()
+
+    def _arm_testnet(self):
+        os.environ["LIVE402_PQ_FALCON_NETWORK"] = "testnet"
+        os.environ["LIVE402_PQ_FALCON_BROADCAST"] = "1"
+        os.environ["LIVE402_PQ_FALCON_ADDRESS"] = self.sender
+
+    def test_default_send_forbidden_even_when_broadcast_env_set(self):
+        self._arm_testnet()
+        with self.assertRaises(RuntimeError) as ctx:
+            algo_anchor.send_forbidden({})
+        self.assertIn("forbidden", str(ctx.exception).lower())
+        sent = []
+        store.append(b"one")
+        worker.save_anchor(0, 0)
+        # process_one is still construction-only.
+        worker.enqueue_unsigned(now=15 * 60)
+        out = worker.process_one(lambda _u: b"sig", self.sender, _testnet_params(), now=15 * 60)
+        self.assertIsNotNone(out)
+        self.assertFalse(out["submitted"])
+        self.assertEqual(sent, [])
+
+    def test_testnet_broadcast_sla_size_change_submits_via_mocked_algod(self):
+        self._arm_testnet()
+        store.append(b"one")
+        worker.save_anchor(0, 0)
+        sent = []
+
+        def mock_send(blob):
+            self.assertIsInstance(blob, (bytes, bytearray))
+            self.assertTrue(blob)
+            sent.append(bytes(blob))
+            return "txid-fixture"
+
+        def callback(_unsigned):
+            return b"pqsig-testnet"
+
+        built = []
+        real_build = algo_anchor.build_payment_txn
+
+        def wrap_build(*a, **k):
+            built.append(True)
+            return real_build(*a, **k)
+
+        with patch.object(algo_anchor, "build_payment_txn", wrap_build):
+            out = worker.maybe_submit(
+                callback,
+                self.sender,
+                _testnet_params(),
+                now=15 * 60,
+                send_fn=mock_send,
+            )
+        self.assertIsNotNone(out)
+        self.assertTrue(out["submitted"])
+        self.assertEqual(out["status"], "pending")
+        self.assertNotEqual(out["status"], "state_proof_covered")
+        self.assertEqual(out["txid"], "txid-fixture")
+        self.assertEqual(out["txn"]["gen"], algo_anchor.TESTNET_GENESIS_ID)
+        self.assertNotEqual(out["txn"]["gen"], algo_anchor.MAINNET_GENESIS_ID)
+        self.assertEqual(len(sent), 1)
+        self.assertEqual(built, [True])
+
+    def test_idle_size_unchanged_does_not_send(self):
+        self._arm_testnet()
+        store.append(b"one")
+        worker.save_anchor(1, 1)
+        sent = []
+        built = []
+
+        def mock_send(blob):
+            sent.append(blob)
+            raise AssertionError("must not send idle")
+
+        def boom(*_a, **_k):
+            built.append(True)
+            raise AssertionError("must not build idle")
+
+        with patch.object(algo_anchor, "build_payment_txn", boom):
+            out = worker.maybe_submit(
+                lambda _u: b"sig",
+                self.sender,
+                _testnet_params(),
+                now=10**12,
+                send_fn=mock_send,
+            )
+        self.assertIsNone(out)
+        self.assertEqual(sent, [])
+        self.assertEqual(built, [])
+
+    def test_mainnet_genesis_is_rejected(self):
+        self._arm_testnet()
+        store.append(b"one")
+        worker.save_anchor(0, 0)
+        sent = []
+        built = []
+        params = dict(algod.suggested_params())
+        self.assertEqual(params.get("genesisID"), algo_anchor.MAINNET_GENESIS_ID)
+
+        def mock_send(blob):
+            sent.append(blob)
+            raise AssertionError("must not send mainnet")
+
+        def boom(*_a, **_k):
+            built.append(True)
+            raise AssertionError("must not build mainnet submit")
+
+        with patch.object(algo_anchor, "build_payment_txn", boom):
+            out = worker.maybe_submit(
+                lambda _u: b"sig",
+                self.sender,
+                params,
+                now=15 * 60,
+                send_fn=mock_send,
+            )
+        self.assertIsNone(out)
+        self.assertEqual(sent, [])
+        self.assertEqual(built, [])
+        self.assertFalse(
+            algo_anchor.submit_allowed(
+                signer_callback=lambda _u: b"sig",
+                sender=self.sender,
+                params=params,
+            )
+        )
+
+    def test_missing_any_gate_does_not_build_or_send(self):
+        store.append(b"one")
+        worker.save_anchor(0, 0)
+        sent = []
+        built = []
+
+        def mock_send(blob):
+            sent.append(blob)
+            raise AssertionError("must not send")
+
+        def boom(*_a, **_k):
+            built.append(True)
+            raise AssertionError("must not build")
+
+        cases = [
+            {},  # default: no network, no broadcast
+            {"LIVE402_PQ_FALCON_NETWORK": "testnet"},
+            {"LIVE402_PQ_FALCON_NETWORK": "testnet", "LIVE402_PQ_FALCON_BROADCAST": "1"},
+            {
+                "LIVE402_PQ_FALCON_NETWORK": "mainnet",
+                "LIVE402_PQ_FALCON_BROADCAST": "1",
+                "LIVE402_PQ_FALCON_ADDRESS": self.sender,
+            },
+        ]
+        for env in cases:
+            for key in self._env_keys:
+                os.environ.pop(key, None)
+            os.environ.update(env)
+            with patch.object(algo_anchor, "build_payment_txn", boom):
+                out = worker.maybe_submit(
+                    lambda _u: b"sig",
+                    env.get("LIVE402_PQ_FALCON_ADDRESS"),
+                    _testnet_params(),
+                    now=15 * 60,
+                    send_fn=mock_send,
+                )
+            self.assertIsNone(out, env)
+        self.assertEqual(sent, [])
+        self.assertEqual(built, [])
+
+    def test_fixture_mode_without_mock_does_not_hit_network(self):
+        self._arm_testnet()
+        store.append(b"one")
+        worker.save_anchor(0, 0)
+        posted = []
+
+        def boom_post(*_a, **_k):
+            posted.append(True)
+            raise AssertionError("must not POST live algod")
+
+        with patch.object(algo_anchor, "_post_testnet", boom_post):
+            out = worker.maybe_submit(
+                lambda _u: b"sig",
+                self.sender,
+                _testnet_params(),
+                now=15 * 60,
+                send_fn=None,
+            )
+        self.assertIsNone(out)
+        self.assertEqual(posted, [])
+
+    def test_fly_toml_stays_one_app_machine(self):
+        text = Path(__file__).resolve().parent.parent.joinpath("fly.toml").read_text(encoding="utf-8")
+        self.assertEqual(text.count("[[vm]]"), 1)
+        self.assertIn('processes = ["app"]', text)
+        self.assertNotIn("[processes]", text)
+        self.assertNotIn("falcon-signer", text)
+        self.assertIn("Ross spend-GO", text)
+        self.assertIn("separate PR", text)
+        self.assertIn("do not fly scale", text.lower())
+
+    def test_trust_root_not_mainnet_go_stays_true(self):
+        from live402.pq import trust
+
+        desc = trust.trust_root()
+        self.assertTrue(desc["not_mainnet_go"])
+        self.assertEqual(desc["falcon"]["allowed_broadcast"], "testnet")
+        self.assertEqual(desc["falcon"]["network"], "mainnet-v1.0")
+        self.assertEqual(trust.falcon_allowed_broadcast(), "testnet")
 
 
 if __name__ == "__main__":

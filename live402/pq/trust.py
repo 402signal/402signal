@@ -86,6 +86,13 @@ def falcon_address() -> str:
     return (os.environ.get(env_name) or "").strip()
 
 
+def falcon_allowed_broadcast() -> str:
+    """Only TestNet may be broadcast. MainNet stays behind not_mainnet_go."""
+    desc = trust_root()
+    falcon = desc.get("falcon") if isinstance(desc.get("falcon"), dict) else {}
+    return str(falcon.get("allowed_broadcast") or "testnet").strip().lower()
+
+
 def witness_policy() -> list:
     desc = trust_root()
     policy = desc.get("witness_policy")

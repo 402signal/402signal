@@ -594,12 +594,24 @@ def boot_optional_log_signer() -> None:
     pq_receipt.load_signer_from_env()
 
 
+def boot_optional_falcon_sk() -> None:
+    """Load LIVE402_PQ_FALCON_SK into memory if set. Never generate a key.
+
+    Unset = construction only. Malformed fails closed (no SK). /route still
+    serves. Never logs or prints the secret. 402dev never holds it.
+    """
+    from live402.pq import algo_anchor
+
+    algo_anchor.load_falcon_sk_from_env()
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Serve 402Signal locally")
     parser.add_argument("--host", default=default_host())
     parser.add_argument("--port", type=int, default=default_port())
     args = parser.parse_args(argv)
     boot_optional_log_signer()
+    boot_optional_falcon_sk()
     httpd = ThreadingHTTPServer((args.host, args.port), Handler)
     catalog.start_refresher()
     print(
