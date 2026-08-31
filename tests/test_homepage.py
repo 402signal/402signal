@@ -97,6 +97,8 @@ class _DocParser(HTMLParser):
         self.links = []
         self.h1 = []
         self.nav_links = []
+        self.listed_links = []
+        self.listed_imgs = 0
         self._href = None
         self._parts = []
         self._in_a = False
@@ -104,14 +106,24 @@ class _DocParser(HTMLParser):
         self._h1_parts = []
         self._in_nav = False
         self._nav_depth = 0
+        self._in_listed = False
+        self._listed_depth = 0
 
     def handle_starttag(self, tag, attrs):
         attrs = dict(attrs)
+        classes = (attrs.get("class") or "").split()
         if tag == "nav":
             self._in_nav = True
             self._nav_depth = 1
         elif self._in_nav:
             self._nav_depth += 1
+        if tag == "p" and "listed-on" in classes:
+            self._in_listed = True
+            self._listed_depth = 1
+        elif self._in_listed:
+            self._listed_depth += 1
+        if tag == "img" and self._in_listed:
+            self.listed_imgs += 1
         if tag == "a":
             self._href = attrs.get("href")
             self._parts = []
@@ -132,6 +144,8 @@ class _DocParser(HTMLParser):
             self.links.append((text, self._href))
             if self._in_nav:
                 self.nav_links.append((text, self._href))
+            if self._in_listed:
+                self.listed_links.append((text, self._href))
             self._in_a = False
             self._href = None
         if tag == "h1" and self._in_h1:
@@ -141,6 +155,10 @@ class _DocParser(HTMLParser):
             self._nav_depth -= 1
             if self._nav_depth <= 0:
                 self._in_nav = False
+        if self._in_listed:
+            self._listed_depth -= 1
+            if self._listed_depth <= 0:
+                self._in_listed = False
 
 
 def _parse(html):
@@ -358,14 +376,20 @@ class HomepageProductTests(unittest.TestCase):
         forbidden = (
             "facilitator.goplausible.xyz/dashboard/merchants",
             "x402scan.com/recipient",
+            "www.x402scan.com",
             "Merchant record",
             "GoPlausible",
+            "402index.io",
+            "api.cdp.coinbase.com",
+            "facilitator.payai.network",
         )
+        expected = list(LISTED_ON)
         for path, html in self.pages.items():
+            parsed = _parse(html)
             self.assertIn("Listed on", html, path)
-            for label, href in LISTED_ON:
-                self.assertIn(href, html, path)
-                self.assertIn(label, html, path)
+            self.assertEqual(parsed.listed_links, expected, path)
+            self.assertEqual(parsed.listed_imgs, 0, path)
+            self.assertEqual(html.count("listed-on"), 1, path)
             for blob in forbidden:
                 self.assertNotIn(blob, html, path)
             self.assertIn("mailto:402signal@gmail.com", html, path)
