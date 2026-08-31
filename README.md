@@ -179,13 +179,11 @@ fly secrets set CDP_API_KEY_ID=… CDP_API_KEY_SECRET=…
 # fly secrets set LIVE402_PQ_FALCON_ADDRESS=… LIVE402_PQ_FALCON_NETWORK=testnet
 # fly secrets set LIVE402_PQ_FALCON_SK=…
 # LIVE402_PQ_FALCON_BROADCAST=1
-# Isolated falcon process is declared (256MB, ~$2/mo) at scale 0. 402QA must not
-# `fly scale count falcon=1` until 402security GOs this SHA.
 fly deploy
 fly ips list
 ```
 
-`fly.toml` sets `app = "402signal"`, `internal_port = 8080`, `auto_stop_machines = "off"`, `min_machines_running = 1` on the **app** HTTP process (shared-cpu-1x 1GB). A second process group `falcon` is the isolated Falcon signer only (unsigned txn in, pqsig out; `python3 -m live402.pq.isolated_signer`). It does not serve HTTP `/route` and does not load `LIVE402_PQ_LOG_SK`. Ross spend-GO'd that machine: **shared-cpu-1x 256MB, about $2/mo**. Scale stays **0** until 402security GOs this SHA — it will not auto-start on merge. **402QA must not `fly scale` until 402security GOs.** Do not deploy from this PR. Do not set secrets from this PR. The app process still defaults to `send_forbidden`. TestNet broadcast still requires `LIVE402_PQ_FALCON_BROADCAST=1` plus SK.
+`fly.toml` already sets `app = "402signal"`, `internal_port = 8080`, `auto_stop_machines = "off"`, `min_machines_running = 1`, one VM. This SHA does not provision or declare a second machine. Ross spend-GO'd ~$2/mo shared-cpu-1x later; that is a **separate PR** after this SHA GOs. Do not `fly scale`. Do not deploy from this PR. The app process still defaults to `send_forbidden`. TestNet broadcast still requires `LIVE402_PQ_FALCON_BROADCAST=1` plus SK.
 
 ## Namecheap BasicDNS (do not change until deploy)
 
@@ -216,5 +214,5 @@ live402/algod.py    pinned algod suggestedParams for the unpaid Algorand 402 ext
 live402/data/       fixture catalog
 tests/              unittest
 Dockerfile          Python 3.12-slim, 0.0.0.0:$PORT
-fly.toml            app 402signal; HTTP app 1GB; falcon signer 256MB (~$2/mo), scale 0 until 402security GO
+fly.toml            app 402signal, internal_port 8080, one machine
 ```
