@@ -599,10 +599,15 @@ a.lookup:link, a.lookup:visited { color: var(--ink); text-decoration: none; }
 .result-bits {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px 14px;
+  gap: 4px 0;
   margin: 4px 0 0;
   color: var(--muted);
   font-size: 13px;
+}
+.result-bits span + span::before {
+  content: "·";
+  margin: 0 8px;
+  color: var(--line);
 }
 .results-heading + .result-row { border-top: 1px solid var(--line); }
 
