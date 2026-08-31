@@ -1213,6 +1213,61 @@ def clocks_iso(url: str) -> dict:
     return {k: _iso_ts(v) for k, v in raw.items()}
 
 
+def listing_facts(url: str) -> dict:
+    """Catalog tenure and independent source count. Missing != 0.
+
+    first_seen / days_listed / source_count are None when the URL is not
+    on catalog.sqlite. Never invent a zero-source listing.
+    """
+    out = {
+        "first_seen": None,
+        "days_listed": None,
+        "source_count": None,
+        "claimed_rails": None,
+    }
+    dest = _text(url)
+    if not dest:
+        return out
+    try:
+        with _lock:
+            conn = _connect()
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT id, first_seen FROM resources WHERE canonical_url = ?",
+                (dest,),
+            )
+            row = cur.fetchone()
+            if not row:
+                return out
+            rid = int(row["id"])
+            first = _as_int(row["first_seen"], None)
+            out["first_seen"] = first
+            if first is not None:
+                out["days_listed"] = max(0, int((_now() - first) / 86400))
+            cur.execute(
+                "SELECT COUNT(*) AS n FROM resource_sources WHERE resource_id = ?",
+                (rid,),
+            )
+            nsrc = cur.fetchone()
+            if nsrc is not None:
+                out["source_count"] = int(nsrc["n"] or 0)
+            cur.execute(
+                "SELECT DISTINCT rail FROM accept_claims WHERE resource_id = ? AND rail IS NOT NULL",
+                (rid,),
+            )
+            rails = [r["rail"] for r in cur.fetchall() if r["rail"]]
+            if rails:
+                out["claimed_rails"] = rails
+        return out
+    except Exception:
+        return {
+            "first_seen": None,
+            "days_listed": None,
+            "source_count": None,
+            "claimed_rails": None,
+        }
+
+
 def resource_status(url: str) -> str | None:
     dest = _text(url)
     if not dest:

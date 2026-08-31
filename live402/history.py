@@ -94,6 +94,14 @@ CREATE TABLE IF NOT EXISTS sealed_batches (
     batch_id TEXT PRIMARY KEY,
     sealed_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS scoring_models (
+    model_id TEXT NOT NULL,
+    model_hash TEXT NOT NULL,
+    effective_ts INTEGER NOT NULL,
+    spec_json TEXT NOT NULL,
+    recorded_at INTEGER NOT NULL,
+    PRIMARY KEY (model_id, model_hash)
+);
 """
 
 
@@ -1128,6 +1136,12 @@ def attach_to_result(result: dict | None, meta: dict | None = None) -> dict:
             "p50_latency_ms": summ.get("p50_latency_ms"),
             "p95_latency_ms": summ.get("p95_latency_ms"),
         }
+        try:
+            from live402 import reputation as reputation_mod
+
+            reputation_mod.attach(result)
+        except Exception:
+            pass
         return result
     except Exception:
         result.setdefault("verified_at", result.get("probed_at"))
@@ -1148,6 +1162,197 @@ def attach_to_result(result: dict | None, meta: dict | None = None) -> dict:
         )
         return result
 
+
+
+def _empty_reputation_evidence() -> dict:
+    return {
+        "n_7d": None,
+        "ok_7d": None,
+        "success_7d": None,
+        "probe_count_7d": None,
+        "distinct_days_7d": None,
+        "outcome_flips_7d": None,
+        "first_probe_ts": None,
+        "last_checked": None,
+        "last_success_402": None,
+        "age_s": None,
+        "has_probe_history": False,
+        "payTo_changed_at": None,
+        "price_changed_at": None,
+        "schema_changed_at": None,
+        "rail_changed_at": None,
+        "payTo_change_count": None,
+        "price_change_count": None,
+        "schema_change_count": None,
+        "rail_change_count": None,
+        "rails_observed": None,
+    }
+
+
+def reputation_evidence(url: str) -> dict:
+    """Raw facts for reputation components. Missing stays None. Never invent 0.0 rates."""
+    out = _empty_reputation_evidence()
+    dest = _text(url)
+    if not dest:
+        return out
+    try:
+        now = int(time.time())
+        cutoff = now - WEEK
+        with _lock:
+            conn = _connect()
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT last_payTo, payTo_changed_at, price_changed_at, schema_changed_at, last_checked, last_success_402 FROM url_state WHERE url = ?",
+                (dest,),
+            )
+            state = cur.fetchone()
+            if state:
+                out["payTo_changed_at"] = state[1]
+                out["price_changed_at"] = state[2]
+                out["schema_changed_at"] = state[3]
+                out["last_checked"] = state[4]
+                out["last_success_402"] = state[5]
+                if state[4] is not None:
+                    out["age_s"] = max(0, now - int(state[4]))
+            cur.execute(
+                "SELECT ts, live, rail, payTo, amount, schema_present FROM probes WHERE url = ? ORDER BY ts ASC, id ASC",
+                (dest,),
+            )
+            rows = cur.fetchall()
+        if not rows:
+            return out
+        out["has_probe_history"] = True
+        out["first_probe_ts"] = rows[0][0]
+        n_7d = 0
+        ok_7d = 0
+        days = set()
+        flips = 0
+        prev_live = None
+        prev_pay = None
+        prev_amt = None
+        prev_schema = None
+        prev_rail = None
+        pay_changes = 0
+        price_changes = 0
+        schema_changes = 0
+        rail_changes = 0
+        rail_changed_at = None
+        rails = []
+        for ts, live, rail, pay_to, amount, schema_present in rows:
+            rname = _text(rail)
+            if rname and rname not in rails:
+                rails.append(rname)
+            if prev_pay is not None and pay_to and not payment.payto_equal(prev_pay, pay_to, rname):
+                pay_changes += 1
+            if prev_amt is not None and amount is not None and str(prev_amt) != str(amount):
+                price_changes += 1
+            if prev_schema is not None and schema_present is not None and int(prev_schema) != int(schema_present):
+                schema_changes += 1
+            if prev_rail is not None and rname and prev_rail != rname:
+                rail_changes += 1
+                rail_changed_at = ts
+            if pay_to:
+                prev_pay = pay_to
+            if amount is not None:
+                prev_amt = amount
+            if schema_present is not None:
+                prev_schema = schema_present
+            if rname:
+                prev_rail = rname
+            if ts is None or int(ts) < cutoff:
+                prev_live = live
+                continue
+            n_7d += 1
+            if live:
+                ok_7d += 1
+            try:
+                days.add(int(ts) // DAY)
+            except (TypeError, ValueError):
+                pass
+            if prev_live is not None and int(prev_live or 0) != int(live or 0):
+                flips += 1
+            prev_live = live
+        out["n_7d"] = n_7d
+        out["ok_7d"] = ok_7d
+        out["probe_count_7d"] = n_7d
+        out["success_7d"] = (ok_7d / n_7d) if n_7d else None
+        out["distinct_days_7d"] = len(days) if n_7d else 0
+        out["outcome_flips_7d"] = flips if n_7d else 0
+        out["payTo_change_count"] = pay_changes
+        out["price_change_count"] = price_changes
+        out["schema_change_count"] = schema_changes
+        out["rail_change_count"] = rail_changes
+        out["rail_changed_at"] = rail_changed_at
+        if rails:
+            out["rails_observed"] = rails
+        return out
+    except Exception:
+        return _empty_reputation_evidence()
+
+
+def ensure_scoring_model(record: dict | None) -> dict | None:
+    """Append-only scoring-model log. Never updates a prior hash. Never raises."""
+    try:
+        rec = record if isinstance(record, dict) else {}
+        model_id = _text(rec.get("model_id"))
+        digest = _text(rec.get("model_hash"))
+        spec = rec.get("spec_json")
+        if not model_id or not digest or not spec:
+            return None
+        effective = _as_int(rec.get("effective_ts"), None)
+        if effective is None:
+            effective = int(time.time())
+        with _lock:
+            conn = _connect()
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO scoring_models
+                    (model_id, model_hash, effective_ts, spec_json, recorded_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (model_id, digest, int(effective), str(spec), int(time.time())),
+            )
+            conn.commit()
+            _chmod_db_files(_conn_path or db_path())
+        return {"model_id": model_id, "model_hash": digest, "effective_ts": int(effective)}
+    except Exception:
+        return None
+
+
+def scoring_model(model_id: str | None = None) -> dict | None:
+    """Latest logged model, or a specific id. None if the log is empty."""
+    try:
+        with _lock:
+            conn = _connect()
+            cur = conn.cursor()
+            if model_id:
+                cur.execute(
+                    """
+                    SELECT model_id, model_hash, effective_ts, spec_json, recorded_at
+                    FROM scoring_models WHERE model_id = ?
+                    ORDER BY recorded_at DESC LIMIT 1
+                    """,
+                    (model_id,),
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT model_id, model_hash, effective_ts, spec_json, recorded_at
+                    FROM scoring_models ORDER BY recorded_at DESC LIMIT 1
+                    """
+                )
+            row = cur.fetchone()
+        if not row:
+            return None
+        return {
+            "model_id": row[0],
+            "model_hash": row[1],
+            "effective_ts": row[2],
+            "spec_json": row[3],
+            "recorded_at": row[4],
+        }
+    except Exception:
+        return None
 
 
 def _iso_ts(ts) -> str | None:
