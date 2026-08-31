@@ -325,7 +325,7 @@ class AuthorizedConfirmedTests(unittest.TestCase):
         self.assertEqual(conf["size"], 0)
         self.assertEqual(worker.last_anchor()["size"], 0)
 
-    def test_confirmed_only_after_explicit_path(self):
+    def test_confirmed_only_after_independent_fetch(self):
         self._seed_note()
         port, _received = self._serve([_SIGNED_A])
         self._arm_sign(port)
@@ -337,34 +337,13 @@ class AuthorizedConfirmedTests(unittest.TestCase):
         )
         self.assertEqual(worker.last_confirmed()["size"], 0)
         with self.assertRaises(algo_anchor.AnchorError):
-            worker.confirm_testnet_anchor(
-                tree_size=1,
-                txid="YOUR_TXID",
-                confirmed_round=10,
-                root=store.root(1),
-            )
+            worker.confirm_testnet_anchor("YOUR_TXID")
         with self.assertRaises(algo_anchor.AnchorError):
-            worker.confirm_testnet_anchor(
-                tree_size=1,
-                txid="placeholder",
-                confirmed_round=10,
-                root=store.root(1),
-            )
-        out = worker.confirm_testnet_anchor(
-            tree_size=1,
-            txid=_TXID,
-            confirmed_round=99,
-            root=store.root(1),
-            at=50,
-        )
-        self.assertEqual(out["size"], 1)
-        self.assertEqual(out["txid"], _TXID)
-        self.assertEqual(out["round"], 99)
-        self.assertEqual(worker.last_confirmed()["size"], 1)
-        self.assertEqual(worker.last_anchor()["size"], 1)
-        self.assertEqual(worker.public_anchor()["txid"], _TXID)
-        self.assertFalse(worker.should_build(now=15 * 60, tree_size=1))
-        self.assertNotIn("placeholder", worker.public_anchor()["txid"].lower())
+            worker.confirm_testnet_anchor("placeholder")
+        with self.assertRaises(algo_anchor.AnchorError):
+            worker.confirm_testnet_anchor(_TXID)
+        self.assertEqual(worker.last_confirmed()["size"], 0)
+        self.assertIsNone(worker.public_anchor())
 
     def test_legacy_anchor_meta_migrates_to_authorized_not_confirmed(self):
         store.meta_set("anchor", json.dumps({"size": 3, "at": 9}))
@@ -376,13 +355,13 @@ class AuthorizedConfirmedTests(unittest.TestCase):
         self.assertEqual(worker.last_anchor()["size"], 0)
         self.assertIsNone(worker.public_anchor())
 
-    def test_no_algod_post_on_confirm_or_sign(self):
+    def test_confirm_does_not_post_and_does_not_trust_caller_fields(self):
         import inspect
 
-        src = inspect.getsource(worker) + inspect.getsource(algo_anchor)
-        self.assertNotIn("def _post_testnet", src)
-        self.assertNotIn("testnet-api.algonode.cloud/v2/transactions", src)
-        self.assertIn("Does not POST to algod", inspect.getsource(worker))
+        src = inspect.getsource(worker.confirm_testnet_anchor)
+        self.assertIn("fetch_testnet_txn", src)
+        self.assertNotIn("_post_testnet", src)
+        self.assertIn("signing success is not confirmation", src.lower())
 
 
 if __name__ == "__main__":

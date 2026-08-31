@@ -32,6 +32,14 @@ def decode_address(addr: str) -> bytes:
     return key
 
 
+def encode_address(key: bytes) -> str:
+    raw = bytes(key)
+    if len(raw) != 32:
+        raise ValueError("invalid algorand public key")
+    checksum = sha512_256(raw)[-4:]
+    return base64.b32encode(raw + checksum).decode("ascii").rstrip("=")
+
+
 def _mp_uint(n: int) -> bytes:
     if n < 0:
         raise ValueError("negative integer")

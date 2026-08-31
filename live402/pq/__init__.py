@@ -2,7 +2,8 @@
 
 Product-GO for the log in CI/local. Not MainNet GO.
 Falcon SK is not on this app. Router 6PN client is fail-closed unless
-LIVE402_PQ_SIGNER_TOKEN is set. No homepage PQ copy.
+LIVE402_PQ_SIGNER_TOKEN is set. Homepage PQ copy renders only when
+last_confirmed has a real TestNet txid.
 """
 
 from __future__ import annotations

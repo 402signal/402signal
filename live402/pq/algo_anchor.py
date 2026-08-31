@@ -5,16 +5,25 @@ uint64 BE tree_size || 32-byte RFC 6962 root.
 
 Txn = PaymentTxn amount=0, receiver=sender, flat fee >= 3000 µALGO.
 Falcon signing goes through the 6PN client (pq-anchor/1). This module
-does not load a Falcon SK and has no Algorand submit function.
-send_forbidden() always raises. MainNet genesis is rejected.
+does not load a Falcon SK. send_forbidden() always raises.
+
+TestNet submit of a signer-approved SignedTxn is gated on
+LIVE402_PQ_FALCON_BROADCAST=1 (default unset). Fixture mode and CI
+never hit live algod unless a send/fetch hook is injected. MainNet
+genesis has no submit path.
 """
 
 from __future__ import annotations
 
 import base64
 import hashlib
+import json
 import os
+import re
+import urllib.error
+import urllib.request
 from collections.abc import Callable
+from urllib.parse import urlparse
 
 from live402 import algo_tx
 from live402.pq import NOTE_FORMAT, NOTE_VERSION
@@ -24,6 +33,7 @@ from live402.pq.merkle import HASH_SIZE
 NOTE_PREFIX = NOTE_FORMAT.encode("ascii")  # 11 bytes
 NOTE_LEN = 84
 MIN_FEE = 3000
+MAX_FEE = 30000
 ANCHOR_STATUSES = frozenset({"pending", "unavailable"})
 
 # TestNet only for any submit path. Do not set MainNet.
@@ -31,9 +41,21 @@ TESTNET_NAME = "testnet"
 TESTNET_GENESIS_ID = "testnet-v1.0"
 MAINNET_GENESIS_ID = "mainnet-v1.0"
 TESTNET_GENESIS_HASH = "SGO1GKSzyE7IEPItTxCByw9x8FmnrCDexi9/cOUJOiI="
+TESTNET_ALGOD_HOST = "testnet-api.algonode.cloud"
+TESTNET_ALGOD_SEND_URL = "https://testnet-api.algonode.cloud/v2/transactions"
+TESTNET_ALGOD_PENDING_URL = "https://testnet-api.algonode.cloud/v2/transactions/pending/"
+TESTNET_INDEXER_HOST = "testnet-idx.algonode.cloud"
+TESTNET_INDEXER_TXN_URL = "https://testnet-idx.algonode.cloud/v2/transactions/"
+TESTNET_EXPLORER_TX_URL = "https://testnet.explorer.perawallet.app/tx/"
+TESTNET_SEND_TIMEOUT = 8.0
+TESTNET_FETCH_TIMEOUT = 8.0
+USER_AGENT = "402Signal/0.1 (pq falcon testnet; no keys in logs)"
 NETWORK_ENV = "LIVE402_PQ_FALCON_NETWORK"
 BROADCAST_ENV = "LIVE402_PQ_FALCON_BROADCAST"
 ADDRESS_ENV = "LIVE402_PQ_FALCON_ADDRESS"
+PQSIG_MARKER = "present"
+_TXID_RE = re.compile(r"^[A-Z2-7]{52}$")
+_PLACEHOLDER_TXID = frozenset({"", "your_txid", "placeholder", "txid", "none", "null"})
 
 
 class AnchorError(ValueError):
@@ -257,7 +279,7 @@ def _invoke_sdk_signer(signer, unsigned_txn):
 
 
 def send_forbidden(*_a, **_k):
-    """Default send path. Always raises. No Falcon submit function in this SHA."""
+    """Default send path. Always raises. Broadcast uses send_if_allowed."""
     raise RuntimeError("algod send is forbidden in PQ1 construction")
 
 
@@ -315,9 +337,8 @@ def submit_allowed(
     """True only when every TestNet submit gate is set.
 
     Requires LIVE402_PQ_FALCON_NETWORK=testnet, BROADCAST=1, a public
-    address, 6PN token or callback, and testnet-v1.0 genesis (MainNet
-    genesis is rejected). This SHA has no Falcon submit function, so
-    this gate never opens a send path.
+    address, and testnet-v1.0 genesis (MainNet genesis is rejected).
+    A recovered SignedTxn does not need a live signer callback.
     """
     gen = txn_genesis_id(txn, params)
     if gen == MAINNET_GENESIS_ID or gen != TESTNET_GENESIS_ID:
@@ -328,6 +349,451 @@ def submit_allowed(
         return False
     if not falcon_address(sender):
         return False
-    if not signer_material_present(signer_callback):
+    return True
+
+
+def _looks_like_txid(txid: str) -> bool:
+    text = (txid or "").strip()
+    low = text.lower()
+    if low in _PLACEHOLDER_TXID or "placeholder" in low or text == "YOUR_TXID":
         return False
-    return False
+    return bool(_TXID_RE.match(text))
+
+
+def testnet_explorer_url(txid: str) -> str:
+    if not _looks_like_txid(txid):
+        raise AnchorError("invalid confirmed fields")
+    return TESTNET_EXPLORER_TX_URL + txid.strip()
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def _pinned_https(url: str, host: str) -> bool:
+    parsed = urlparse(url)
+    if parsed.scheme != "https" or (parsed.hostname or "").lower() != host:
+        return False
+    if parsed.username or parsed.password:
+        return False
+    return True
+
+
+def send_if_allowed(signed: bytes, *, send_fn=None, sender: str | None = None, params: dict | None = None) -> str | None:
+    """POST signer-approved SignedTxn bytes only when submit_allowed.
+
+    send_fn is injected by tests. Fixture mode without send_fn never
+    dials live algod. The pqsig marker is never treated as txn bytes.
+    """
+    if not isinstance(signed, (bytes, bytearray)) or not signed:
+        return None
+    blob = bytes(signed)
+    if blob == PQSIG_MARKER.encode("utf-8") or blob == PQSIG_MARKER.encode("ascii"):
+        return None
+    if not submit_allowed(sender=sender, params=params):
+        return None
+    if send_fn is not None:
+        if not callable(send_fn):
+            return None
+        out = send_fn(blob)
+        if out is None:
+            return None
+        text = str(out).strip()
+        return text if _looks_like_txid(text) else None
+    from live402 import fixtures
+
+    if fixtures.fixture_mode():
+        return None
+    return _post_testnet(blob)
+
+
+def _post_testnet(blob: bytes) -> str | None:
+    """POST SignedTxn bytes to pinned TestNet algod. Never MainNet."""
+    if not _pinned_https(TESTNET_ALGOD_SEND_URL, TESTNET_ALGOD_HOST):
+        return None
+    req = urllib.request.Request(
+        TESTNET_ALGOD_SEND_URL,
+        data=bytes(blob),
+        method="POST",
+        headers={
+            "User-Agent": USER_AGENT,
+            "Accept": "application/json",
+            "Content-Type": "application/x-binary",
+        },
+    )
+    opener = urllib.request.build_opener(_NoRedirect)
+    try:
+        with opener.open(req, timeout=TESTNET_SEND_TIMEOUT) as resp:
+            status = getattr(resp, "status", None) or resp.getcode()
+            if not isinstance(status, int) or status < 200 or status >= 300:
+                return None
+            raw = resp.read(512)
+    except urllib.error.HTTPError:
+        return None
+    except Exception:
+        return None
+    try:
+        body = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(body, dict):
+        return None
+    txid = str(body.get("txId") or body.get("txid") or "").strip()
+    return txid if _looks_like_txid(txid) else None
+
+
+def _get_pinned(url: str, host: str, timeout: float) -> bytes | None:
+    if not _pinned_https(url, host):
+        return None
+    req = urllib.request.Request(
+        url,
+        method="GET",
+        headers={"User-Agent": USER_AGENT, "Accept": "application/json"},
+    )
+    opener = urllib.request.build_opener(_NoRedirect)
+    try:
+        with opener.open(req, timeout=timeout) as resp:
+            status = getattr(resp, "status", None) or resp.getcode()
+            if not isinstance(status, int) or status < 200 or status >= 300:
+                return None
+            return resp.read(65536)
+    except urllib.error.HTTPError:
+        return None
+    except Exception:
+        return None
+
+
+def fetch_testnet_txn(txid: str, fetch_fn=None):
+    """Independently GET a confirmed TestNet txn. Never trusts caller fields.
+
+    fetch_fn is injected by tests. Fixture mode without fetch_fn never
+    dials live indexer/algod. MainNet hosts are not contacted.
+    """
+    if not _looks_like_txid(txid):
+        return None
+    if fetch_fn is not None:
+        if not callable(fetch_fn):
+            return None
+        return fetch_fn(txid)
+    from live402 import fixtures
+
+    if fixtures.fixture_mode():
+        return None
+    idx_url = TESTNET_INDEXER_TXN_URL + txid
+    raw = _get_pinned(idx_url, TESTNET_INDEXER_HOST, TESTNET_FETCH_TIMEOUT)
+    if raw:
+        try:
+            data = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError, TypeError):
+            data = None
+        if isinstance(data, dict):
+            return data
+    pending_url = TESTNET_ALGOD_PENDING_URL + txid
+    raw = _get_pinned(pending_url, TESTNET_ALGOD_HOST, TESTNET_FETCH_TIMEOUT)
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError, TypeError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _b64(val):
+    if val is None or val == "":
+        return b""
+    if isinstance(val, (bytes, bytearray)):
+        return bytes(val)
+    text = str(val).strip()
+    if not text:
+        return b""
+    try:
+        return base64.b64decode(text)
+    except Exception:
+        try:
+            return bytes.fromhex(text)
+        except ValueError:
+            return text.encode("utf-8")
+
+
+def _addr_text(val) -> str:
+    if val is None or val == "":
+        return ""
+    if isinstance(val, (bytes, bytearray)):
+        if len(val) == 32:
+            try:
+                return algo_tx.encode_address(bytes(val))
+            except ValueError:
+                return ""
+        return ""
+    text = str(val).strip()
+    if len(text) == 58:
+        try:
+            algo_tx.decode_address(text)
+            return text
+        except ValueError:
+            return ""
+    try:
+        raw = _b64(text)
+        if len(raw) == 32:
+            return algo_tx.encode_address(raw)
+    except Exception:
+        return ""
+    return ""
+
+
+def _nonzero_blob(val) -> bool:
+    if val is None or val == "" or val == 0:
+        return False
+    if isinstance(val, (bytes, bytearray)):
+        return any(val)
+    if isinstance(val, str):
+        return bool(val.strip())
+    return True
+
+
+def _extract_pq_auth(obj: dict):
+    """Falcon/PQ authorization bytes from a chain object.
+
+    The signer reply marker pqsig="present" is not authorization and
+    is never treated as transaction bytes on the chain object.
+    """
+    if not isinstance(obj, dict):
+        return None
+    # Signer reply shape is not a chain object.
+    if obj.get("pqsig") == PQSIG_MARKER and "signed" in obj:
+        return None
+    candidates = []
+    sig = obj.get("signature")
+    if isinstance(sig, dict):
+        for key in ("falcon", "falconsig", "pqsig", "pq", "fsig"):
+            if key in sig:
+                candidates.append(sig.get(key))
+    for key in ("falcon", "falconsig", "pqsig", "fsig"):
+        if key in obj:
+            candidates.append(obj.get(key))
+    inner = obj.get("txn")
+    if isinstance(inner, dict):
+        for key in ("falcon", "falconsig", "pqsig", "fsig"):
+            if key in inner:
+                candidates.append(inner.get(key))
+        nested_sig = inner.get("signature")
+        if isinstance(nested_sig, dict):
+            for key in ("falcon", "falconsig", "pqsig", "pq", "fsig"):
+                if key in nested_sig:
+                    candidates.append(nested_sig.get(key))
+    for raw in candidates:
+        if raw is None or raw == "":
+            continue
+        if raw == PQSIG_MARKER or raw == PQSIG_MARKER.encode("utf-8"):
+            continue
+        blob = _b64(raw) if not isinstance(raw, (bytes, bytearray)) else bytes(raw)
+        if blob == PQSIG_MARKER.encode("utf-8"):
+            continue
+        if len(blob) < 8:
+            continue
+        return blob
+    return None
+
+
+def decode_chain_txn(obj) -> dict:
+    """Normalize indexer JSON, algod pending JSON, or a SignedTxn-shaped dict."""
+    if not isinstance(obj, dict):
+        raise AnchorError("invalid chain object")
+    if obj.get("pqsig") == PQSIG_MARKER and "signed" in obj:
+        raise AnchorError("pqsig marker is not a chain object")
+    txn = obj.get("transaction") if isinstance(obj.get("transaction"), dict) else None
+    pending = obj.get("txn") if isinstance(obj.get("txn"), dict) else None
+    inner = None
+    envelope = None
+    if txn is not None:
+        envelope = txn
+        inner = txn.get("payment-transaction") if isinstance(txn.get("payment-transaction"), dict) else {}
+        unsigned = txn
+    elif pending is not None and isinstance(pending.get("txn"), dict):
+        envelope = obj
+        unsigned = pending.get("txn")
+        inner = unsigned
+    elif pending is not None:
+        envelope = obj
+        unsigned = pending
+        inner = pending
+    else:
+        envelope = obj
+        unsigned = obj
+        inner = obj.get("payment-transaction") if isinstance(obj.get("payment-transaction"), dict) else obj
+
+    txid = str(
+        (txn or {}).get("id")
+        or envelope.get("id")
+        or obj.get("id")
+        or obj.get("txid")
+        or obj.get("txId")
+        or ""
+    ).strip()
+    try:
+        confirmed_round = int(
+            (txn or {}).get("confirmed-round")
+            or envelope.get("confirmed-round")
+            or obj.get("confirmed-round")
+            or obj.get("confirmed_round")
+            or 0
+        )
+    except (TypeError, ValueError):
+        confirmed_round = 0
+    gen = str(
+        unsigned.get("genesis-id")
+        or unsigned.get("genesisID")
+        or unsigned.get("gen")
+        or obj.get("genesis-id")
+        or obj.get("genesisID")
+        or ""
+    ).strip()
+    tx_type = str(
+        unsigned.get("tx-type")
+        or unsigned.get("txType")
+        or unsigned.get("type")
+        or ""
+    ).strip()
+    sender = _addr_text(unsigned.get("sender") or unsigned.get("snd"))
+    receiver = _addr_text(
+        (inner or {}).get("receiver")
+        or (inner or {}).get("rcv")
+        or unsigned.get("receiver")
+        or unsigned.get("rcv")
+    )
+    try:
+        amount = int(
+            (inner or {}).get("amount")
+            if (inner or {}).get("amount") is not None
+            else (unsigned.get("amt") if unsigned.get("amt") is not None else 0)
+        )
+    except (TypeError, ValueError):
+        amount = -1
+    try:
+        fee = int(unsigned.get("fee") or 0)
+    except (TypeError, ValueError):
+        fee = -1
+    note = unsigned.get("note")
+    if isinstance(note, str):
+        note = _b64(note)
+    elif isinstance(note, (bytes, bytearray)):
+        note = bytes(note)
+    else:
+        note = b""
+    close = (
+        (inner or {}).get("close-remainder-to")
+        or (inner or {}).get("close")
+        or unsigned.get("close-remainder-to")
+        or unsigned.get("close")
+    )
+    rekey = unsigned.get("rekey-to") or unsigned.get("rekey")
+    group = unsigned.get("group") or unsigned.get("grp")
+    lease = unsigned.get("lease") or unsigned.get("lx")
+    pq_auth = _extract_pq_auth(obj)
+    if pq_auth is None and pending is not None:
+        pq_auth = _extract_pq_auth(pending)
+    if pq_auth is None and txn is not None:
+        pq_auth = _extract_pq_auth(txn)
+    return {
+        "txid": txid,
+        "confirmed_round": confirmed_round,
+        "genesis_id": gen,
+        "tx_type": tx_type,
+        "sender": sender,
+        "receiver": receiver,
+        "amount": amount,
+        "fee": fee,
+        "note": note,
+        "close": close,
+        "rekey": rekey,
+        "group": group,
+        "lease": lease,
+        "has_axfer": "asset-transfer-transaction" in (txn or unsigned)
+        or str(tx_type) == "axfer"
+        or "aamt" in unsigned
+        or "xaid" in unsigned,
+        "has_appl": "application-transaction" in (txn or unsigned)
+        or str(tx_type) == "appl"
+        or "apid" in unsigned,
+        "pq_auth": pq_auth,
+    }
+
+
+def verify_fetched_anchor(
+    decoded: dict,
+    *,
+    expected_origin: str,
+    expected_size: int,
+    expected_root,
+    expected_address: str,
+    expected_txid: str | None = None,
+) -> dict:
+    """Fail closed unless the fetched txn matches PQ1 TestNet construction."""
+    if not isinstance(decoded, dict):
+        raise AnchorError("invalid chain object")
+    pq_auth = decoded.get("pq_auth")
+    if not isinstance(pq_auth, (bytes, bytearray)) or not pq_auth:
+        raise AnchorError("falcon authorization missing")
+    if bytes(pq_auth) == PQSIG_MARKER.encode("utf-8"):
+        raise AnchorError("pqsig marker is not authorization")
+    gen = str(decoded.get("genesis_id") or "")
+    if gen == MAINNET_GENESIS_ID or gen != TESTNET_GENESIS_ID:
+        raise AnchorError("not testnet genesis")
+    addr = (expected_address or "").strip()
+    if not addr:
+        raise AnchorError("falcon address required")
+    if decoded.get("sender") != addr or decoded.get("receiver") != addr:
+        raise AnchorError("sender/receiver mismatch")
+    if int(decoded.get("amount") or 0) != 0:
+        raise AnchorError("amount must be 0")
+    fee = int(decoded.get("fee") or 0)
+    if fee < 1 or fee > MAX_FEE:
+        raise AnchorError("fee out of range")
+    if _nonzero_blob(decoded.get("close")):
+        raise AnchorError("close forbidden")
+    if _nonzero_blob(decoded.get("rekey")):
+        raise AnchorError("rekey forbidden")
+    if _nonzero_blob(decoded.get("group")):
+        raise AnchorError("group forbidden")
+    if _nonzero_blob(decoded.get("lease")):
+        raise AnchorError("lease forbidden")
+    if decoded.get("has_axfer") or decoded.get("has_appl"):
+        raise AnchorError("axfer/appl forbidden")
+    tx_type = str(decoded.get("tx_type") or "")
+    if tx_type and tx_type not in {"pay", "payment"}:
+        raise AnchorError("not a payment")
+    try:
+        parsed = decode_note(bytes(decoded.get("note") or b""))
+    except Exception as exc:
+        raise AnchorError("invalid note") from exc
+    if parsed["origin_hash"] != origin_hash(expected_origin):
+        raise AnchorError("origin mismatch")
+    if int(parsed["tree_size"]) != int(expected_size):
+        raise AnchorError("tree size mismatch")
+    if isinstance(expected_root, (bytes, bytearray)):
+        want_root = bytes(expected_root)
+    else:
+        try:
+            want_root = bytes.fromhex(str(expected_root or ""))
+        except ValueError as exc:
+            raise AnchorError("invalid root") from exc
+    if parsed["root"] != want_root:
+        raise AnchorError("root mismatch")
+    rnd = int(decoded.get("confirmed_round") or 0)
+    if rnd < 1:
+        raise AnchorError("not confirmed")
+    txid = str(decoded.get("txid") or "").strip()
+    if not _looks_like_txid(txid):
+        raise AnchorError("invalid confirmed fields")
+    if expected_txid and txid != expected_txid.strip():
+        raise AnchorError("txid mismatch")
+    return {
+        "txid": txid,
+        "confirmed_round": rnd,
+        "tree_size": int(parsed["tree_size"]),
+        "origin": expected_origin,
+        "root": parsed["root"],
+        "pq_auth": bytes(pq_auth),
+    }

@@ -1,7 +1,8 @@
 """6PN pq-anchor/1 client vs live signer 076825f reply shape.
 
 TOKEN unset never dials. checkpoint is a signed-note. signed is SignedTxn hex.
-C2/D/homepage stay dead: no algod POST, no placeholder txid.
+TOKEN unset never dials. BROADCAST unset never POSTs. Homepage PQ
+only after last_confirmed has a real TestNet txid.
 """
 
 from __future__ import annotations
@@ -512,14 +513,24 @@ class SignerClientProtocolTests(unittest.TestCase):
         for key in ("fee", "firstValid", "sender", "amount", "txn", "unsigned"):
             self.assertNotIn(key, received[0])
 
-    def test_no_algorand_submit_function_for_falcon(self):
+    def test_send_forbidden_stays_default_and_broadcast_is_gated(self):
         src = inspect.getsource(algo_anchor) + inspect.getsource(worker) + inspect.getsource(signer_client)
-        self.assertNotIn("def send_if_allowed", src)
-        self.assertNotIn("def _post_testnet", src)
-        self.assertNotIn("testnet-api.algonode.cloud/v2/transactions", src)
+        self.assertIn("def send_if_allowed", src)
+        self.assertIn("def _post_testnet", src)
+        self.assertIn("testnet-api.algonode.cloud/v2/transactions", src)
+        self.assertNotIn("mainnet-api.algonode.cloud/v2/transactions", src)
         self.assertIn("def send_forbidden", inspect.getsource(algo_anchor))
         with self.assertRaises(RuntimeError):
             algo_anchor.send_forbidden({})
+        os.environ.pop("LIVE402_PQ_FALCON_BROADCAST", None)
+        posted = []
+        self.assertIsNone(
+            algo_anchor.send_if_allowed(
+                _MOCK_SIGNED_TXN,
+                send_fn=lambda blob: posted.append(blob) or "B" * 52,
+            )
+        )
+        self.assertEqual(posted, [])
 
     def test_no_falcon_sk_secret_name_on_router(self):
         files = [
@@ -573,9 +584,13 @@ class SignerClientProtocolTests(unittest.TestCase):
         text = home.read_text(encoding="utf-8")
         self.assertNotIn("Trust the history", text)
         self.assertNotIn("View latest TestNet anchor", text)
+        self.assertNotIn("View TestNet transaction", text)
         self.assertNotIn("placeholder", text.lower())
         self.assertNotIn("YOUR_TXID", text)
         self.assertNotIn("PQ Trust", text)
+        self.assertNotIn("PQ transparency", text)
+        self.assertIsNone(worker.public_anchor())
+        self.assertEqual(worker.homepage_pq_html(), "")
 
 
 if __name__ == "__main__":

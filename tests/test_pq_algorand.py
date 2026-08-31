@@ -149,11 +149,12 @@ class AlgorandConstructionTests(unittest.TestCase):
 
     def test_idle_does_not_build_when_size_unchanged(self):
         store.append(b"one")
-        worker.confirm_testnet_anchor(
+        store.save_confirmed_checkpoint(
             tree_size=1,
+            origin=ORIGIN,
+            root=store.root(1),
             txid="A" * 52,
             confirmed_round=10,
-            root=store.root(1),
             at=1,
         )
         built = []
@@ -247,8 +248,10 @@ class TestNetSubmitTests(unittest.TestCase):
         self.assertFalse(out["submitted"])
         self.assertEqual(sent, [])
 
-    def test_testnet_broadcast_does_not_submit_in_this_sha(self):
-        self._arm_testnet()
+    def test_testnet_broadcast_unset_never_posts(self):
+        os.environ["LIVE402_PQ_FALCON_NETWORK"] = "testnet"
+        os.environ.pop("LIVE402_PQ_FALCON_BROADCAST", None)
+        os.environ["LIVE402_PQ_FALCON_ADDRESS"] = self.sender
         store.append(b"one")
         worker.save_anchor(0, 0)
         sent = []
@@ -383,7 +386,8 @@ class TestNetSubmitTests(unittest.TestCase):
         worker.save_anchor(0, 0)
         posted = []
 
-        self.assertFalse(hasattr(algo_anchor, "_post_testnet"))
+        self.assertTrue(hasattr(algo_anchor, "_post_testnet"))
+        self.assertIsNone(algo_anchor.send_if_allowed(b"STXN", send_fn=None, params=_testnet_params()))
         out = worker.maybe_submit(
             lambda _u: b"sig",
             self.sender,

@@ -5,14 +5,18 @@ Queue unsigned checkpoint requests. Falcon signing is the 6PN client
 
 Authorized vs confirmed are separate durable records:
   AUTHORIZED — signer returned a SignedTxn (request_id + blob persisted)
-  CONFIRMED  — persisted TestNet inclusion fields (txid/round/root)
+  CONFIRMED  — persisted TestNet inclusion after independent fetch+verify
 
 A signer reply advances AUTHORIZED only. last_anchor() / public status
 read CONFIRMED only. should_build is vs CONFIRMED, so signed-but-unbroadcast
 stays retryable. Recover only if size+origin+root+signed-note match.
 Mismatch fail-closes: no re-dial, no old SignedTxn, no overwrite.
-send_forbidden remains the only send path. This SHA has no function
-that POSTs a signed Falcon txn.
+
+TestNet submit of the signer-approved SignedTxn is gated on
+LIVE402_PQ_FALCON_BROADCAST=1 (default unset). Signing or POST success
+never marks confirmed. confirm_testnet_anchor independently GETs the
+txn from the pinned TestNet indexer/algod, decodes, verifies, then
+persists last_confirmed.
 """
 
 from __future__ import annotations
@@ -68,9 +72,44 @@ def last_anchor() -> dict:
 def public_anchor() -> dict | None:
     """Homepage / explorer CTA. None unless a real confirmed TestNet txn exists."""
     conf = last_confirmed()
-    if conf["size"] < 1 or not conf["txid"]:
+    text = str(conf.get("txid") or "").strip()
+    low = text.lower()
+    if conf["size"] < 1 or not text:
+        return None
+    if low in _PLACEHOLDER_TXID or "placeholder" in low or text == "YOUR_TXID":
+        return None
+    if int(conf.get("round") or 0) < 1:
+        return None
+    try:
+        conf = dict(conf)
+        conf["explorer"] = algo_anchor.testnet_explorer_url(text)
+    except algo_anchor.AnchorError:
         return None
     return conf
+
+
+def homepage_pq_html() -> str:
+    """TestNet PQ section. Empty unless last_confirmed has a real txid."""
+    import html as html_mod
+
+    conf = public_anchor()
+    if not conf:
+        return ""
+    txid = html_mod.escape(str(conf["txid"]), quote=True)
+    explorer = html_mod.escape(str(conf["explorer"]), quote=True)
+    return (
+        '      <section class="pq-testnet" id="pq-testnet">\n'
+        '        <p class="pq-badge">PQ transparency · TestNet</p>\n'
+        "        <p>Paid POST /route independently checks a seller. Catalog listings "
+        "are claimed. The observation is what the endpoint returned.</p>\n"
+        "        <p>Free GET /preview does not probe. The independent check is the "
+        "paid /route call.</p>\n"
+        "        <p>This TestNet transaction authorizes a log checkpoint. It is not a "
+        "merchant payment. Routing does not wait for chain inclusion.</p>\n"
+        '        <p><a class="btn secondary" href="%s" rel="noopener noreferrer">'
+        "View TestNet transaction</a></p>\n"
+        '      </section>\n'
+    ) % (explorer,)
 
 
 def save_anchor(size: int, at: int) -> None:
@@ -197,6 +236,26 @@ def process_one(signer_callback, sender: str, params: dict | None = None, now: i
     }
 
 
+def _maybe_broadcast(out: dict, *, send_fn, sender: str | None, params: dict) -> dict:
+    """POST the signer-approved SignedTxn only if BROADCAST=1. Never confirms."""
+    if not isinstance(out, dict):
+        return out
+    blob = out.get("signed")
+    if not isinstance(blob, (bytes, bytearray)) or not blob:
+        return out
+    addr = algo_anchor.falcon_address(sender)
+    if not algo_anchor.submit_allowed(sender=addr, params=params):
+        return out
+    txid = algo_anchor.send_if_allowed(bytes(blob), send_fn=send_fn, sender=addr, params=params)
+    if not txid:
+        return out
+    updated = dict(out)
+    updated["submitted"] = True
+    updated["txid"] = txid
+    updated["confirmed"] = False
+    return updated
+
+
 def maybe_submit(
     signer_callback,
     sender: str | None = None,
@@ -205,14 +264,14 @@ def maybe_submit(
     send_fn=None,
     tree_size: int | None = None,
 ) -> dict | None:
-    """6PN client only. Token unset: never dial. Never submit a Falcon txn.
+    """6PN client only. Token unset: never dial.
 
     A signer reply persists AUTHORIZED (request_id + SignedTxn). Does not
     advance CONFIRMED. Exact size+origin+root+signed-note recovers the blob
     (no re-dial). Mismatch fail-closes. MainNet genesis is rejected.
-    send_fn is ignored (no submit path).
+    BROADCAST=1 may POST the recovered SignedTxn; POST success is not
+    confirmation.
     """
-    del send_fn
     from live402.pq import signer_client
 
     if not signer_client.token_configured():
@@ -238,7 +297,7 @@ def maybe_submit(
     except AuthorizedConflict:
         return None
     if recovered:
-        return recovered
+        return _maybe_broadcast(recovered, send_fn=send_fn, sender=sender, params=p)
     if not should_build(now=now, tree_size=tree_size):
         return None
     if size == last_confirmed()["size"]:
@@ -268,7 +327,7 @@ def maybe_submit(
         signed=signed,
         at=when,
     )
-    return {
+    out = {
         "tree_size": size,
         "signed": bytes(stored.get("signed") or signed),
         "request_id": stored.get("request_id") or request_id,
@@ -277,47 +336,56 @@ def maybe_submit(
         "authorized": True,
         "confirmed": False,
     }
+    return _maybe_broadcast(out, send_fn=send_fn, sender=sender, params=p)
 
 
 def confirm_testnet_anchor(
+    txid: str | None = None,
     *,
-    tree_size: int,
-    txid: str,
-    confirmed_round: int,
-    root,
-    origin: str | None = None,
+    fetch_fn=None,
     at: int | None = None,
+    tree_size=None,
+    confirmed_round=None,
+    root=None,
+    origin=None,
 ) -> dict:
-    """Persist CONFIRMED fields. Persistence boundary only, not a verifier.
+    """Independently fetch, decode, verify, then persist last_confirmed.
 
-    Does not POST to algod. Does not inspect TestNet. Rejects empty or
-    placeholder txid. Signing success is not confirmation.
+    Caller txid is only a lookup key. Inclusion fields come from the
+    fetched TestNet object. Signing success is not confirmation.
+    Caller tree_size / confirmed_round / root / origin are ignored.
     """
-    size = int(tree_size)
-    if size < 1:
-        raise algo_anchor.AnchorError("invalid confirmed fields")
+    del tree_size, confirmed_round, root, origin
     text = (txid or "").strip()
     low = text.lower()
     if low in _PLACEHOLDER_TXID or "placeholder" in low or text == "YOUR_TXID":
         raise algo_anchor.AnchorError("invalid confirmed fields")
-    rnd = int(confirmed_round)
-    if rnd < 1:
-        raise algo_anchor.AnchorError("invalid confirmed fields")
-    if isinstance(root, (bytes, bytearray)):
-        root_b = bytes(root)
-    else:
-        try:
-            root_b = bytes.fromhex(str(root or ""))
-        except ValueError as exc:
-            raise algo_anchor.AnchorError("invalid confirmed fields") from exc
-    if len(root_b) != 32:
-        raise algo_anchor.AnchorError("invalid confirmed fields")
+    fetched = algo_anchor.fetch_testnet_txn(text, fetch_fn=fetch_fn)
+    if not fetched:
+        raise algo_anchor.AnchorError("txn not fetched")
+    decoded = algo_anchor.decode_chain_txn(fetched)
+    auth = last_authorized()
+    if int(auth.get("size") or 0) < 1 or not auth.get("root"):
+        raise algo_anchor.AnchorError("no authorized checkpoint")
+    want_root = auth["root"]
+    try:
+        want_root_b = bytes.fromhex(str(want_root))
+    except ValueError as exc:
+        raise algo_anchor.AnchorError("invalid authorized root") from exc
+    verified = algo_anchor.verify_fetched_anchor(
+        decoded,
+        expected_origin=auth.get("origin") or store.origin() or ORIGIN,
+        expected_size=int(auth["size"]),
+        expected_root=want_root_b,
+        expected_address=algo_anchor.falcon_address(),
+        expected_txid=text,
+    )
     when = int(at if at is not None else time.time())
     return store.save_confirmed_checkpoint(
-        tree_size=size,
-        origin=origin or store.origin() or ORIGIN,
-        root=root_b,
-        txid=text,
-        confirmed_round=rnd,
+        tree_size=int(verified["tree_size"]),
+        origin=verified["origin"],
+        root=verified["root"],
+        txid=verified["txid"],
+        confirmed_round=int(verified["confirmed_round"]),
         at=when,
     )

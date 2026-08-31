@@ -372,6 +372,13 @@ class Handler(SimpleHTTPRequestHandler):
             "/pulse",
             "/attestation",
         }
+        injected = self._homepage_html()
+        if injected is not None:
+            self._omit_body = True
+            try:
+                return self._html(200, injected)
+            finally:
+                self._omit_body = False
         if self._rewrite_static_path():
             return SimpleHTTPRequestHandler.do_HEAD(self)
         if parsed.path in head_ok or parsed.path.startswith("/pq/log/"):
@@ -386,11 +393,33 @@ class Handler(SimpleHTTPRequestHandler):
         self._cors()
         self.end_headers()
 
+    def _homepage_html(self) -> str | None:
+        """Static homepage plus optional TestNet PQ section when last_confirmed exists."""
+        parsed = urlparse(self.path)
+        if parsed.path not in ("/", "/index.html"):
+            return None
+        html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+        try:
+            from live402.pq import worker as pq_worker
+
+            section = pq_worker.homepage_pq_html()
+        except Exception:
+            section = ""
+        if not section:
+            return None
+        marker = "</main>"
+        if marker not in html:
+            return html
+        return html.replace(marker, section + "    </main>", 1)
+
     def do_GET(self) -> None:
         if self._deny_private_store():
             return
         parsed = urlparse(self.path)
         if parsed.path in HUMAN_PAGES or parsed.path in STATIC_FILES:
+            injected = self._homepage_html()
+            if injected is not None:
+                return self._html(200, injected)
             self._rewrite_static_path()
             return SimpleHTTPRequestHandler.do_GET(self)
         if parsed.path == "/route":
