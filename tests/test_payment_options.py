@@ -15,15 +15,28 @@ UNKNOWN_SOL = "UnkTok111111111111111111111111111111111111"
 UNKNOWN_B = "0x2222222222222222222222222222222222222222"
 
 
-def _opt(network, asset, amount, pay_to="0xabc", extra=None):
+def _payto_for_network(network):
+    rail = payment.rail_of_network(network) or "base"
+    if rail == "solana":
+        return payment.DEFAULT_PAYTO_SOLANA
+    if rail == "algorand":
+        return payment.DEFAULT_PAYTO_ALGORAND
+    return "0xabcabcabcabcabcabcabcabcabcabcabcabcabca"
+
+
+def _opt(network, asset, amount, pay_to=None, extra=None):
+    if pay_to is None:
+        pay_to = _payto_for_network(network)
     acc = {"network": network, "asset": asset, "amount": amount, "payTo": pay_to}
     if extra:
         acc["extra"] = extra
     return payment.payment_option_from_accept(acc)
 
 
-def _hit_accept(url, network, asset, amount, rail=None, pay_to="0xabc", **extra):
+def _hit_accept(url, network, asset, amount, rail=None, pay_to=None, **extra):
     rail = rail or payment.rail_of_network(network) or "base"
+    if pay_to is None:
+        pay_to = _payto_for_network(network)
     row = {
         "url": url,
         "rail": rail,
@@ -85,7 +98,7 @@ class PaymentOptionTests(unittest.TestCase):
                         "network": payment.BASE_CAIP2,
                         "asset": UNKNOWN_BASE,
                         "amount": "1000000",
-                        "payTo": "0xabc",
+                        "payTo": "0xabcabcabcabcabcabcabcabcabcabcabcabcabca",
                     }
                 ]
             }
@@ -239,7 +252,7 @@ class CheapestAssetTests(unittest.TestCase):
             "url": "https://both.example/x",
             "rail": "base",
             "live": True,
-            "payTo": "0xabc",
+            "payTo": "0xabcabcabcabcabcabcabcabcabcabcabcabcabca",
             "invocable": True,
             "latency_ms": 10,
             "amount": 10000,
@@ -248,7 +261,7 @@ class CheapestAssetTests(unittest.TestCase):
                     "network": payment.BASE_CAIP2,
                     "asset": payment.USDC_BASE,
                     "amount": 20000,
-                    "payTo": "0xabc",
+                    "payTo": "0xabcabcabcabcabcabcabcabcabcabcabcabcabca",
                 },
                 {
                     "network": payment.SOLANA_MAINNET,
@@ -313,7 +326,7 @@ class MergePaymentOptionsTests(unittest.TestCase):
                         "network": payment.BASE_CAIP2,
                         "asset": payment.USDC_BASE,
                         "amount": "20000",
-                        "payTo": "0xabc",
+                        "payTo": "0xabcabcabcabcabcabcabcabcabcabcabcabcabca",
                         "extra": {"displayAmount": "$0.02"},
                     }
                 ],

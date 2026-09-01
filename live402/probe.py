@@ -580,6 +580,23 @@ class ProbeBlocked(Exception):
     """SSRF fail-closed. Must not be treated as a live upstream HTTP response."""
 
 
+def url_port(parsed) -> int | None:
+    """Destination port or None if invalid/out of range. Never raise ValueError."""
+    try:
+        port = parsed.port
+    except ValueError:
+        return None
+    if port is None:
+        return 443
+    try:
+        dest = int(port)
+    except (TypeError, ValueError):
+        return None
+    if dest < 1 or dest > 65535:
+        return None
+    return dest
+
+
 def _hostname(parsed) -> str:
     host = parsed.hostname
     if host:
@@ -723,7 +740,10 @@ def _pin_https_target(url: str) -> tuple[str, list[tuple]] | None:
     host = _hostname(parsed)
     if not host or _host_name_blocked(host):
         return None
-    addrs = _checked_addrs(host, parsed.port or 443)
+    port = url_port(parsed)
+    if port is None:
+        return None
+    addrs = _checked_addrs(host, port)
     if not addrs:
         return None
     return raw, addrs
@@ -758,6 +778,8 @@ def _https_url(url: str) -> str | None:
     raw = (url or "").strip()
     parsed = urlparse(raw)
     if parsed.scheme != "https" or not parsed.netloc or parsed.username or parsed.password:
+        return None
+    if url_port(parsed) is None:
         return None
     host = _hostname(parsed)
     if not host or _host_name_blocked(host):
@@ -802,18 +824,18 @@ def normalize_prefer_network(raw) -> str | None:
 
 
 def normalize_networks(raw) -> tuple[str, ...] | None:
-    """Restrict searchable rails. None / empty / invalid → all supported rails.
+    """Restrict searchable rails. Missing → None (unrestricted).
 
-    Unlike prefer_network, this is a hard allowlist of which catalogs to query.
+    Explicit empty or invalid never becomes all networks.
     """
     if raw is None or raw == "":
         return None
     if isinstance(raw, str):
-        items = [part.strip() for part in raw.split(",")]
+        items = [part.strip() for part in raw.split(",") if part.strip()]
     elif isinstance(raw, (list, tuple, set, frozenset)):
         items = list(raw)
     else:
-        return None
+        return ()
     seen: set[str] = set()
     rails: list[str] = []
     for item in items:
@@ -822,8 +844,6 @@ def normalize_networks(raw) -> tuple[str, ...] | None:
             continue
         seen.add(name)
         rails.append(name)
-    if not rails:
-        return None
     return tuple(rail for rail in PREFER_NETWORKS if rail in seen)
 
 
@@ -933,15 +953,17 @@ class _PinnedHTTPSHandler(urllib.request.HTTPSHandler):
         hostname = _hostname(parsed)
         if not hostname:
             raise ProbeBlocked("no host")
-        port = parsed.port or 443
+        port = url_port(parsed)
+        if port is None:
+            raise ProbeBlocked("invalid port")
         addrs = getattr(req, "pinned_addrs", None)
         if not addrs:
             addrs = _checked_addrs(hostname, port)
         if not addrs:
             raise ProbeBlocked("ssrf")
         host_header = hostname
-        if parsed.port and parsed.port != 443:
-            host_header = "%s:%s" % (hostname, parsed.port)
+        if port != 443:
+            host_header = "%s:%s" % (hostname, port)
         existing = req.get_header("Host")
         if existing:
             exist_host = existing.split(":")[0].strip("[]").lower()
@@ -1422,7 +1444,8 @@ def _one_request(
             "envelope": None,
         }
     parsed = urlparse(url)
-    if parsed.scheme != "https" or not parsed.netloc or parsed.username or parsed.password:
+    dest_port = url_port(parsed)
+    if parsed.scheme != "https" or not parsed.netloc or parsed.username or parsed.password or dest_port is None:
         return {
             "live": False,
             "status": None,
@@ -1432,7 +1455,7 @@ def _one_request(
             "envelope": None,
         }
     host = _hostname(parsed)
-    addrs = pinned_addrs if pinned_addrs else _checked_addrs(host, parsed.port or 443)
+    addrs = pinned_addrs if pinned_addrs else _checked_addrs(host, dest_port)
     if not host or not addrs:
         return {
             "live": False,

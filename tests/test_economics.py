@@ -30,7 +30,7 @@ def _hit(url, rail="base", amount=10000, latency=10, history=None):
         pay_to = payment.DEFAULT_PAYTO_ALGORAND
     else:
         network, asset = payment.BASE_CAIP2, payment.USDC_BASE
-        pay_to = "0xabc"
+        pay_to = "0xabcabcabcabcabcabcabcabcabcabcabcabcabca"
     return {
         "url": url,
         "rail": rail,

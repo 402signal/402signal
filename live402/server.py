@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import os
 import re
@@ -14,6 +15,8 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from live402 import catalog, discover, history, mcp, payment, pulse, rails, validate
+from live402 import http_body
+from live402.http_body import BodyReadError
 from live402.route import handle_route
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -56,7 +59,9 @@ _VOLUME_DUMP_PATHS = frozenset(
         "/download/catalog",
     }
 )
-MAX_BODY = 64_000
+MAX_BODY = http_body.MAX_BODY
+DEFAULT_MAX_HANDLERS = 32
+REQUEST_TIMEOUT = http_body.BODY_READ_TIMEOUT
 DEFAULT_ROUTE_RPM = 60
 DEFAULT_PREVIEW_RPM = 180
 DEFAULT_PUBLIC_RPM = 180
@@ -114,6 +119,69 @@ _ROUTE_LIMITER = _RateLimiter()
 _PREVIEW_LIMITER = _RateLimiter()
 _PUBLIC_LIMITER = _RateLimiter()
 _VALIDATE_LIMITER = _RateLimiter()
+_HANDLER_SEMA_LOCK = threading.Lock()
+_HANDLER_SEMA: threading.BoundedSemaphore | None = None
+_HANDLER_SEMA_CAP = 0
+
+
+def max_handlers() -> int:
+    raw = (os.environ.get("LIVE402_MAX_HANDLERS") or "").strip()
+    if raw:
+        try:
+            return max(1, int(raw))
+        except ValueError:
+            return DEFAULT_MAX_HANDLERS
+    return DEFAULT_MAX_HANDLERS
+
+
+def _handler_sema() -> threading.BoundedSemaphore:
+    global _HANDLER_SEMA, _HANDLER_SEMA_CAP
+    cap = max_handlers()
+    with _HANDLER_SEMA_LOCK:
+        if _HANDLER_SEMA is None or _HANDLER_SEMA_CAP != cap:
+            _HANDLER_SEMA = threading.BoundedSemaphore(cap)
+            _HANDLER_SEMA_CAP = cap
+        return _HANDLER_SEMA
+
+
+def _env_flag(name: str) -> bool:
+    return os.environ.get(name, "").strip() in {"1", "true", "TRUE", "yes"}
+
+
+def is_loopback_bind(host: str) -> bool:
+    text = (host or "").strip().lower()
+    if text in {"127.0.0.1", "::1", "localhost"}:
+        return True
+    try:
+        return ipaddress.ip_address(text).is_loopback
+    except ValueError:
+        return False
+
+
+def is_public_http_bind(host: str) -> bool:
+    """True for PORT/Fly-style or non-loopback binds."""
+    if os.environ.get("PORT"):
+        return True
+    text = (host or "").strip()
+    if not text:
+        return True
+    if text in {"0.0.0.0", "::", "[::]"}:
+        return True
+    return not is_loopback_bind(text)
+
+
+def assert_safe_http_boot(host: str) -> None:
+    """Refuse public production-style servers with LOCAL_FREE or LIVE402_FIXTURE."""
+    if not is_public_http_bind(host):
+        return
+    if not (_env_flag("LOCAL_FREE") or _env_flag("LIVE402_FIXTURE")):
+        return
+    if _env_flag("LIVE402_ALLOW_UNSAFE_DEV_MODE"):
+        return
+    raise SystemExit(
+        "refusing public bind with LOCAL_FREE or LIVE402_FIXTURE; "
+        "set LIVE402_ALLOW_UNSAFE_DEV_MODE=1 only for local use"
+    )
 
 
 def route_rpm() -> int:
@@ -203,6 +271,49 @@ def is_private_store_path(path: str) -> bool:
 class Handler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(STATIC_DIR), **kwargs)
+
+    def setup(self) -> None:
+        super().setup()
+        try:
+            self.connection.settimeout(REQUEST_TIMEOUT)
+        except Exception:
+            pass
+
+    def handle(self) -> None:
+        sema = _handler_sema()
+        if not sema.acquire(blocking=False):
+            self._reject_saturated()
+            return
+        try:
+            return SimpleHTTPRequestHandler.handle(self)
+        finally:
+            sema.release()
+
+    def _reject_saturated(self) -> None:
+        self.close_connection = True
+        try:
+            body = b'{"error":"server busy"}'
+            self.connection.sendall(
+                b"HTTP/1.1 503 Service Unavailable\r\n"
+                b"Content-Type: application/json; charset=utf-8\r\n"
+                b"Content-Length: " + str(len(body)).encode("ascii") + b"\r\n"
+                b"Connection: close\r\n"
+                b"Cache-Control: no-store\r\n"
+                b"\r\n" + body
+            )
+        except Exception:
+            pass
+
+    def _close_error(self, code: int, error: str) -> None:
+        self.close_connection = True
+        self._json(code, {"error": error}, {"Connection": "close"})
+
+    def _read_json_body(self) -> dict | None:
+        try:
+            return http_body.read_json_object(self, max_body=MAX_BODY)
+        except BodyReadError as exc:
+            self._close_error(exc.status, exc.error)
+            return None
 
     def translate_path(self, path: str) -> str:
         """Never map a request onto /data or a sqlite file."""
@@ -321,13 +432,9 @@ class Handler(SimpleHTTPRequestHandler):
     def _mcp_resource_url(self) -> str:
         return discover.ORIGIN + "/mcp"
 
-    def _discard_body(self) -> None:
-        try:
-            length = int(self.headers.get("Content-Length") or 0)
-        except ValueError:
-            length = 0
-        if length > 0:
-            self.rfile.read(min(length, MAX_BODY))
+    def _close_unread_body(self) -> None:
+        """Rate-limited or rejected POST: close instead of a keep-alive discard."""
+        self.close_connection = True
 
     def _route_allowed(self) -> bool:
         ip = client_ip(self)
@@ -539,6 +646,7 @@ class Handler(SimpleHTTPRequestHandler):
 
     def do_POST(self) -> None:
         if self._deny_private_store():
+            self._close_unread_body()
             return
         parsed = urlparse(self.path)
         if parsed.path in {"/mcp", "/mcp.json"}:
@@ -546,42 +654,29 @@ class Handler(SimpleHTTPRequestHandler):
         if parsed.path == "/validate":
             return self._post_validate()
         if parsed.path != "/route":
-            return self._json(404, {"error": "not found"})
+            self._close_unread_body()
+            return self._close_error(404, "not found")
         if not self._route_allowed():
-            self._discard_body()
-            return self._json(429, {"error": "rate limit"})
-        length = int(self.headers.get("Content-Length") or 0)
-        if length > MAX_BODY:
-            return self._json(413, {"error": "body too large"})
-        raw = self.rfile.read(length) if length else b"{}"
-        try:
-            payload = json.loads(raw.decode("utf-8") or "{}")
-        except (json.JSONDecodeError, UnicodeDecodeError):
-            return self._json(400, {"error": "invalid JSON"})
-        if not isinstance(payload, dict):
-            return self._json(400, {"error": "JSON object required"})
+            self._close_unread_body()
+            return self._close_error(429, "rate limit")
+        payload = self._read_json_body()
+        if payload is None:
+            return
         code, body, extra = handle_route(payload, self.headers, self._resource_url())
         if extra is None and code == 402:
             extra = {"PAYMENT-REQUIRED": payment.payment_required_header(body)}
         return self._json(code, body, extra)
 
     def _post_mcp(self) -> None:
-        length = int(self.headers.get("Content-Length") or 0)
-        if length > MAX_BODY:
-            return self._json(413, {"error": "body too large"})
-        raw = self.rfile.read(length) if length else b"{}"
-        try:
-            payload = json.loads(raw.decode("utf-8") or "{}")
-        except (json.JSONDecodeError, UnicodeDecodeError):
-            return self._json(400, {"error": "invalid JSON"})
-        if not isinstance(payload, dict):
-            return self._json(400, {"error": "JSON object required"})
+        payload = self._read_json_body()
+        if payload is None:
+            return
         if mcp.is_paid_call(payload) and not self._route_allowed():
-            return self._json(429, {"error": "rate limit"})
+            return self._close_error(429, "rate limit")
         if mcp.is_preview_call(payload) and not self._preview_allowed():
-            return self._json(429, {"error": "rate limit"})
+            return self._close_error(429, "rate limit")
         if mcp.is_validate_call(payload) and not self._validate_allowed():
-            return self._json(429, {"error": "rate limit"})
+            return self._close_error(429, "rate limit")
         code, body, extra = mcp.handle_mcp(payload, self.headers, self._mcp_resource_url())
         if extra is None and code == 402:
             extra = {"PAYMENT-REQUIRED": payment.payment_required_header(body)}
@@ -590,18 +685,11 @@ class Handler(SimpleHTTPRequestHandler):
 
     def _post_validate(self) -> None:
         if not self._validate_allowed():
-            self._discard_body()
-            return self._json(429, {"error": "rate limit"})
-        length = int(self.headers.get("Content-Length") or 0)
-        if length > MAX_BODY:
-            return self._json(413, {"error": "body too large"})
-        raw = self.rfile.read(length) if length else b"{}"
-        try:
-            payload = json.loads(raw.decode("utf-8") or "{}")
-        except (json.JSONDecodeError, UnicodeDecodeError):
-            return self._json(400, {"error": "invalid JSON"})
-        if not isinstance(payload, dict):
-            return self._json(400, {"error": "JSON object required"})
+            self._close_unread_body()
+            return self._close_error(429, "rate limit")
+        payload = self._read_json_body()
+        if payload is None:
+            return
         url = payload.get("url")
         if url is not None and not isinstance(url, str):
             return self._json(400, {"error": "url must be a string", "miss_reason": "invalid_need"})
@@ -648,6 +736,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--host", default=default_host())
     parser.add_argument("--port", type=int, default=default_port())
     args = parser.parse_args(argv)
+    assert_safe_http_boot(args.host)
     boot_http_process()
     httpd = ThreadingHTTPServer((args.host, args.port), Handler)
     # Existing production loop (catalog trickle + PQ tick / confirm).

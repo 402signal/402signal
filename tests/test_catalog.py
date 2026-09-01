@@ -627,7 +627,7 @@ class CatalogIndexTests(unittest.TestCase):
             return {
                 "live": True,
                 "url": url,
-                "payTo": "0xabc",
+                "payTo": "0xabcabcabcabcabcabcabcabcabcabcabcabcabca",
                 "invocable": False,
                 "status": 402,
                 "has_402_challenge": True,
@@ -641,7 +641,7 @@ class CatalogIndexTests(unittest.TestCase):
                         "network": payment.BASE_CAIP2,
                         "asset": payment.USDC_BASE,
                         "amount": "10000",
-                        "payTo": "0xabc",
+                        "payTo": "0xabcabcabcabcabcabcabcabcabcabcabcabcabca",
                     }
                 ],
             }
@@ -678,7 +678,7 @@ class CatalogIndexTests(unittest.TestCase):
             return {
                 "live": True,
                 "url": url,
-                "payTo": "So1",
+                "payTo": payment.DEFAULT_PAYTO_SOLANA,
                 "invocable": False,
                 "status": 402,
                 "has_402_challenge": True,
@@ -692,7 +692,7 @@ class CatalogIndexTests(unittest.TestCase):
                         "network": payment.SOLANA_MAINNET,
                         "asset": payment.USDC_SOLANA_MINT,
                         "amount": "10000",
-                        "payTo": "So1",
+                        "payTo": payment.DEFAULT_PAYTO_SOLANA,
                     }
                 ],
             }

@@ -1010,7 +1010,7 @@ def _local_fts(need: str, rails) -> dict:
 
 def _merge_local_into_rails(by_rail: dict, local_items: list, rails) -> None:
     """Add FTS hits that live search missed. Per-rail cap still applies."""
-    allowed = set(rails or _RAILS)
+    allowed = set(_RAILS if rails is None else rails)
     seen: dict[str, set[str]] = {}
     for rail, rows in by_rail.items():
         seen[rail] = {probe._resource_url(i) for i in rows if isinstance(i, dict)}
@@ -1035,7 +1035,7 @@ def _merge_local_into_rails(by_rail: dict, local_items: list, rails) -> None:
 
 def _write_through(by_rail: dict, rails) -> None:
     """Persist this request's slim hits. Page-sized. Discard after commit."""
-    allowed = set(rails or _RAILS)
+    allowed = set(_RAILS if rails is None else rails)
     for rail in allowed:
         rows = [i for i in (by_rail.get(rail) or []) if isinstance(i, dict)]
         if not rows:
@@ -1105,7 +1105,9 @@ def query_for_need(
     not accumulate into one 30k bag.
     """
     _ = prefer_network  # ranking happens in rank_resources / preview / route
-    rails = probe.normalize_networks(networks) or _RAILS
+    rails = probe.normalize_networks(networks)
+    if rails is None:
+        rails = _RAILS
     if fixtures.fixture_mode():
         by_rail: dict[str, list] = {rail: [] for rail in _RAILS}
         for item in fixtures.load_resources():

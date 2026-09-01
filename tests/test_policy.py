@@ -93,7 +93,7 @@ class EngineUsesStructuredOnlyTests(unittest.TestCase):
             "invocable": True,
             "url": "https://cheap.example/x",
             "rail": "base",
-            "payTo": "0xabc",
+            "payTo": "0xabcabcabcabcabcabcabcabcabcabcabcabcabca",
             "latency_ms": 40,
             "amount": 10000,
             "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
@@ -101,7 +101,7 @@ class EngineUsesStructuredOnlyTests(unittest.TestCase):
                 {
                     "network": "eip155:8453",
                     "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
-                    "payTo": "0xabc",
+                    "payTo": "0xabcabcabcabcabcabcabcabcabcabcabcabcabca",
                     "amount": 10000,
                 }
             ],
@@ -115,7 +115,7 @@ class EngineUsesStructuredOnlyTests(unittest.TestCase):
             {
                 "network": "eip155:8453",
                 "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
-                "payTo": "0xabc",
+                "payTo": "0xabcabcabcabcabcabcabcabcabcabcabcabcabca",
                 "amount": 50000,
             }
         ]
@@ -132,7 +132,7 @@ class EngineUsesStructuredOnlyTests(unittest.TestCase):
             "invocable": True,
             "url": "https://ok.example/x",
             "rail": "base",
-            "payTo": "0xabc",
+            "payTo": "0xabcabcabcabcabcabcabcabcabcabcabcabcabca",
             "latency_ms": 10,
             "amount": 10000,
             "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
@@ -140,7 +140,7 @@ class EngineUsesStructuredOnlyTests(unittest.TestCase):
                 {
                     "network": "eip155:8453",
                     "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
-                    "payTo": "0xabc",
+                    "payTo": "0xabcabcabcabcabcabcabcabcabcabcabcabcabca",
                     "amount": 10000,
                 }
             ],

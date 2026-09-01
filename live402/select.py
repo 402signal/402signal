@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from functools import cmp_to_key
 
 from live402 import economics, payment, reputation
@@ -20,6 +21,31 @@ MATURE_N = 10
 # Keys we still cannot compute. Empty in this slice: settlement/reputation/success
 # are measured when data exists and fail closed when unknown.
 UNMEASURED_CONSTRAINTS = ()
+PREFER_NETWORKS = frozenset(("base", "solana", "algorand"))
+SEARCH_DEPTHS = frozenset(("standard", "thorough"))
+EXPLICIT_CONSTRAINT_KEYS = (
+    "objective",
+    "prefer_network",
+    "networks",
+    "max_amount_atomic",
+    "max_price_usd",
+    "max_latency_ms",
+    "max_probe_latency_ms",
+    "max_service_latency_ms",
+    "require_invocable",
+    "min_observations",
+    "min_observed_success",
+    "min_reputation_score",
+    "min_reputation_confidence",
+    "max_total_cost_usd",
+    "max_settlement_latency_ms",
+    "search_depth",
+    "max_candidates_to_probe",
+)
+
+
+class ConstraintError(ValueError):
+    """Explicit structured constraint is malformed. HTTP 400, never weaken."""
 
 
 def parse_objective(raw) -> str:
@@ -93,14 +119,15 @@ def _text(val) -> str | None:
 
 
 def _parse_rails(raw):
+    """Missing → unrestricted (None). Explicit empty/invalid → empty set, never all rails."""
     if raw is None or raw == "":
         return None
     if isinstance(raw, str):
-        items = [raw]
+        items = [part.strip() for part in raw.split(",") if part.strip()]
     elif isinstance(raw, (list, tuple, set, frozenset)):
         items = list(raw)
     else:
-        return None
+        return frozenset()
     rails = []
     for item in items:
         name = _text(item)
@@ -109,8 +136,6 @@ def _parse_rails(raw):
         name = name.lower()
         if name in RAILS:
             rails.append(name)
-    if not rails:
-        return None
     return frozenset(rails)
 
 
@@ -121,6 +146,125 @@ def _caller_set(src: dict, key: str) -> bool:
     if val is None or val == "":
         return False
     return True
+
+
+def _explicit_present(src: dict, key: str) -> bool:
+    return isinstance(src, dict) and key in src and src.get(key) is not None
+
+
+def _reject(message: str) -> None:
+    raise ConstraintError(message)
+
+
+def _require_bool(val, name: str) -> None:
+    if not isinstance(val, bool):
+        _reject("%s must be a boolean" % name)
+
+
+def _require_int(val, name: str) -> int:
+    if isinstance(val, bool) or not isinstance(val, int):
+        _reject("%s must be an integer" % name)
+    if val < 0:
+        _reject("%s cannot be negative" % name)
+    return val
+
+
+def _require_finite_number(val, name: str) -> float:
+    if isinstance(val, bool) or not isinstance(val, (int, float)):
+        _reject("%s must be a number" % name)
+    n = float(val)
+    if not math.isfinite(n):
+        _reject("%s must be a finite number" % name)
+    return n
+
+
+def _require_probability(val, name: str) -> float:
+    n = _require_finite_number(val, name)
+    if n < 0 or n > 1:
+        _reject("%s must be between 0 and 1" % name)
+    return n
+
+
+def _require_nonneg_number(val, name: str) -> float:
+    n = _require_finite_number(val, name)
+    if n < 0:
+        _reject("%s cannot be negative" % name)
+    return n
+
+
+def _parse_explicit_networks(raw, name: str = "networks"):
+    if isinstance(raw, str):
+        items = [part.strip() for part in raw.split(",") if part.strip()]
+    elif isinstance(raw, (list, tuple)):
+        items = list(raw)
+    else:
+        _reject("%s must be a nonempty list or string of supported rails" % name)
+        return []
+    if not items:
+        _reject("%s must be a nonempty list or string of supported rails" % name)
+    rails: list[str] = []
+    for item in items:
+        if not isinstance(item, str):
+            _reject("%s entries must be strings" % name)
+        name_s = item.strip().lower()
+        if name_s not in RAILS:
+            _reject("unsupported network")
+        if name_s not in rails:
+            rails.append(name_s)
+    if not rails:
+        _reject("%s must be a nonempty list or string of supported rails" % name)
+    return rails
+
+
+def validate_explicit_constraints(body: dict) -> None:
+    """HTTP 400 gate. Explicit malformed controls must not silently weaken.
+
+    Natural-language policy is not validated here; unresolved phrases stay
+    unresolved and are never guessed.
+    """
+    src = body if isinstance(body, dict) else {}
+    if _explicit_present(src, "objective"):
+        raw = src.get("objective")
+        if not isinstance(raw, str) or not raw.strip():
+            _reject("unsupported objective")
+        if raw.strip().lower() not in OBJECTIVES:
+            _reject("unsupported objective")
+    if _explicit_present(src, "prefer_network"):
+        raw = src.get("prefer_network")
+        if not isinstance(raw, str) or raw.strip().lower() not in PREFER_NETWORKS:
+            _reject("unsupported prefer_network")
+    if _explicit_present(src, "networks"):
+        _parse_explicit_networks(src.get("networks"))
+    for key in (
+        "max_amount_atomic",
+        "max_latency_ms",
+        "max_probe_latency_ms",
+        "max_service_latency_ms",
+        "min_observations",
+        "max_settlement_latency_ms",
+    ):
+        if _explicit_present(src, key):
+            _require_int(src.get(key), key)
+    if _explicit_present(src, "max_candidates_to_probe"):
+        n = _require_int(src.get("max_candidates_to_probe"), "max_candidates_to_probe")
+        if n < 1:
+            _reject("max_candidates_to_probe must be at least 1")
+    if _explicit_present(src, "require_invocable"):
+        _require_bool(src.get("require_invocable"), "require_invocable")
+    if _explicit_present(src, "max_price_usd"):
+        _require_nonneg_number(src.get("max_price_usd"), "max_price_usd")
+    if _explicit_present(src, "max_total_cost_usd"):
+        _require_nonneg_number(src.get("max_total_cost_usd"), "max_total_cost_usd")
+    if _explicit_present(src, "min_reputation_score"):
+        _require_probability(src.get("min_reputation_score"), "min_reputation_score")
+    if _explicit_present(src, "min_reputation_confidence"):
+        _require_probability(src.get("min_reputation_confidence"), "min_reputation_confidence")
+    if _explicit_present(src, "min_observed_success"):
+        _require_probability(src.get("min_observed_success"), "min_observed_success")
+    if _explicit_present(src, "search_depth"):
+        raw = src.get("search_depth")
+        if not isinstance(raw, str) or raw.strip().lower() not in SEARCH_DEPTHS:
+            _reject("unsupported search_depth")
 
 
 def parse_constraints(body: dict) -> dict:

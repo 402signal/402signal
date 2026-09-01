@@ -24,15 +24,25 @@ def _hist(success_7d=None, n_7d=0):
     }
 
 
+def _default_payto(rail):
+    if rail == "solana":
+        return payment.DEFAULT_PAYTO_SOLANA
+    if rail == "algorand":
+        return payment.DEFAULT_PAYTO_ALGORAND
+    return "0xabcabcabcabcabcabcabcabcabcabcabcabcabca"
+
+
 def _hit(url="https://a.example/x", rail="base", history=None, **extra):
+    pay_to = extra.pop("pay_to", None) or extra.get("payTo") or _default_payto(rail)
+    amount = extra.pop("amount", 10000)
     row = {
         "url": url,
         "rail": rail,
         "live": True,
-        "payTo": extra.pop("pay_to", "0xabc"),
+        "payTo": pay_to,
         "invocable": True,
         "latency_ms": extra.pop("latency", 10),
-        "amount": extra.pop("amount", 10000),
+        "amount": amount,
         "asset": payment.usdc_asset_for_rail(rail) or payment.USDC_BASE,
         "history": history if history is not None else _hist(),
         "accepts": [
@@ -45,8 +55,8 @@ def _hit(url="https://a.example/x", rail="base", history=None, **extra):
                     else payment.BASE_CAIP2
                 ),
                 "asset": payment.usdc_asset_for_rail(rail) or payment.USDC_BASE,
-                "payTo": extra.get("payTo") or "0xabc",
-                "amount": extra.get("amount", 10000),
+                "payTo": pay_to,
+                "amount": amount,
             }
         ],
     }

@@ -17,6 +17,14 @@ def _usdc_for_rail(rail: str) -> str:
     return payment.usdc_asset_for_rail(rail) or payment.USDC_BASE
 
 
+def _payto_for_rail(rail: str) -> str:
+    if rail == "solana":
+        return payment.DEFAULT_PAYTO_SOLANA
+    if rail == "algorand":
+        return payment.DEFAULT_PAYTO_ALGORAND
+    return "0xabcabcabcabcabcabcabcabcabcabcabcabcabca"
+
+
 def _network_for_rail(rail: str) -> str:
     if rail == "solana":
         return payment.SOLANA_MAINNET
@@ -40,13 +48,15 @@ def _hit(
     url="https://a.example/x",
     rail="base",
     live=True,
-    pay_to="0xabc",
+    pay_to=None,
     amount=10000,
     latency=10,
     invocable=True,
     history=None,
     **extra,
 ):
+    if pay_to is None:
+        pay_to = _payto_for_rail(rail)
     asset = extra.pop("asset", None)
     accepts = extra.pop("accepts", None)
     if asset is None and accepts is None:
@@ -120,7 +130,7 @@ class ParseTests(unittest.TestCase):
         self.assertIsNone(bad["max_amount_atomic"])
         self.assertIsNone(bad["max_price_usd"])
         self.assertIsNone(bad["max_latency_ms"])
-        self.assertIsNone(bad["rails"])
+        self.assertEqual(bad["rails"], frozenset())
         ok = select.parse_constraints(
             {
                 "max_amount_atomic": 10000,
@@ -509,7 +519,9 @@ class RouteNeedSelectTests(unittest.TestCase):
         for _ in range(n_fail):
             history.record_probe(url, dict(snap_fail))
 
-    def _item(self, url, description="weather forecast", network="base", amount="10000", pay_to="0xabc"):
+    def _item(self, url, description="weather forecast", network="base", amount="10000", pay_to=None):
+        if pay_to is None:
+            pay_to = _payto_for_rail(network if network in {"base", "solana", "algorand"} else "base")
         return {
             "url": url,
             "description": description,
@@ -523,7 +535,9 @@ class RouteNeedSelectTests(unittest.TestCase):
             ],
         }
 
-    def _live(self, url, amount=10000, latency=10, pay_to="0xabc", changed=False, rail="base"):
+    def _live(self, url, amount=10000, latency=10, pay_to=None, changed=False, rail="base"):
+        if pay_to is None:
+            pay_to = _payto_for_rail(rail)
         row = {
             "live": True,
             "url": url,

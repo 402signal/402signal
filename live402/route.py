@@ -16,65 +16,90 @@ def gate_open(headers) -> bool:
     return False
 
 
+def _invalid_need(error: str) -> tuple[int, dict]:
+    return 400, {"error": error, "miss_reason": "invalid_need", "live": False, "invocable": False}
+
+
+def _direct_url_result(body: dict, url: str, need: str, deadline: float) -> tuple[int, dict]:
+    """Same constraint engine as need-routing. Catalog item is claimed metadata only."""
+    objective = select.parse_objective(body.get("objective"))
+    constraints = policy_mod.merge_constraints(body)
+    item = fixtures.lookup_url(url)
+    result = probe.probe_url(url, catalog_item=item, deadline=deadline)
+    result = probe.attach_catalog_fields(result, item)
+    try:
+        from live402 import history as history_mod
+        result = history_mod.attach_to_result(result)
+    except Exception:
+        if result.get("payTo_changed"):
+            result["risk"] = ["payTo_changed"]
+    result["need"] = need or None
+    result["objective"] = objective
+    result["tried"] = 1
+    result["source"] = "fixture" if fixtures.fixture_mode() else "url"
+    result["discovery_matches"] = 0
+    result["candidates_discovered"] = 0
+    result["candidates_considered"] = 1
+    result["candidates_probed"] = 1
+    result["probe_ceiling"] = 1
+    result["probe_budget_exhausted"] = False
+    result["candidate_evaluation_complete"] = True
+    result.setdefault("payTo", None)
+    result.setdefault("traction", "unknown")
+    policy_mod.attach_policy(result, body)
+
+    selected = None
+    if result.get("live") and select.passes_constraints(result, constraints):
+        selected = select.pick_selected_payment(result, objective, constraints)
+    if selected:
+        result["selected_payment"] = selected
+        probe._align_target_with_selected(result, selected)
+        if result.get("reputation") is None:
+            try:
+                from live402 import reputation as reputation_mod
+
+                reputation_mod.attach(result)
+            except Exception:
+                pass
+        result["stop_reason"] = "winner_selected"
+        return 200, result
+
+    if result.get("live"):
+        result["miss_reason"] = "constraints_unmet"
+        result["stop_reason"] = "constraints_unmet"
+        result["challenge_observed"] = True if result.get("challenge_observed") is None else result.get("challenge_observed")
+    else:
+        result["stop_reason"] = "candidate_set_exhausted"
+        if result.get("miss_reason"):
+            result["miss_reason"] = probe.public_miss_reason(result.get("miss_reason")) or result.get("miss_reason")
+    result["live"] = False
+    result["invocable"] = False
+    result["payable"] = False
+    result["selected_payment"] = None
+    return 503, result
+
+
 def run_probe(body: dict) -> tuple[int, dict]:
     need = body.get("need")
     url = body.get("url")
     if need is not None and not isinstance(need, str):
-        return 400, {"error": "need must be a string", "miss_reason": "invalid_need", "live": False, "invocable": False}
+        return _invalid_need("need must be a string")
     if url is not None and not isinstance(url, str):
-        return 400, {"error": "url must be a string", "miss_reason": "invalid_need", "live": False, "invocable": False}
+        return _invalid_need("url must be a string")
     need = (need or "").strip()
     url = (url or "").strip()
     if not need and not url:
-        return 400, {"error": "need or url is required", "miss_reason": "invalid_need", "live": False, "invocable": False}
+        return _invalid_need("need or url is required")
+    try:
+        select.validate_explicit_constraints(body if isinstance(body, dict) else {})
+    except select.ConstraintError as exc:
+        return _invalid_need(str(exc))
 
     deadline = time.monotonic() + probe.PROBE_BUDGET_SECONDS
     if url:
-        parsed_ok = url.lower().startswith("https://")
-        if not parsed_ok:
-            return 400, {"error": "url must be https", "miss_reason": "invalid_need", "live": False, "invocable": False}
-        item = fixtures.lookup_url(url)
-        result = probe.probe_url(url, catalog_item=item, deadline=deadline)
-        result = probe.attach_catalog_fields(result, item)
-        try:
-            from live402 import history as history_mod
-            result = history_mod.attach_to_result(result)
-        except Exception:
-            if result.get("payTo_changed"):
-                result["risk"] = ["payTo_changed"]
-        if result.get("live"):
-            selected = select.pick_selected_payment(result, "best", None)
-            if selected:
-                result["selected_payment"] = selected
-                probe._align_target_with_selected(result, selected)
-            if result.get("reputation") is None:
-                try:
-                    from live402 import reputation as reputation_mod
-
-                    reputation_mod.attach(result)
-                except Exception:
-                    pass
-        result["need"] = need or None
-        result["tried"] = 1
-        result["source"] = "fixture" if fixtures.fixture_mode() else "url"
-        result["discovery_matches"] = 0
-        result["candidates_discovered"] = 0
-        result["candidates_considered"] = 1
-        result["candidates_probed"] = 1
-        result["probe_ceiling"] = 1
-        result["probe_budget_exhausted"] = False
-        result["candidate_evaluation_complete"] = True
-        result["stop_reason"] = "winner_selected" if result.get("live") else "candidate_set_exhausted"
-        result.setdefault("payTo", None)
-        result.setdefault("traction", "unknown")
-        policy_mod.attach_policy(result, body)
-        if result.get("live"):
-            return 200, result
-        result["live"] = False
-        result["invocable"] = False
-        if result.get("miss_reason"):
-            result["miss_reason"] = probe.public_miss_reason(result.get("miss_reason")) or result.get("miss_reason")
-        return 503, result
+        if not url.lower().startswith("https://"):
+            return _invalid_need("url must be https")
+        return _direct_url_result(body, url, need, deadline)
 
     prefer = probe.normalize_prefer_network(body.get("prefer_network"))
     objective = select.parse_objective(body.get("objective"))
