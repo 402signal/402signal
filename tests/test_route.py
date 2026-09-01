@@ -317,7 +317,7 @@ class PaywallTests(unittest.TestCase):
         self.assertNotIn("What do you need?", html)
         self.assertIn("ross@402signal.com", html)
         self.assertNotIn("402signal@gmail.com", html)
-        self.assertIn("https://github.com/402signal/402signal", html)
+        self.assertIn("https://github.com/402signalhq/402signal", html)
         self.assertNotIn("PAYMENT-SIGNATURE", html)
         self.assertNotIn("Show technical details", html)
         self.assertNotIn("Fail-closed x402 routing", html)

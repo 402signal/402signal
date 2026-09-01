@@ -382,7 +382,7 @@ class HomepageProductTests(unittest.TestCase):
 
     def test_github_link_works(self):
         for path, html in self.pages.items():
-            self.assertIn('href="https://github.com/402signal/402signal"', html, path)
+            self.assertIn('href="https://github.com/402signalhq/402signal"', html, path)
 
     def test_catalog_page_search_uses_preview(self):
         html = self.catalog
@@ -714,7 +714,7 @@ class HomepageProductTests(unittest.TestCase):
             self.assertIn('href="/transparency"', html, path)
             self.assertIn(">Transparency<", html, path)
             self.assertIn('href="/catalog"', html, path)
-            self.assertIn("https://github.com/402signal/402signal", html, path)
+            self.assertIn("https://github.com/402signalhq/402signal", html, path)
 
     def test_probe_and_wallet_absent(self):
         for name in ("index.html", "catalog.html", "how.html", "developers.html", "app.js", "transparency.js"):
@@ -747,7 +747,7 @@ class HomepageProductTests(unittest.TestCase):
         self.assertIn("Questions, integration help, feedback, and bug reports are welcome.", html)
         self.assertIn("mailto:ross@402signal.com", html)
         self.assertIn("https://x.com/402Signal", html)
-        self.assertIn("https://github.com/402signal/402signal", html)
+        self.assertIn("https://github.com/402signalhq/402signal", html)
         self.assertIn("Send security-sensitive reports by email, not as public posts.", html)
         self.assertNotIn("<form", html)
         self.assertNotIn("402signal@gmail.com", html)
@@ -893,7 +893,7 @@ class HomepageProductTests(unittest.TestCase):
             self.assertEqual([t for t, _h in parsed.nav_links], list(NAV_LABELS), path)
             self.assertNotIn("Listed on", html, path)
             self.assertNotIn("listed-on", html, path)
-            self.assertIn("https://github.com/402signal/402signal", html, path)
+            self.assertIn("https://github.com/402signalhq/402signal", html, path)
             self.assertIn(">Transparency<", html, path)
             self.assertEqual(html.count("<h1"), 1, path)
             self.assertNotIn("\N{EM DASH}", html, path)

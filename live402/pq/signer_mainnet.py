@@ -54,8 +54,8 @@ _FORBIDDEN_PORTS = frozenset({8080})
 _MAX_LINE = 65536
 # Documented merged signer identity. Not a secret.
 SIGNER_APP = "402signal-pq-signer-mainnet"
-SIGNER_MERGE_SHA = "a901ef7a"
-SIGNER_REVIEWED_HEAD = "1c3e640a"
+SIGNER_MERGE_SHA = "7e58e39817dce9b74c387ffe3a08536f804dcd05"
+SIGNER_REVIEWED_HEAD = "6d2480ce5a53c9b7dd574a01c257b4faa2f8dac9"
 SIGNER_PROTOCOL = "pq-anchor/2"
 REQUEST_VERSION = 2
 # Narrow HMAC-bound policy. Flattened into the MAC. Do not add
@@ -101,7 +101,9 @@ REQUEST_KEYS = (
 # Preferred exact HMAC rejection from the reviewed private signer
 # (valid pq-anchor/2 shape + invalid HMAC). Allowlist is fail-closed.
 EXPECTED_HMAC_ERROR = "hmac"
-EXPECTED_HMAC_ERRORS = frozenset({"hmac", "hmac_invalid", "invalid_hmac", "mac"})
+# Reviewed private-signer wire: only exact error="hmac" proves the protocol.
+# Alternate strings are historical and must FAIL the probe.
+EXPECTED_HMAC_ERRORS = frozenset({"hmac"})
 
 
 def mainnet_signer_token() -> str:
@@ -342,9 +344,8 @@ def encode_request_line(payload: dict) -> str:
 
 
 def hmac_error_expected(error: str) -> bool:
-    """True when the signer rejected with an expected HMAC-boundary error."""
-    text = str(error or "").strip().lower().replace(" ", "_")
-    return text in EXPECTED_HMAC_ERRORS or text == EXPECTED_HMAC_ERROR
+    """True only for the reviewed HMAC reject wire: error exactly "hmac"."""
+    return str(error or "") == EXPECTED_HMAC_ERROR
 
 
 def _recv_line(sock: socket.socket, timeout: float) -> str:
@@ -572,10 +573,17 @@ def protocol_probe(*, host: str | None = None, port: int | None = None, timeout:
         elif data.get("ok") is True:
             # A success reply to an invalid HMAC is a protocol failure.
             error = "unexpected_ok"
+        elif any(k in data for k in ("signed", "pqsig", "SignedTxn")):
+            # Invalid-HMAC replies must never carry authorization material.
+            error = "unexpected_signed"
         else:
             error = str(data.get("error") or "rejected")
             hmac_rejected = hmac_error_expected(error)
-            protocol = hmac_rejected
+            protocol = bool(
+                data.get("ok") is False
+                and hmac_rejected
+                and error == EXPECTED_HMAC_ERROR
+            )
     except Exception as exc:
         error = type(exc).__name__
         if not reachable:

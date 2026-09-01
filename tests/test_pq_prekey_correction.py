@@ -20,7 +20,7 @@ _SIG = base64.b64encode(b"\x00" * 4 + b"\x22" * 64).decode("ascii")
 _FALCON_PK = b"pk" + bytes(range(14))
 _FALCON_SIG = b"sig" + bytes(range(29))
 
-# Published by 402signal-pq-signer @ 1c3e640ae856a6c7a47cd892d0bfa1794df5deb5.
+# Historical golden published by 402signal-pq-signer @ 1c3e640ae856a6c7a47cd892d0bfa1794df5deb5 (pre org-main merge).
 # Flat k=v, size_version=1, v=pq-anchor/2. Exactly 380 UTF-8 bytes.
 _GOLDEN_ROOT = "abababababababababababababababababababababababababababababababab"
 _GOLDEN_POLICY = {
