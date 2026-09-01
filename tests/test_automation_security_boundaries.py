@@ -38,12 +38,13 @@ class AutomationSecurityBoundariesTests(unittest.TestCase):
         self.assertTrue(owned, msg="CODEOWNERS must assign @ross402signal for live402/pq/")
 
     def test_github_protection_does_not_claim_disabled(self):
-        text = _read(PROTECTION).lower()
+        raw = _read(PROTECTION)
+        text = " ".join(raw.lower().split())
         self.assertIn("protect main", text)
         self.assertIn("already enabled", text)
         self.assertNotIn("not implemented by this change", text)
         self.assertNotIn("@402signal/maintainers", text)
-        self.assertNotIn("\u2014", _read(PROTECTION))
+        self.assertNotIn("\u2014", raw)
 
 
 if __name__ == "__main__":
