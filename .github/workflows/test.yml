@@ -22,3 +22,10 @@ jobs:
         env:
           LIVE402_FIXTURE: "1"
         run: python -m unittest discover -s tests
+      # Audit the deploy pin only. Do not add requirements.lock or
+      # --require-hashes: a multi-platform hash lock would fail Fly /
+      # developer pip install (see docs/docker.md).
+      - name: pip-audit requirements (no upgrades)
+        uses: pypa/gh-action-pip-audit@1220774d901786e6f652ae159f7b6bc8fea6d266 # v1.1.0
+        with:
+          inputs: requirements.txt

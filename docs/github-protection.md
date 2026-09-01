@@ -12,7 +12,7 @@ Required CI check name (job id in `.github/workflows/test.yml`):
 4. Do not require checks that only exist on `pull_request_target` (that trigger is not used).
 5. Restrict who can push to `main`.
 6. Require CODEOWNERS review for the paths in `.github/CODEOWNERS` once the `@402signal/maintainers` team exists.
-7. Do not attach deploy secrets to pull-request workflows. `test` and CodeQL use `contents: read` only (CodeQL also needs `security-events: write` to upload results).
+7. Do not attach deploy secrets to pull-request workflows. `test` and CodeQL use `contents: read` only (CodeQL also needs `security-events: write` to upload results). The `test` job also runs pip-audit on `requirements.txt`. Do not add a private-signer secret to this public repo.
 8. Confirm CODEOWNERS team membership before enforcing reviews.
 
 CODEOWNERS is implemented in-tree. Branch protection is **human**, not implemented by this change.
