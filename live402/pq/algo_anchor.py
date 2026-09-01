@@ -273,30 +273,202 @@ def required_fee(
 ) -> int:
     """Official Falcon required fee. Hard ceiling MAX_FEE. No caller fee.
 
-    required = max(fee_per_byte * signed_Falcon_txn_size, falcon_min)
-    falcon_min = protocol_base_min * (1 + 2)  # 3000 when base is 1000
-    fee_per_byte is algod suggested `fee` (0 when uncongested).
-    Size is len(signed) when the blob exists, else the deterministic
-    Falcon-1024 envelope estimate. Do not treat minFee or suggested
-    fee as a flat txn fee. Do not raise the cap.
+    ONE SIZE RULE: size is ALWAYS the deterministic Falcon-1024
+    authorized-envelope estimate (max pk 1793, max compressed sig 1423).
+    Never use actual len(signed). If only a SignedTxn is supplied, the
+    unsigned txn is decoded so the estimate can include those fields;
+    the Falcon sig length is still the official max. Prefer a small
+    conservative overpayment over signer/router disagreement.
+
+    required = max(fee_per_byte * estimate, protocol_base_min * 3)
+    Fee integers 3000..30000 share the same 3-byte msgpack encoding, so
+    the estimate is stable across the allowed fee range.
     """
     floor = falcon_min_fee(params)
     if floor > MAX_FEE:
         raise AnchorError("fee exceeds cap")
     fpb = fee_per_byte(params)
-    if signed is not None:
-        blob = bytes(signed)
-        if not blob:
-            raise AnchorError("fee out of range")
-        size = len(blob)
-    else:
-        size = estimate_falcon_authorized_size(unsigned)
+    draft = unsigned
+    if draft is None and signed is not None:
+        try:
+            obj = algo_tx.msgpack_decode(bytes(signed))
+            inner = obj.get("txn") if isinstance(obj, dict) else None
+            if isinstance(inner, dict):
+                draft = inner
+        except Exception:
+            draft = None
+    size = estimate_falcon_authorized_size(draft)
     if size < 1:
         raise AnchorError("fee out of range")
     need = max(fpb * size, floor)
     if need > MAX_FEE:
         raise AnchorError("fee exceeds cap")
     return need
+
+
+# Algorand MaxTxnLife is 1000 rounds. 402Signal PQ1 policy uses that
+# exact reviewed span: lv = fv + 1000. Do not invent a wider window.
+MAX_VALIDITY_WINDOW = 1000
+CANONICAL_VALIDITY_WINDOW = 1000
+# Secondary safety only. Canonical MainNet check is exact fv/lv.
+FV_LOOKBACK = 10
+FV_LOOKAHEAD = 10
+# Frozen suggested-params snapshot must be this fresh at canary POST.
+SNAPSHOT_MAX_AGE_S = 90
+
+
+def snapshot_last_round(params: dict | None = None, *, require: bool = False) -> int:
+    """Trusted lastRound from a frozen network-parameter snapshot.
+
+    require=True (MainNet canonical): only lastRound / last_round.
+    Missing or invalid fails closed. firstValid is never a lastRound
+    substitute on that path.
+    """
+    p = params if isinstance(params, dict) else {}
+    keys = ("lastRound", "last_round") if require else ("lastRound", "last_round")
+    for key in keys:
+        if p.get(key) not in (None, ""):
+            try:
+                n = int(p.get(key))
+            except (TypeError, ValueError) as exc:
+                raise AnchorError("invalid lastRound") from exc
+            if n < 1:
+                raise AnchorError("invalid lastRound")
+            return n
+    if require:
+        raise AnchorError("missing lastRound")
+    return 0
+
+
+def fee_policy_snapshot(params: dict | None = None, *, unsigned: dict | None = None, now: int | None = None) -> dict:
+    """Canonical network-parameter fingerprint bound into AUTHORIZED.
+
+    Values come from the trusted params snapshot only (min fee,
+    fee/byte, lastRound). Caller cannot select fee or fv/lv.
+    Size for fee is the deterministic Falcon envelope estimate.
+    """
+    import time as _time
+
+    p = params if isinstance(params, dict) else {}
+    require = bool(p.get("require_canonical")) or str(p.get("genesisID") or p.get("genesis_id") or "") == MAINNET_GENESIS_ID
+    last_round = snapshot_last_round(p, require=require)
+    fv, lv = canonical_validity(p, require_canonical=require)
+    canonical = required_fee(p, unsigned=unsigned)
+    return {
+        "min_fee": protocol_base_min(p),
+        "fee_per_byte": fee_per_byte(p),
+        "last_round": last_round,
+        "max_life": CANONICAL_VALIDITY_WINDOW,
+        "max_fee": MAX_FEE,
+        "canonical_fee": canonical,
+        "fv": fv,
+        "lv": lv,
+        "snapshot_at": int(now if now is not None else _time.time()),
+        "snapshot_max_age_s": SNAPSHOT_MAX_AGE_S,
+        "size_rule": "deterministic_falcon_envelope_estimate",
+        "formula": "max(fee_per_byte * deterministic_falcon_envelope_estimate, protocol_base_min * 3)",
+    }
+
+
+def params_from_fee_policy(policy: dict | None) -> dict:
+    """Rebuild the params snapshot used to derive canonical fee / fv / lv."""
+    if not isinstance(policy, dict):
+        return {}
+    out = {
+        "minFee": int(policy.get("min_fee") or PROTOCOL_BASE_MIN),
+        "feePerByte": int(policy.get("fee_per_byte") or 0),
+        "flatFee": False,
+    }
+    last_round = int(policy.get("last_round") or 0)
+    if last_round:
+        out["lastRound"] = last_round
+        out["firstValid"] = int(policy.get("fv") or last_round)
+        out["lastValid"] = int(policy.get("lv") or (last_round + CANONICAL_VALIDITY_WINDOW))
+    return out
+
+
+def canonical_validity(params: dict | None = None, *, require_canonical: bool = False) -> tuple[int, int]:
+    """Canonical firstValid / lastValid from a frozen snapshot.
+
+    MainNet / require_canonical: lastRound is required. fv = lastRound,
+    lv = fv + 1000 (MaxTxnLife, reviewed 402Signal policy). No fv=1
+    fallback. Missing lastRound fails closed.
+    TestNet fixtures without lastRound may use fv=1, lv=1001.
+    """
+    last_round = snapshot_last_round(params, require=require_canonical)
+    if require_canonical and last_round < 1:
+        raise AnchorError("missing lastRound")
+    if last_round < 1:
+        return 1, 1 + CANONICAL_VALIDITY_WINDOW
+    return last_round, last_round + CANONICAL_VALIDITY_WINDOW
+
+
+def validate_validity_window(
+    fv: int,
+    lv: int,
+    params: dict | None = None,
+    *,
+    require_canonical: bool = False,
+) -> None:
+    """Bound firstValid/lastValid. Fail closed on broad or stale windows.
+
+    MainNet canonical: actual fv == policy.fv AND actual lv == policy.lv.
+    The ±10 lookback/lookahead is a secondary safety bound only.
+    Span > MaxTxnLife is always rejected. Already-expired (lv < lastRound)
+    is rejected.
+    """
+    try:
+        first = int(fv)
+        last = int(lv)
+    except (TypeError, ValueError) as exc:
+        raise AnchorError("invalid validity window") from exc
+    if first < 1 or last < 1:
+        raise AnchorError("invalid validity window")
+    span = last - first
+    if span < 1 or span > MAX_VALIDITY_WINDOW:
+        raise AnchorError("validity window out of range")
+    if require_canonical:
+        want_fv, want_lv = canonical_validity(params, require_canonical=True)
+        if first != want_fv or last != want_lv:
+            raise AnchorError("validity window not canonical")
+        last_round = snapshot_last_round(params, require=True)
+        if first < last_round - FV_LOOKBACK or first > last_round + FV_LOOKAHEAD:
+            raise AnchorError("firstValid stale or too far ahead")
+        if last < last_round:
+            raise AnchorError("lastValid already expired")
+        return
+    last_round = snapshot_last_round(params, require=False)
+    if last_round >= 1:
+        if first < last_round - FV_LOOKBACK or first > last_round + FV_LOOKAHEAD:
+            raise AnchorError("firstValid stale or too far ahead")
+        if last < last_round:
+            raise AnchorError("lastValid already expired")
+
+
+def snapshot_fresh(policy: dict | None, *, now: int | None = None) -> None:
+    """Fail closed if the frozen suggested-params snapshot is too old."""
+    import time as _time
+
+    if not isinstance(policy, dict):
+        raise AnchorError("stale snapshot")
+    at = int(policy.get("snapshot_at") or 0)
+    max_age = int(policy.get("snapshot_max_age_s") or SNAPSHOT_MAX_AGE_S)
+    if at < 1:
+        raise AnchorError("stale snapshot")
+    when = int(now if now is not None else _time.time())
+    if when - at > max_age:
+        raise AnchorError("stale snapshot")
+
+
+def signed_txn_txid(signed: bytes) -> str:
+    """Local expected Algorand txid from the exact authorized SignedTxn."""
+    try:
+        txid = algo_tx.txid_from_signed(bytes(signed))
+    except Exception as exc:
+        raise AnchorError("invalid signed txn txid") from exc
+    if not _looks_like_txid(txid):
+        raise AnchorError("invalid signed txn txid")
+    return txid
 
 
 def validate_unsigned_anchor(txn: dict, expected_network: str | None = None) -> None:
@@ -444,8 +616,9 @@ def build_mainnet_payment_txn(note: bytes, params: dict | None = None, *, addres
     gh = _genesis_hash_bytes(gen, p.get("genesisHash") or p.get("genesis_hash"))
     if base64.b64encode(bytes(gh)).decode("ascii") != MAINNET_GENESIS_HASH:
         raise AnchorError("genesis hash mismatch")
-    first = int(p.get("firstValid") or p.get("firstRound") or 1)
-    last = int(p.get("lastValid") or p.get("lastRound") or (first + 1000))
+    if falcon_min_fee(p) > MAX_FEE:
+        raise AnchorError("fee exceeds cap")
+    first, last = canonical_validity(p, require_canonical=True)
     draft = algo_tx.pay_txn(addr, addr, 0, falcon_min_fee(p), first, last, MAINNET_GENESIS_ID, gh, note=bytes(note))
     fee = required_fee(p, unsigned=draft)
     txn = algo_tx.pay_txn(addr, addr, 0, fee, first, last, MAINNET_GENESIS_ID, gh, note=bytes(note))
@@ -702,6 +875,8 @@ def mainnet_submit_allowed(
                 expected_root=expected_root,
                 expected_address=addr,
                 expected_network=MAINNET_NAME,
+                params=params,
+                require_canonical=True,
             )
         except AnchorError:
             return False
@@ -757,6 +932,8 @@ def validate_signed_txn(
     expected_root,
     expected_address: str | None = None,
     expected_network: str | None = None,
+    params: dict | None = None,
+    require_canonical: bool | None = None,
 ) -> dict:
     """Semantic verify of a SignedTxn before any broadcast.
 
@@ -764,6 +941,10 @@ def validate_signed_txn(
     genesis for expected_network, no AuthAddr/rekey/close/group/lease/
     axfer/appcall/LogicSig/multisig/ordinary sig. Does not parse a
     Falcon secret key. Does not POST.
+
+    MainNet (or require_canonical=True) requires fee == canonical
+    required_fee(params) and a bounded fv/lv window. TestNet keeps
+    the range check unless require_canonical is set.
     """
     if not isinstance(signed, (bytes, bytearray)) or not signed:
         raise AnchorError("not a signed pq1 txn")
@@ -807,8 +988,36 @@ def validate_signed_txn(
         if have_gh and have_gh != cfg.genesis_hash:
             raise AnchorError("genesis hash mismatch")
     fee = int(txn.get("fee") or 0)
-    if fee < falcon_min_fee() or fee > MAX_FEE:
-        raise AnchorError("fee out of range")
+    canonical = require_canonical
+    if canonical is None:
+        canonical = cfg.name == MAINNET_NAME
+    if canonical:
+        # Fee is derived from the deterministic Falcon envelope estimate,
+        # the same algorithm the signer used before the exact blob existed.
+        want_fee = required_fee(params, unsigned=txn)
+        if fee != want_fee:
+            raise AnchorError("fee not canonical")
+        validate_validity_window(
+            int(txn.get("fv") or 0),
+            int(txn.get("lv") or 0),
+            params,
+            require_canonical=True,
+        )
+    else:
+        if fee < falcon_min_fee(params) or fee > MAX_FEE:
+            raise AnchorError("fee out of range")
+        try:
+            validate_validity_window(
+                int(txn.get("fv") or 0),
+                int(txn.get("lv") or 0),
+                params,
+                require_canonical=False,
+            )
+        except AnchorError:
+            # TestNet fixtures may omit lastRound; still reject broad windows.
+            span = int(txn.get("lv") or 0) - int(txn.get("fv") or 0)
+            if span < 1 or span > MAX_VALIDITY_WINDOW:
+                raise
     addr = (expected_address or falcon_address_for(cfg.name) or "").strip()
     if not addr:
         raise AnchorError("falcon address required")
@@ -843,12 +1052,16 @@ def validate_signed_txn(
     pq = _pq_auth_from_obj(obj)
     if not pq:
         raise AnchorError("falcon authorization missing")
+    expected_txid = signed_txn_txid(blob)
     return {
         "origin": expected_origin,
         "tree_size": int(parsed["tree_size"]),
         "root": parsed["root"],
         "address": addr,
         "fee": fee,
+        "fv": int(txn.get("fv") or 0),
+        "lv": int(txn.get("lv") or 0),
+        "txid": expected_txid,
         "network": cfg.name,
         "genesis_id": cfg.genesis_id,
     }
@@ -906,27 +1119,58 @@ def confirm_provider(network: str) -> dict:
     different organizations. Default MainNet hosts are both Nodely
     (AlgoNode is the legacy brand). That does not satisfy the
     production independent-confirmation requirement.
+    LIVE402_PQ_CONFIRM_PROVIDER selects a hardcoded table entry
+    (tatum | nownodes). Default trust_root.v2 stays
+    independent_provider=false. confirmation_ready is a separate
+    runtime flag and does not rewrite the committed trust root.
     """
     cfg = netcfg.get_network(network)
     submit = submit_provider(cfg.name)
-    independent = netcfg.confirmation_independent(cfg.submit_host, cfg.confirm_host)
-    return {
+    try:
+        host = netcfg.configured_confirm_host(cfg.name)
+        url = netcfg.configured_confirm_txn_url(cfg.name)
+        status = netcfg.confirmation_status(cfg.name)
+    except netcfg.UnknownNetwork:
+        host = cfg.confirm_host
+        url = cfg.confirm_txn_url
+        status = {
+            "confirm_provider_known": False,
+            "confirm_org_independent": False,
+            "confirm_credentials_configured": False,
+            "confirm_reachable": False,
+            "confirm_falcon_compatible": False,
+            "confirmation_ready": False,
+        }
+    independent = netcfg.confirmation_independent(cfg.submit_host, host)
+    try:
+        computed = netcfg.computed_confirmation_policy(cfg.name)
+    except netcfg.UnknownNetwork:
+        computed = {"independent_provider": False}
+    out = {
         "network": cfg.name,
         "kind": "confirm",
-        "host": cfg.confirm_host,
-        "url": cfg.confirm_txn_url,
+        "host": host,
+        "url": url,
         "pending_url": cfg.pending_url,
-        "org": netcfg.provider_org(cfg.confirm_host),
+        "org": netcfg.provider_org(host),
         "submit_org": netcfg.provider_org(cfg.submit_host),
         "second_host_allowlisted": netcfg.NODELY_MAINNET_CONFIRM_HOST if cfg.name == MAINNET_NAME else "",
-        "allowlisted": netcfg.confirm_host_allowlisted(cfg.name, cfg.confirm_host),
+        "allowlisted": netcfg.confirm_host_allowlisted(cfg.name, host),
         "independent_of_submit": independent,
         "independence_status": (
             "met_different_org" if independent else netcfg.CONFIRM_INDEPENDENCE_STATUS
         ),
         "independence_requirement": netcfg.CONFIRM_INDEPENDENCE_REQUIREMENT,
         "submit_host": submit.get("host") or "",
+        "confirm_provider_known": bool(status.get("confirm_provider_known")),
+        "confirm_org_independent": bool(status.get("confirm_org_independent")),
+        "confirm_credentials_configured": bool(status.get("confirm_credentials_configured")),
+        "confirm_reachable": bool(status.get("confirm_reachable")),
+        "confirm_falcon_compatible": bool(status.get("confirm_falcon_compatible")),
+        "confirmation_ready": bool(status.get("confirmation_ready")),
+        "confirmation_policy": computed,
     }
+    return out
 
 
 def submit_mainnet_canary(
@@ -1067,13 +1311,18 @@ def _post_testnet(blob: bytes) -> str | None:
     return txid if _looks_like_txid(txid) else None
 
 
-def _get_pinned(url: str, host: str, timeout: float) -> bytes | None:
+def _get_pinned(url: str, host: str, timeout: float, extra_headers: dict | None = None) -> bytes | None:
     if not _pinned_https(url, host):
         return None
+    headers = {"User-Agent": USER_AGENT, "Accept": "application/json"}
+    if extra_headers:
+        for key, val in extra_headers.items():
+            if key and val:
+                headers[str(key)] = str(val)
     req = urllib.request.Request(
         url,
         method="GET",
-        headers={"User-Agent": USER_AGENT, "Accept": "application/json"},
+        headers=headers,
     )
     opener = urllib.request.build_opener(_NoRedirect)
     try:
@@ -1106,10 +1355,16 @@ def fetch_confirmed_txn(txid: str, network: str | None = None, fetch_fn=None):
     if fixtures.fixture_mode():
         return None
     cfg = _network_cfg(network)
-    if not netcfg.confirm_host_allowlisted(cfg.name, cfg.confirm_host):
+    try:
+        confirm_host = netcfg.configured_confirm_host(cfg.name)
+        idx_url = netcfg.configured_confirm_txn_url(cfg.name, txid)
+        auth = netcfg.confirm_auth_header() if cfg.name == MAINNET_NAME else None
+    except netcfg.UnknownNetwork:
         return None
-    idx_url = cfg.confirm_txn_url + txid
-    raw = _get_pinned(idx_url, cfg.confirm_host, TESTNET_FETCH_TIMEOUT)
+    if not netcfg.confirm_host_allowlisted(cfg.name, confirm_host):
+        return None
+    extra = {auth[0]: auth[1]} if auth else None
+    raw = _get_pinned(idx_url, confirm_host, TESTNET_FETCH_TIMEOUT, extra_headers=extra)
     if raw:
         try:
             data = json.loads(raw.decode("utf-8"))

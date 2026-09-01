@@ -4,7 +4,10 @@ Public status still comes from CONFIRMED only. This snapshot is the
 documented internal operator structure. GET /ready uses a boolean
 subset (storage / integrity) and never returns this object.
 It never includes private keys, mnemonics, HMAC tokens, or Fly secrets.
-Balance is not fetched in this PR.
+token_configured is not the same as signer available. preflight()
+proves MainNet signer reachability and protocol without creating an
+authorization. Balance is fetched only when a public Falcon address
+exists and a fetch hook or non-fixture path is used.
 """
 
 from __future__ import annotations
@@ -18,7 +21,12 @@ from live402.pq import ops_state
 from live402.pq import store
 from live402.pq import trust
 from live402.pq import worker
-from live402.pq.signer_client import token_configured
+from live402.pq.signer_client import token_configured as testnet_token_configured
+
+# Process-local supplemental counters. Not durable. Not a substitute
+# for preflight() or the authorized_anchors state machine.
+_last_preflight: dict = {}
+_preflight_count = 0
 
 
 def _age_s(when: int, now: int) -> int | None:
@@ -45,7 +53,7 @@ def ready_flags() -> dict:
     return {
         "pq_log_sqlite": sqlite_ok,
         "pq_log_integrity": integrity_ok,
-        "signer_configured": token_configured() or algo_anchor.mainnet_signer_configured(),
+        "signer_configured": testnet_token_configured() or algo_anchor.mainnet_signer_configured(),
     }
 
 
@@ -130,9 +138,13 @@ def snapshot() -> dict:
             "automatic_mainnet": algo_anchor.automatic_mainnet_enabled(),
         },
         "signer": {
-            "available": bool(token_configured() or algo_anchor.mainnet_signer_configured()),
-            "testnet_token_configured": token_configured(),
+            "available": bool(
+                (_last_preflight.get("signer") or {}).get("protocol")
+            ),
+            "reachable": bool((_last_preflight.get("signer") or {}).get("reachable")),
+            "testnet_token_configured": testnet_token_configured(),
             "mainnet_token_configured": algo_anchor.mainnet_signer_configured(),
+            "token_configured_is_not_available": True,
             "reads_broadcast": False,
             "broadcasts": False,
         },
@@ -144,6 +156,15 @@ def snapshot() -> dict:
             "independent_of_submit": bool(confirm.get("independent_of_submit")),
             "independence_status": confirm.get("independence_status") or "",
             "second_host_allowlisted": confirm.get("second_host_allowlisted") or "",
+            "confirm_provider_known": bool(confirm.get("confirm_provider_known")),
+            "confirm_org_independent": bool(confirm.get("confirm_org_independent")),
+            "confirm_credentials_configured": bool(confirm.get("confirm_credentials_configured")),
+            "confirm_reachable": bool(confirm.get("confirm_reachable")),
+            "confirm_falcon_compatible": bool(confirm.get("confirm_falcon_compatible")),
+            "confirmation_ready": bool(confirm.get("confirmation_ready")),
+            "computed_independent_provider": bool(
+                (confirm.get("confirmation_policy") or {}).get("independent_provider")
+            ),
         },
         "submit_provider": {
             "host": submit.get("host") or "",
@@ -159,7 +180,8 @@ def snapshot() -> dict:
             "min_fee": algo_anchor.MIN_FEE,
             "protocol_base_min": algo_anchor.PROTOCOL_BASE_MIN,
             "falcon_min": algo_anchor.MIN_FEE,
-            "formula": "max(fee_per_byte * signed_falcon_size, 3 * protocol_base_min)",
+            "formula": "max(fee_per_byte * deterministic_falcon_envelope_estimate, 3 * protocol_base_min)",
+            "size_rule": "deterministic_falcon_envelope_estimate",
             "cap_policy": "fail_closed_if_required_exceeds_max",
         },
         "broadcast": {
@@ -177,7 +199,152 @@ def snapshot() -> dict:
             "default_epoch": EPOCH_TESTNET,
         },
         "ready_flags": flags,
+        "preflight_cached": bool(_last_preflight),
+        "preflight_count": _preflight_count,
     }
+
+
+def _confirm_reachable(fetch_fn=None) -> dict:
+    """Confirm provider reachability. Fixture without fetch_fn does not dial."""
+    from live402 import fixtures
+
+    confirm = algo_anchor.confirm_provider(
+        algo_anchor.configured_network() or algo_anchor.TESTNET_NAME
+    )
+    host = confirm.get("host") or ""
+    if fetch_fn is not None:
+        try:
+            ok = bool(fetch_fn(host))
+        except Exception:
+            ok = False
+        return {"reachable": ok, "host": host, "org": confirm.get("org") or "", "probed": True}
+    if fixtures.fixture_mode():
+        return {"reachable": False, "host": host, "org": confirm.get("org") or "", "probed": False}
+    raw = algo_anchor._get_pinned(
+        "https://%s/health" % host,
+        host,
+        5.0,
+    )
+    return {
+        "reachable": bool(raw),
+        "host": host,
+        "org": confirm.get("org") or "",
+        "probed": True,
+    }
+
+
+def _falcon_balance(fetch_fn=None) -> dict:
+    """Public address balance only. Never logs a secret. None until address exists."""
+    from live402 import fixtures
+
+    addr = algo_anchor.falcon_address_for(
+        algo_anchor.configured_network() or algo_anchor.TESTNET_NAME
+    )
+    if not addr:
+        return {"fetched": False, "microalgo": None, "address": ""}
+    if fetch_fn is not None:
+        try:
+            n = fetch_fn(addr)
+            return {"fetched": True, "microalgo": int(n), "address": addr}
+        except Exception:
+            return {"fetched": False, "microalgo": None, "address": addr}
+    if fixtures.fixture_mode():
+        return {"fetched": False, "microalgo": None, "address": addr}
+    return {"fetched": False, "microalgo": None, "address": addr}
+
+
+def preflight(
+    *,
+    signer_probe_fn=None,
+    confirm_fetch_fn=None,
+    balance_fetch_fn=None,
+) -> dict:
+    """Operator-safe health. No secrets. Does not create an authorization.
+
+    token configured is not signer available. MainNet signer probe uses
+    an invalid-HMAC pq-anchor/1 line (or an injected hook) and never
+    persists a SignedTxn.
+    """
+    global _last_preflight, _preflight_count
+    flags = ready_flags()
+    epoch = log_identity.configured_epoch()
+    network = algo_anchor.configured_network() or algo_anchor.TESTNET_NAME
+    try:
+        tree_size = int(store.size() or 0)
+        origin = store.origin() or ORIGIN
+        integrity = bool(flags.get("pq_log_integrity"))
+        sqlite_ok = bool(flags.get("pq_log_sqlite"))
+    except Exception:
+        tree_size = 0
+        origin = ORIGIN
+        integrity = False
+        sqlite_ok = False
+    if signer_probe_fn is not None:
+        signer = dict(signer_probe_fn() or {})
+    elif network == algo_anchor.MAINNET_NAME:
+        from live402 import fixtures
+        from live402.pq import signer_mainnet
+
+        if fixtures.fixture_mode():
+            signer = {
+                "reachable": False,
+                "protocol": False,
+                "error": "fixture_mode",
+                "host": signer_mainnet.ipc_peer_host(),
+                "port": signer_mainnet.ipc_port(),
+                "probed": False,
+            }
+        else:
+            signer = signer_mainnet.protocol_probe()
+            signer["probed"] = True
+    else:
+        signer = {
+            "reachable": False,
+            "protocol": False,
+            "error": "not_mainnet",
+            "probed": False,
+        }
+    confirm = _confirm_reachable(confirm_fetch_fn)
+    balance = _falcon_balance(balance_fetch_fn)
+    fee = {
+        "max_fee": algo_anchor.MAX_FEE,
+        "min_fee": algo_anchor.MIN_FEE,
+        "canonical": algo_anchor.required_fee({"minFee": 1000, "fee": 0}),
+        "cap_ok": algo_anchor.MIN_FEE <= algo_anchor.MAX_FEE,
+    }
+    out = {
+        "epoch": epoch,
+        "network": network,
+        "origin": origin,
+        "tree_size": tree_size,
+        "db_integrity": integrity,
+        "db_sqlite": sqlite_ok,
+        "signer": {
+            "token_configured": algo_anchor.mainnet_signer_configured()
+            if network == algo_anchor.MAINNET_NAME
+            else testnet_token_configured(),
+            "reachable": bool(signer.get("reachable")),
+            "protocol": bool(signer.get("protocol")),
+            "available": bool(signer.get("reachable") and signer.get("protocol")),
+            "host": signer.get("host") or "",
+            "port": signer.get("port") or 0,
+            "error": signer.get("error") or "",
+            "probed": bool(signer.get("probed", True)),
+        },
+        "confirm_provider": confirm,
+        "fee": fee,
+        "balance": balance,
+        "mainnet_broadcast": algo_anchor.mainnet_broadcast_requested(),
+        "mainnet_canary": algo_anchor.mainnet_canary_requested(),
+        "automatic_mainnet": algo_anchor.automatic_mainnet_enabled(),
+    }
+    blob = str(out).lower()
+    for banned in ("mnemonic", "private_key", "live402_pq_log_sk", "hmac", "seed"):
+        if banned in blob and banned not in ("hmac",):
+            out["redacted"] = True
+    _last_preflight = out
+    _preflight_count += 1
+    return out
 
 
 ALERTS = (
@@ -195,7 +362,7 @@ ALERTS = (
     },
     {
         "id": "signer_unavailable",
-        "when": "LIVE402_PQ_SIGNER_TOKEN unset or 6PN dial fails while a checkpoint is due",
+        "when": "MainNet signer token configured is not sufficient; protocol probe must fail closed if 6PN is unreachable or not pq-anchor/1",
     },
     {
         "id": "confirm_provider_error",

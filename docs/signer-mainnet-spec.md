@@ -56,16 +56,21 @@ fields only:
 Fee formula (same as the router; 402security must review):
 
 ```
-required = max(fee_per_byte * signed_Falcon_txn_size, protocol_base_min * 3)
+required = max(fee_per_byte * deterministic_falcon_envelope_estimate, protocol_base_min * 3)
 ```
 
+ONE SIZE RULE: both signer and router use the same deterministic
+Falcon-1024 authorized-envelope estimate (official max pk 1793, max
+compressed sig 1423). Never mix `len(signed)` with that estimate.
+Never derive a smaller fee from a shorter actual Falcon sig.
+
 Protocol base min is 1000 µAlgo today. Falcon-1024 adds 2x that base
-(uncongested floor 3000). algod suggested `fee` is fee per byte. Size
-is the deterministic Falcon-1024 authorized SignedTxn estimate
-(official max pk 1793, max sig 1423) when the exact blob is not yet
-known. The signer authorizes that exact canonical txn. If required >
-30000, reject. Do not raise the cap. Do not hardcode fee=3000
-forever. Caller cannot select the fee.
+(uncongested floor 3000). algod suggested `fee` is fee per byte.
+Validity: `fv = trusted lastRound`, `lv = fv + 1000` (MaxTxnLife,
+reviewed 402Signal policy). Missing lastRound fails closed. No
+`fv=1` fallback on MainNet. The signer authorizes that exact
+canonical txn. If required > 30000, reject. Do not raise the cap.
+Do not hardcode fee=3000 forever. Caller cannot select the fee.
 
 Do not accept router-supplied fee, firstValid, sender, amount, or an
 unsigned txn blob. Unknown JSON keys are rejected.

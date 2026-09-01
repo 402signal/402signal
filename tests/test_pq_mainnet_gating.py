@@ -401,6 +401,9 @@ class MainNetGatingTests(unittest.TestCase):
         params = {
             "genesisID": algo_anchor.MAINNET_GENESIS_ID,
             "genesisHash": algo_anchor.MAINNET_GENESIS_HASH,
+            "lastRound": 1,
+            "minFee": 1000,
+            "fee": 0,
         }
         store.append(b"canary-leaf")
         store.save_authorized_checkpoint(

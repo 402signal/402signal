@@ -85,6 +85,7 @@ class FalconFeeTests(unittest.TestCase):
                 {
                     "minFee": 1000,
                     "fee": fpb,
+                    "lastRound": 1,
                     "genesisID": algo_anchor.MAINNET_GENESIS_ID,
                     "genesisHash": algo_anchor.MAINNET_GENESIS_HASH,
                 },
@@ -120,6 +121,7 @@ class FalconFeeTests(unittest.TestCase):
                 "fee": 0,
                 "flatFee": True,
                 "callerFee": 9999,
+                "lastRound": 1,
                 "genesisID": algo_anchor.MAINNET_GENESIS_ID,
                 "genesisHash": algo_anchor.MAINNET_GENESIS_HASH,
             },
