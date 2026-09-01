@@ -1,6 +1,6 @@
 # 402Signal
 
-Fail-closed live-endpoint x402 router. We probe. You pay $0.01 for a live URL or an honest miss.
+402Signal is a chain-neutral x402 discovery, verification, and routing service for agents. It finds paid APIs across Base, Solana, and Algorand, checks candidates immediately before spend, and returns the best available route with evidence behind the decision. The buyer keeps its wallet, signing, and payment execution. Routing history is committed to an append-only transparency log with Falcon post-quantum authorization on Algorand (currently TestNet; MainNet planned after security validation)
 
 - **Live site:** https://402signal.com
 - **Paid API:** `POST /route` — $0.01 USDC

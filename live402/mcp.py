@@ -5,10 +5,7 @@ from __future__ import annotations
 from live402 import payment, pulse, validate
 from live402.route import handle_route
 
-ROUTE_DESCRIPTION = (
-    "Pay $0.01 USDC for a live payable URL or an honest miss. Unpaid tools/call "
-    "returns HTTP 402. Retry with PAYMENT-SIGNATURE."
-)
+ROUTE_DESCRIPTION = payment.CATALOG_DESCRIPTION
 
 PREVIEW_DESCRIPTION = (
     "Request-time catalog preflight over upstream catalogs plus a local shadow. "

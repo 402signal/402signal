@@ -763,10 +763,34 @@ class PaywallTests(unittest.TestCase):
         self.assertEqual(amounts, ["10000", "10000", "10000"])
 
     def test_desc_under_cdp_500(self):
-        from live402 import discover
-        self.assertLessEqual(len(discover.DESC), 500)
-        self.assertIn("402", discover.DESC)
-        self.assertIn("envelope", discover.DESC.lower())
+        from live402 import discover, mcp as mcp_mod
+        catalog = payment.CATALOG_DESCRIPTION
+        self.assertLessEqual(len(catalog), 500)
+        self.assertEqual(discover.DESC, catalog)
+        self.assertNotIn("\u2014", catalog)
+        self.assertIn("chain-neutral", catalog)
+        self.assertIn("Base, Solana, and Algorand", catalog)
+        self.assertIn("buyer keeps its wallet", catalog)
+        self.assertIn("Falcon post-quantum", catalog)
+        self.assertIn("currently TestNet", catalog)
+        self.assertIn("MainNet planned after security validation", catalog)
+        required = payment.payment_required("https://402signal.com/route")
+        self.assertEqual(required["resource"]["description"], catalog)
+        self.assertEqual(payment.BAZAAR_MCP["info"]["input"]["description"], catalog)
+        wk = discover.well_known()
+        self.assertEqual(wk["description"], catalog)
+        self.assertEqual(wk["resources"][1]["description"], catalog)
+        spec = discover.openapi_spec()
+        self.assertEqual(spec["info"]["description"], catalog)
+        self.assertEqual(mcp_mod.ROUTE_DESCRIPTION, catalog)
+        self.assertEqual(mcp_mod.manifest()["description"], catalog)
+        route = next(t for t in mcp_mod.manifest()["tools"] if t["name"] == "route")
+        self.assertEqual(route["description"], catalog)
+        self.assertTrue(discover.LLMS_TXT.startswith("# 402Signal\n\n" + catalog))
+        readme = Path(__file__).resolve().parent.parent.joinpath("README.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(catalog, readme.splitlines()[2])
 
     def test_empty_need_and_url_returns_402(self):
         """CDP validate POSTs empty JSON; must 402 with bazaar, not 400."""
@@ -1802,9 +1826,8 @@ class ProductBriefTests(unittest.TestCase):
         from live402 import mcp as mcp_mod
         tools = mcp_mod.manifest()["tools"]
         route = next(t for t in tools if t.get("name") == "route")
-        self.assertLessEqual(len(route["description"]), 200)
-        self.assertIn("HTTP 402", route["description"])
-        self.assertIn("honest miss", route["description"])
+        self.assertLessEqual(len(route["description"]), 500)
+        self.assertEqual(route["description"], payment.CATALOG_DESCRIPTION)
         self.assertNotIn("Signal402", route["description"])
         self.assertEqual(route["inputSchema"].get("required"), ["need"])
         self.assertIn("prefer_network", (route["inputSchema"].get("properties") or {}))

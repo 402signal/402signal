@@ -6,12 +6,7 @@ from live402 import payment, probe
 
 ORIGIN = "https://402signal.com"
 ROUTE = f"{ORIGIN}/route"
-DESC = (
-    "Fail-closed live-endpoint x402 router. "
-    "Pay $0.01 USDC on Base, Solana, or Algorand for a URL that answers unpaid "
-    "HTTP 402 with a payment envelope, or an honest miss. Reachable 200s are misses. "
-    "MCP: GET /mcp.json."
-)
+DESC = payment.CATALOG_DESCRIPTION
 GUIDANCE = (
     "POST /route with JSON {need, url?}. Unpaid calls return HTTP 402. "
     "Agents that intend to pay should POST, not GET. "
@@ -1135,11 +1130,8 @@ Allow: /transparency
 Sitemap: https://402signal.com/
 """
 
-LLMS_TXT = """# 402Signal
+LLMS_TXT = "# 402Signal\n\n" + DESC + """
 
-> Pay a penny. Get a live payable URL — or an honest miss.
-
-402Signal is a fail-closed x402 router at https://402signal.com
 We probe first. Live means an unpaid HTTP 402 with a parseable payment envelope, not merely reachable.
 $0.01 = 10000 atomic USDC (6 decimals). Retry unpaid 402 with PAYMENT-SIGNATURE.
 HTTP 200 = live URL plus target contract. HTTP 503 = typed miss_reason.

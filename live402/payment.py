@@ -26,6 +26,16 @@ AMOUNT_ATOMIC = "10000"
 AMOUNT_USD = "$0.01"
 USDC_DECIMALS = 6
 
+# CDP / Bazaar / PayAI / GoPlausible listing blurb. Keep at or under 500 chars.
+CATALOG_DESCRIPTION = (
+    "402Signal is a chain-neutral x402 discovery, verification, and routing service for agents. "
+    "It finds paid APIs across Base, Solana, and Algorand, checks candidates immediately before spend, "
+    "and returns the best available route with evidence behind the decision. "
+    "The buyer keeps its wallet, signing, and payment execution. "
+    "Routing history is committed to an append-only transparency log with Falcon post-quantum "
+    "authorization on Algorand (currently TestNet; MainNet planned after security validation)"
+)
+
 # Spec-shaped bazaar declaration for POST /route.
 # See https://github.com/x402-foundation/x402/blob/main/specs/extensions/bazaar.md
 BAZAAR_EXTENSION = {
@@ -139,10 +149,7 @@ BAZAAR_MCP = {
         "input": {
             "type": "mcp",
             "toolName": "route",
-            "description": (
-                "Pay $0.01 USDC for a live payable URL or an honest miss. "
-                "Unpaid tools/call returns HTTP 402. Retry with PAYMENT-SIGNATURE."
-            ),
+            "description": CATALOG_DESCRIPTION,
             "transport": "streamable-http",
             "inputSchema": {
                 "type": "object",
@@ -261,7 +268,7 @@ def payment_required(resource_url: str, bazaar: dict | None = None, algorand_sen
         "amount": AMOUNT_USD,
         "resource": {
             "url": resource_url,
-            "description": "Fail-closed live-endpoint x402 route. Pay $0.01 for a live URL or an honest miss.",
+            "description": CATALOG_DESCRIPTION,
             "mimeType": "application/json",
             "serviceName": "402Signal",
             "tags": ["x402", "router", "probe"],
