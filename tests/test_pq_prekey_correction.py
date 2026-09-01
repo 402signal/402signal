@@ -487,9 +487,42 @@ class PrekeyCorrectionTests(unittest.TestCase):
         self.assertFalse(status["confirm_falcon_compatible"])
         self.assertFalse(status["confirmation_ready"])
 
+    def test_narrow_policy_emits_size_version_json_string(self):
+        """Go policy.Snapshot.SizeVersion is string; wire must not send JSON number."""
+        for raw in (1, "1"):
+            policy = {
+                "canonical_fee": 3000,
+                "fee_per_byte": 0,
+                "fv": 10,
+                "last_round": 10,
+                "lv": 1010,
+                "min_fee": 1000,
+                "size_rule": "deterministic_falcon_envelope_estimate",
+                "size_version": raw,
+                "snapshot_at": 1700000000,
+            }
+            bound = signer_mainnet.narrow_policy(policy)
+            self.assertIsInstance(bound["size_version"], str)
+            self.assertEqual(bound["size_version"], "1")
+            encoded = json.dumps({"policy": bound}, separators=(",", ":"))
+            self.assertIn('"size_version":"1"', encoded)
+            self.assertNotIn('"size_version":1', encoded)
+            self.assertNotIn('"size_version": 1', encoded)
+            body = signer_mainnet.canonical_bytes(
+                origin=ORIGIN_MAINNET,
+                tree_size=2,
+                root=_GOLDEN_ROOT,
+                consistency=[],
+                timestamp=1700000000,
+                request_id="golden-v2",
+                checkpoint="NOTE",
+                policy=bound,
+            )
+            self.assertIn(b"size_version=1\n", body)
+
     def test_flat_hmac_golden_vector_matches_go_signer_format(self):
         self.assertEqual(signer_mainnet.CANONICAL_KEYS, FLAT_HMAC_FIELD_ORDER)
-        self.assertEqual(signer_mainnet.HMAC_SIZE_VERSION, 1)
+        self.assertEqual(signer_mainnet.HMAC_SIZE_VERSION, "1")
         want = FLAT_HMAC_GOLDEN.encode("utf-8")
         self.assertEqual(len(want), 380)
         body = signer_mainnet.canonical_bytes(

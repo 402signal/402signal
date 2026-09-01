@@ -247,6 +247,37 @@ class MainNetSignerIsolationTests(unittest.TestCase):
                 params={"minFee": 1000, "fee": 0, "lastRound": 1},
             )
 
+    def test_build_request_encodes_size_version_as_json_string(self):
+        os.environ["LIVE402_PQ_SIGNER_MAINNET_TOKEN"] = _TOKEN
+        root = b"\xab" * 32
+        payload = signer_mainnet.build_request(
+            origin=ORIGIN_MAINNET,
+            tree_size=1,
+            root=root,
+            consistency=[],
+            timestamp=1_700_000_000,
+            request_id="wire-sv",
+            checkpoint=_signed_note(1, root),
+            policy=_policy(),
+            token=_TOKEN,
+        )
+        self.assertIsInstance(payload["policy"]["size_version"], str)
+        self.assertEqual(payload["policy"]["size_version"], "1")
+        line = signer_mainnet.encode_request_line(payload)
+        self.assertIn('"size_version":"1"', line)
+        self.assertNotIn('"size_version":1', line)
+        body = signer_mainnet.canonical_bytes(
+            origin=ORIGIN_MAINNET,
+            tree_size=1,
+            root=root,
+            consistency=[],
+            timestamp=1_700_000_000,
+            request_id="wire-sv",
+            checkpoint=_signed_note(1, root),
+            policy=_policy(),
+        )
+        self.assertIn(b"size_version=1\n", body)
+
     def test_protocol_probe_does_not_create_auth(self):
         received = []
 
@@ -288,6 +319,11 @@ class MainNetSignerIsolationTests(unittest.TestCase):
         self.assertEqual(store.size(), 0)
         self.assertFalse(store.last_authorized_checkpoint().get("signed"))
         self.assertIn(b"unsigned", received[0])
+        wire = json.loads(received[0].decode("utf-8").strip())
+        self.assertIsInstance(wire["policy"]["size_version"], str)
+        self.assertEqual(wire["policy"]["size_version"], "1")
+        self.assertIn(b'"size_version":"1"', received[0])
+        self.assertNotIn(b'"size_version":1', received[0])
         blob = str(out).lower()
         self.assertNotIn("mnemonic", blob)
         self.assertNotIn(_TOKEN.lower(), blob)
