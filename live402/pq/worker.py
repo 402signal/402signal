@@ -83,7 +83,7 @@ def last_anchor() -> dict:
 
 
 def public_anchor() -> dict | None:
-    """Homepage / explorer CTA. None unless a real confirmed TestNet txn exists."""
+    """Homepage / explorer CTA. None unless a real confirmed txn exists."""
     conf = last_confirmed()
     text = str(conf.get("txid") or "").strip()
     low = text.lower()
@@ -95,7 +95,7 @@ def public_anchor() -> dict | None:
         return None
     try:
         conf = dict(conf)
-        conf["explorer"] = algo_anchor.testnet_explorer_url(text)
+        conf["explorer"] = algo_anchor.explorer_url(text)
     except algo_anchor.AnchorError:
         return None
     return conf

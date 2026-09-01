@@ -41,10 +41,10 @@ primary_region = "iad"
   memory = "1gb"  # Ross GO 2026-08-30; ~$5.92/mo. Do not ship 256mb.
   cpus = 1
 
-# 1GB persistent volume for probe history + catalog.sqlite + pq-log.sqlite (Ross approved ~$0.15/mo).
+# 1GB persistent volume for probe history + catalog.sqlite + pq-log*.sqlite (Ross approved ~$0.15/mo).
 # Process-local only. Do not HTTP-serve /data or sqlite files.
-# pq-log.sqlite is the live TestNet log. Do not delete it.
-# Prepared MainNet file (unused until cutover): /data/pq-log-mainnet.sqlite
+# Production live log: /data/pq-log-mainnet.sqlite (epoch mainnet-v1).
+# pq-log.sqlite is the archived TestNet shard. Do not delete it.
 # Do not enable TestNet or MainNet Falcon broadcast from this file.
 # No extra machines in this PR. Falcon private material is not on this app.
 # Scheduled snapshots off.
@@ -55,6 +55,8 @@ primary_region = "iad"
 [env]
   LIVE402_HISTORY_DB = "/data/live402-history.sqlite"
   LIVE402_CATALOG_DB = "/data/catalog.sqlite"
-  LIVE402_PQ_LOG_DB = "/data/pq-log.sqlite"
+  LIVE402_PQ_LOG_DB = "/data/pq-log-mainnet.sqlite"
+  LIVE402_PQ_LOG_EPOCH = "mainnet-v1"
+  LIVE402_PQ_LOG_ORIGIN = "402signal.com/pq/log/mainnet-v1"
   LIVE402_PQ_FALCON_ADDRESS = "OBHYXCUVOLSTZVBN5JUFIYBD4X4ZFIAFZMWMU2P45VBYGWT26MV34IFFIU"
-  LIVE402_PQ_FALCON_NETWORK = "testnet"
+  LIVE402_PQ_FALCON_NETWORK = "mainnet"

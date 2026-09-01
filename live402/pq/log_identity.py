@@ -1,9 +1,8 @@
-"""Fresh production log identity vs the live TestNet shard.
+"""Fresh production log identity vs the archived TestNet shard.
 
-TestNet remains the production live path in this PR.
-MainNet epoch mainnet-v1 uses a distinct origin, vkey, and sqlite file.
+Production live path uses MainNet epoch mainnet-v1 (distinct origin, vkey, sqlite).
 Do not copy TestNet leaves into the production tree.
-Do not delete the TestNet DB.
+Do not delete the TestNet DB archive.
 
 Unknown or typo epoch/network values raise ConfigError. They never
 silently become TestNet. NETWORK=mainnet requires the full MainNet
@@ -99,9 +98,9 @@ def db_path_kind(path: str) -> str:
 def default_db_for_epoch() -> str:
     """Fallback path when LIVE402_PQ_LOG_DB is unset.
 
-    Production fly.toml sets LIVE402_PQ_LOG_DB to the TestNet file, so
-    this helper does not move the live path. A MainNet epoch without an
-    explicit DB still uses a distinct file. It never reuses pq-log.sqlite.
+    Production fly.toml sets LIVE402_PQ_LOG_DB to the MainNet file.
+    A MainNet epoch without an explicit DB still uses a distinct file.
+    It never reuses pq-log.sqlite.
     """
     if is_mainnet_epoch():
         try:
