@@ -229,7 +229,7 @@ class HomepageProductTests(unittest.TestCase):
             html,
         )
         self.assertIn(
-            "Independent signal an agent checks immediately before spending. Discovery listings are claims. 402Signal reports what the endpoint actually returned. Routing never waits for chain.",
+            "402Signal is the independent check an AI agent makes right before spending. It finds the strongest x402 route across Base, Solana, and Algorand, verifies it live, and shows the evidence behind the choice. Your agent keeps the wallet. The decision history is committed to an append-only log with Falcon PQ anchoring on Algorand (currently TestNet).",
             html,
         )
         self.assertIn("Base · Solana · Algorand", html)
