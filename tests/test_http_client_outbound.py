@@ -97,6 +97,8 @@ class OutboundHttpClientFixTests(unittest.TestCase):
             conn.close()
 
     def test_chunked_trailer_flood_raises(self):
+        # gh-150743 reads chunked trailers in HTTPResponse.read() after the
+        # last-chunk size 0, not during getresponse() header parsing.
         head = (
             b"HTTP/1.1 200 OK\r\n"
             b"Transfer-Encoding: chunked\r\n"
@@ -108,8 +110,12 @@ class OutboundHttpClientFixTests(unittest.TestCase):
         conn = http.client.HTTPConnection("127.0.0.1", port, timeout=2)
         try:
             conn.request("GET", "/")
+            try:
+                resp = conn.getresponse()
+            except http.client.HTTPException:
+                return
             with self.assertRaises(http.client.HTTPException):
-                conn.getresponse()
+                resp.read()
         finally:
             conn.close()
 
