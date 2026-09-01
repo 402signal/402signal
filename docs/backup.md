@@ -46,7 +46,7 @@ Use a copy of `pq-log.sqlite` on a workstation. Do not use production Fly secret
 1. `LIVE402_PQ_LOG_DB=/path/to/pq-log.sqlite PYTHONPATH=. python3 scripts/backup_sqlite.py --dest /tmp/402signal-testnet-drill`
 2. Confirm the snapshot `pq-log-*.sqlite` exists and `PRAGMA integrity_check` is `ok`.
 3. Restore to a throwaway path: `PYTHONPATH=. python3 scripts/restore_sqlite.py --src /tmp/402signal-testnet-drill/pq-log-….sqlite --dest /tmp/pq-log-restored.sqlite --force`
-4. Open the restored file read-only and compare `SELECT COUNT(*) FROM leaves` and the latest checkpoint against the source.
+4. Open the restored file read-only and compare tree size, Merkle root, and checkpoint notes against the source (`scripts/pq_log_restore_drill.py`).
 5. Leave `/data/pq-log.sqlite` untouched. Do not restore over the live file in this drill.
 6. Do not set `LIVE402_PQ_FALCON_BROADCAST` or `LIVE402_PQ_FALCON_MAINNET_BROADCAST`.
 

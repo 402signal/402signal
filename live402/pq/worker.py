@@ -360,6 +360,9 @@ def maybe_submit(
         try:
             recovered = _recover_authorized(size, origin, root.hex(), note)
         except AuthorizedConflict:
+            from live402.pq import ops_state
+
+            ops_state.record_recovery_conflict("authorized_mismatch")
             return None
         if recovered:
             return _maybe_broadcast(recovered, send_fn=send_fn, sender=sender, params=p)
@@ -379,6 +382,9 @@ def maybe_submit(
     try:
         recovered = _recover_authorized(size, origin, root.hex(), note)
     except AuthorizedConflict:
+        from live402.pq import ops_state
+
+        ops_state.record_recovery_conflict("authorized_mismatch")
         return None
     if recovered:
         return _maybe_broadcast(recovered, send_fn=send_fn, sender=sender, params=p)
@@ -539,7 +545,10 @@ def _tick_loop() -> None:
             continue
         try:
             tick()
-        except Exception:
+        except Exception as exc:
+            from live402.pq import ops_state
+
+            ops_state.record_error(type(exc).__name__)
             continue
 
 

@@ -3,15 +3,18 @@
 These drills keep AUTHORIZED, SUBMITTED, and CONFIRMED distinct. Public
 status is CONFIRMED only. Paid `/route` never waits for chain.
 
-Do not set either Falcon broadcast flag to perform a drill. Do not
-submit a MainNet transaction.
+Automated fixture tests live in `tests/test_pq_recovery_drills.py`.
+They do not use the MainNet network. Do not set either Falcon
+broadcast flag to perform a live drill. Do not submit a MainNet
+transaction.
 
 ## A. Isolated TestNet backup and restore
 
 See `docs/backup.md`. Snapshot `pq-log.sqlite` with
-`scripts/backup_sqlite.py`, restore to a throwaway path, compare leaf
-count and checkpoint. Leave `/data/pq-log.sqlite` in place. No Fly
-secrets.
+`scripts/backup_sqlite.py`, restore to a throwaway path, compare tree
+size, Merkle root, and checkpoint notes
+(`scripts/pq_log_restore_drill.py`). Leave `/data/pq-log.sqlite` in
+place. No Fly secrets.
 
 ## B. Authorized, not submitted
 

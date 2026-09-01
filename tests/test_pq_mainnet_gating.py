@@ -234,9 +234,23 @@ class MainNetGatingTests(unittest.TestCase):
                 expected_size=1,
                 expected_root=b"\x11" * 32,
             )
+        self.assertIn("canary gate off", str(ctx.exception).lower())
+        os.environ["LIVE402_PQ_FALCON_MAINNET_CANARY"] = "1"
+        with self.assertRaises(algo_anchor.AnchorError) as ctx2:
+            algo_anchor.submit_mainnet_canary(
+                b"STXN",
+                authorize_human_canary=True,
+                params={
+                    "genesisID": algo_anchor.MAINNET_GENESIS_ID,
+                    "genesisHash": algo_anchor.MAINNET_GENESIS_HASH,
+                },
+                expected_origin=ORIGIN_MAINNET,
+                expected_size=1,
+                expected_root=b"\x11" * 32,
+            )
         self.assertTrue(
-            "fixture" in str(ctx.exception).lower()
-            or "gates failed" in str(ctx.exception).lower()
+            "fixture" in str(ctx2.exception).lower()
+            or "gates failed" in str(ctx2.exception).lower()
         )
 
     def test_fee_cap_fail_closed(self):
@@ -258,14 +272,29 @@ class MainNetGatingTests(unittest.TestCase):
         submit = algo_anchor.submit_provider("mainnet")
         self.assertIn("algonode", confirm["host"])
         self.assertIn("algonode", submit["host"])
+        self.assertEqual(confirm["org"], "nodely")
+        self.assertEqual(submit["org"], "nodely")
         self.assertFalse(confirm["independent_of_submit"])
-        self.assertEqual(confirm["independence_status"], "not_met_algonode_same_trust_domain")
+        self.assertEqual(confirm["independence_status"], "not_met_same_org_nodely")
         self.assertFalse(netcfg.CONFIRM_INDEPENDENT_OF_SUBMIT)
+        self.assertFalse(
+            netcfg.confirmation_independent(submit["host"], confirm["host"])
+        )
+        self.assertTrue(netcfg.confirm_host_allowlisted("mainnet", netcfg.NODELY_MAINNET_CONFIRM_HOST))
+        self.assertEqual(netcfg.provider_org(netcfg.NODELY_MAINNET_CONFIRM_HOST), "nodely")
+        self.assertFalse(
+            netcfg.confirmation_independent(submit["host"], netcfg.NODELY_MAINNET_CONFIRM_HOST)
+        )
+        self.assertFalse(netcfg.confirm_host_allowlisted("mainnet", submit["host"]))
         snap = monitor.snapshot()
         self.assertFalse(snap["confirm_provider"]["independent_of_submit"])
+        self.assertEqual(snap["confirm_provider"]["org"], "nodely")
+        self.assertEqual(snap["submit_provider"]["org"], "nodely")
         v2 = trust.trust_root_v2()
         self.assertFalse(v2["confirmation_policy"]["independent_provider"])
         self.assertTrue(v2["confirmation_policy"]["same_trust_domain_not_sufficient"])
+        self.assertTrue(v2["confirmation_policy"]["algonode_and_nodely_same_org"])
+        self.assertEqual(v2["confirmation_policy"]["require"], "fetch_and_decode_actual_txn")
 
     def test_validate_signed_txn_expected_network(self):
         from live402 import algo_tx
@@ -306,6 +335,157 @@ class MainNetGatingTests(unittest.TestCase):
                 expected_address=addr,
                 expected_network="mainnett",
             )
+
+    def _mainnet_signed(self, origin=ORIGIN_MAINNET, size=1, root=None):
+        from live402 import algo_tx
+        import base64
+
+        addr = payment.DEFAULT_PAYTO_ALGORAND
+        root = root or (b"\x11" * 32)
+        note = algo_anchor.encode_note(origin, size, root)
+        gh = base64.b64decode(algo_anchor.MAINNET_GENESIS_HASH)
+        txn = algo_tx.pay_txn(
+            addr, addr, 0, 3000, 1, 1001, algo_anchor.MAINNET_GENESIS_ID, gh, note=note
+        )
+        blob = algo_tx.msgpack_encode(
+            {
+                "pqsig": {
+                    "pk": b"pk" + bytes(range(14)),
+                    "sch": "f1",
+                    "sig": b"sig" + bytes(range(29)),
+                    "slt": 0,
+                },
+                "txn": txn,
+            }
+        )
+        return blob, root, addr
+
+    def test_kill_switch_unset_stops_submit_routing_continues(self):
+        self._arm_mainnet_identity()
+        os.environ.pop("LIVE402_PQ_FALCON_MAINNET_BROADCAST", None)
+        os.environ.pop("LIVE402_PQ_FALCON_MAINNET_CANARY", None)
+        blob, root, addr = self._mainnet_signed()
+        params = {
+            "genesisID": algo_anchor.MAINNET_GENESIS_ID,
+            "genesisHash": algo_anchor.MAINNET_GENESIS_HASH,
+        }
+        sent = []
+        self.assertFalse(algo_anchor.mainnet_submit_allowed(params=params, sender=addr))
+        self.assertIsNone(
+            algo_anchor.send_if_allowed(
+                blob,
+                send_fn=lambda b: sent.append(b) or _TXID,
+                params=params,
+            )
+        )
+        with self.assertRaises(algo_anchor.AnchorError) as ctx:
+            algo_anchor.submit_mainnet_canary(
+                blob,
+                authorize_human_canary=True,
+                sender=addr,
+                params=params,
+                expected_origin=ORIGIN_MAINNET,
+                expected_size=1,
+                expected_root=root,
+                send_fn=lambda b: sent.append(b) or _TXID,
+            )
+        self.assertIn("canary gate off", str(ctx.exception).lower())
+        self.assertEqual(sent, [])
+        body = payment.payment_required("https://402signal.com/route")
+        self.assertTrue(body.get("accepts"))
+        self.assertIn("x402Version", body)
+
+    def test_canary_send_fn_requires_both_flags(self):
+        self._arm_mainnet_identity()
+        blob, root, addr = self._mainnet_signed()
+        params = {
+            "genesisID": algo_anchor.MAINNET_GENESIS_ID,
+            "genesisHash": algo_anchor.MAINNET_GENESIS_HASH,
+        }
+        store.append(b"canary-leaf")
+        store.save_authorized_checkpoint(
+            tree_size=1,
+            origin=ORIGIN_MAINNET,
+            root=root,
+            checkpoint="",
+            request_id="canary-1",
+            signed=blob,
+            at=1,
+        )
+        sent = []
+
+        def send_fn(raw):
+            sent.append(bytes(raw))
+            return _TXID
+
+        os.environ["LIVE402_PQ_FALCON_MAINNET_BROADCAST"] = "1"
+        os.environ.pop("LIVE402_PQ_FALCON_MAINNET_CANARY", None)
+        with self.assertRaises(algo_anchor.AnchorError):
+            algo_anchor.submit_mainnet_canary(
+                blob,
+                authorize_human_canary=True,
+                sender=addr,
+                params=params,
+                expected_origin=ORIGIN_MAINNET,
+                expected_size=1,
+                expected_root=root,
+                send_fn=send_fn,
+            )
+        self.assertEqual(sent, [])
+        os.environ.pop("LIVE402_PQ_FALCON_MAINNET_BROADCAST", None)
+        os.environ["LIVE402_PQ_FALCON_MAINNET_CANARY"] = "1"
+        with self.assertRaises(algo_anchor.AnchorError):
+            algo_anchor.submit_mainnet_canary(
+                blob,
+                authorize_human_canary=True,
+                sender=addr,
+                params=params,
+                expected_origin=ORIGIN_MAINNET,
+                expected_size=1,
+                expected_root=root,
+                send_fn=send_fn,
+            )
+        self.assertEqual(sent, [])
+        os.environ["LIVE402_PQ_FALCON_MAINNET_BROADCAST"] = "1"
+        out = algo_anchor.submit_mainnet_canary(
+            blob,
+            authorize_human_canary=True,
+            sender=addr,
+            params=params,
+            expected_origin=ORIGIN_MAINNET,
+            expected_size=1,
+            expected_root=root,
+            send_fn=send_fn,
+        )
+        self.assertEqual(out, _TXID)
+        self.assertEqual(sent, [blob])
+        self.assertFalse(algo_anchor.automatic_mainnet_enabled())
+        self.assertEqual(worker.last_confirmed()["size"], 0)
+        src = Path(worker.__file__).read_text(encoding="utf-8")
+        self.assertNotIn("submit_mainnet_canary", src)
+        boot = Path(__file__).resolve().parents[1] / "live402" / "server.py"
+        self.assertNotIn("submit_mainnet_canary", boot.read_text(encoding="utf-8"))
+
+    def test_unexpected_non_pq1_is_incident(self):
+        from live402.pq import ops_state
+
+        ops_state.reset()
+        bad = {
+            "pq_auth": b"not-enough",
+            "sender": payment.DEFAULT_PAYTO_ALGORAND,
+            "receiver": "SOMEOTHERADDRESSAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "amount": 1,
+            "fee": 3000,
+            "tx_type": "pay",
+            "note": b"",
+        }
+        out = algo_anchor.classify_falcon_account_txn(
+            bad, expected_address=payment.DEFAULT_PAYTO_ALGORAND
+        )
+        self.assertTrue(out["incident"])
+        self.assertEqual(out["alert"], "unexpected_non_pq1_txn")
+        self.assertEqual(out["severity"], "incident")
+        self.assertTrue(ops_state.snapshot()["last_non_pq1_incident"])
 
 
 class FreshLogTests(unittest.TestCase):

@@ -41,18 +41,18 @@ def _pq_log_sqlite_ok() -> bool:
 
 
 def _pq_log_ok() -> bool:
-    """Sqlite reachable and not LOCAL LOG INCONSISTENT (size < last_confirmed)."""
+    """Sqlite reachable and not LOCAL LOG INCONSISTENT (size < last_confirmed).
+
+    Uses monitor.ready_flags(), the boolean subset of the operator snapshot.
+    GET /ready never returns the snapshot itself.
+    """
     if not _pq_log_sqlite_ok():
         return False
     try:
-        from live402.pq import store
-        from live402.pq.transparency import log_integrity_error
+        from live402.pq import monitor
 
-        current = int(store.size() or 0)
-        confirmed = store.last_confirmed_checkpoint()
-        if log_integrity_error(current, confirmed):
-            return False
-        return True
+        flags = monitor.ready_flags()
+        return bool(flags.get("pq_log_sqlite")) and bool(flags.get("pq_log_integrity"))
     except Exception:
         return False
 

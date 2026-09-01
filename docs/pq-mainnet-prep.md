@@ -18,7 +18,7 @@ Paid `/route` never waits for chain. Public status is CONFIRMED only.
 | One broadcast env | TestNet `LIVE402_PQ_FALCON_BROADCAST` cannot send MainNet. MainNet requires `LIVE402_PQ_FALCON_MAINNET_BROADCAST=1` and every other gate. |
 | One log identity | TestNet shard archived in place. Fresh MainNet identity (origin, epoch, vkey, sqlite) prepared and empty. |
 | Fee treated minFee/suggested as flat | Official Falcon fee: max(fee_per_byte * signed size, 3*base min). Uncongested floor 3000. Cap 30000. |
-| Confirm was TestNet-shaped | Submit provider and confirm provider are separable. Confirm is fetch+decode of the actual txn. |
+| Confirm was TestNet-shaped | Submit and confirm hosts have separate hardcoded allowlists. Confirm is fetch+decode+verify. AlgoNode and Nodely are the same org. |
 | Signer was TestNet-only | Spec for `402signal-pq-signer-mainnet`. Signer still never broadcasts. |
 
 Residual: Ed25519 log signing may still be in-process on the router.
@@ -37,26 +37,26 @@ account is an incident.
 7. Fee within `MAX_FEE=30000`
 8. Allowlisted MainNet submit host (`mainnet-api.algonode.cloud`)
 9. `LIVE402_PQ_FALCON_MAINNET_BROADCAST=1`
-10. Not fixture/CI
+10. Human one-shot also requires `LIVE402_PQ_FALCON_MAINNET_CANARY=1`
+11. Not fixture/CI for a live POST (tests may inject `send_fn`)
 
 Any mismatch fails closed. Worker `maybe_submit` / `tick` never MainNet
 send even if the env gates are later set.
 
-PR40 is readiness, validation, and fail-closed infrastructure. It is
-**not** a canary executable. Do not POST a MainNet txn from this PR.
 `submit_mainnet_canary` stays unwired (not called from worker, tick, or
-boot). A later canary PR, after this merge plus keys, MainNet signer,
-independent confirm, recovery/backup drills, monitoring, pentest, and
-402security GO, may authorize exactly one human MainNet POST.
+boot). Tests exercise authorize, validate, and a mocked would-POST hook.
+A live MainNet POST still needs both flags, a human `authorize_human_canary`,
+and every other gate. Automatic stays off.
 
-Kill switch: unset the MainNet flag, or do not deploy. Do not destroy
-the Falcon key.
+Kill switch: unset `LIVE402_PQ_FALCON_MAINNET_BROADCAST`. Routing and the
+log still work. Do not destroy the Falcon key.
 
 ## Env vars (new or newly distinct)
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `LIVE402_PQ_FALCON_MAINNET_BROADCAST` | unset | `1` is required for a later human MainNet canary. Default off. |
+| `LIVE402_PQ_FALCON_MAINNET_BROADCAST` | unset | `1` is required for a human MainNet canary. Default off. Kill switch when unset. |
+| `LIVE402_PQ_FALCON_MAINNET_CANARY` | unset | One-shot gate. Default off. Worker never reads it. |
 | `LIVE402_PQ_FALCON_MAINNET_ADDRESS` | unset | Public MainNet Falcon f1 address after Ross ceremony. |
 | `LIVE402_PQ_SIGNER_MAINNET_TOKEN` | unset | HMAC token name only. Never a committed value. |
 | `LIVE402_PQ_SIGNER_MAINNET_HOST` | `402signal-pq-signer-mainnet.internal` | 6PN signer host |
@@ -89,13 +89,24 @@ Unchanged live path: `LIVE402_PQ_LOG_DB=/data/pq-log.sqlite`,
 - Fee: max(fee_per_byte * Falcon signed size, 3 * protocol base min).
   Uncongested floor 3000, not 1000. Cap 30000. Caller cannot select
   the fee. 402security: please review this calculation.
-- Submit and confirm endpoints are separable in config. Default MainNet
-  URLs are both AlgoNode (same trust domain). That is **not** independent
-  confirmation. Before MainNet GO, confirmation must use a genuinely
-  independent provider or a 402Signal-operated Algorand node. The fetched
-  txn is still decoded and semantically verified locally.
-- Recovery drills A-F: `docs/pq-recovery.md`
-- Monitoring fields: `live402/pq/monitor.py` (`snapshot()`, `ALERTS`)
+- Submit and confirm hosts are separate hardcoded allowlists.
+  Default MainNet submit is `mainnet-api.algonode.cloud`. Default
+  confirm is `mainnet-idx.algonode.cloud`. A second confirm host
+  `mainnet-idx.4160.nodely.dev` is allowlisted. AlgoNode and Nodely
+  are the same organization (legacy brand plus current hostname).
+  `confirmation_policy.independent_provider` stays false. AlgoExplorer
+  public indexer hosts return HTML landing pages, not JSON. Algorand
+  Foundation does not publish a no-key public indexer. Before MainNet
+  GO, confirmation must use a 402Signal-operated node or a public API
+  from a different organization. Fetch+decode+semantic verify is still
+  required. MainNet never treats submit-host pending as confirmation.
+- Recovery drills A-F run as fixture tests (`tests/test_pq_recovery_drills.py`).
+  Backup identity drill: `scripts/pq_log_restore_drill.py`.
+- Monitoring: `live402/pq/monitor.py` `snapshot()` is the operator
+  structure (epoch, network, tree, last authorized/submitted/confirmed,
+  gaps, ages, signer, providers, fee/cap, last error, DB errors,
+  recovery conflicts). GET `/ready` uses a boolean subset only.
+  Unexpected non-PQ1 Falcon account activity is an incident.
 
 ## Runtime (PRECHECK B / P1)
 
@@ -109,10 +120,10 @@ do not close this P1. See `docs/docker.md`.
 
 - `automatic_mainnet_enabled()` returns False
 - `send_if_allowed` returns None when NETWORK=mainnet
-- `submit_mainnet_canary` is not called from worker/tick/boot. This
-  PR is not a canary executable.
-- `LIVE402_FIXTURE=1` never dials
-- fly.toml does not enable either broadcast flag
+- `submit_mainnet_canary` is not called from worker/tick/boot
+- Both MainNet flags default unset. Unset broadcast is the kill switch
+- `LIVE402_FIXTURE=1` never dials live algod
+- fly.toml does not enable either MainNet flag
 - CI: `LIVE402_FIXTURE=1 python -m unittest discover -s tests`
 
 See `docs/signer-mainnet-spec.md`, `docs/pq-key-ceremony.md`,

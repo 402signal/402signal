@@ -4,9 +4,19 @@ Both testnet and mainnet exist in code. This PR's production live path
 stays TestNet. MainNet broadcast defaults off. Automatic MainNet submit
 is a later GO and is not enabled here.
 
-Submit provider (algod POST) and confirm provider (indexer/algod GET +
-decode) are separable. Confirmation is never HTTP 200 or a returned txid
-alone.
+Submit provider (algod POST) and confirm provider (indexer GET +
+decode + semantic verify) are separate allowlists. Confirmation is
+never HTTP 200 or a returned txid alone.
+
+Independence is an organization check, not a hostname check.
+AlgoNode (*.algonode.cloud) and Nodely (*.nodely.dev / *.nodely.io)
+are the same operator. Their public indexers report the same Nodely
+build. That pair is not independent confirmation.
+AlgoExplorer public indexer hosts return HTML landing pages, not
+JSON. Algorand Foundation does not publish a no-key public indexer.
+Before MainNet GO, confirmation must use a 402Signal-operated node
+or a different-organization public API. Fetch+decode+verify stays
+required even after that.
 """
 
 from __future__ import annotations
@@ -34,12 +44,34 @@ NETWORK_ENV = "LIVE402_PQ_FALCON_NETWORK"
 BROADCAST_ENV = "LIVE402_PQ_FALCON_BROADCAST"
 ADDRESS_ENV = "LIVE402_PQ_FALCON_ADDRESS"
 MAINNET_BROADCAST_ENV = "LIVE402_PQ_FALCON_MAINNET_BROADCAST"
+MAINNET_CANARY_ENV = "LIVE402_PQ_FALCON_MAINNET_CANARY"
 MAINNET_ADDRESS_ENV = "LIVE402_PQ_FALCON_MAINNET_ADDRESS"
 MAINNET_SIGNER_TOKEN_ENV = "LIVE402_PQ_SIGNER_MAINNET_TOKEN"
 MAINNET_SIGNER_HOST_ENV = "LIVE402_PQ_SIGNER_MAINNET_HOST"
 MAINNET_SIGNER_PORT_ENV = "LIVE402_PQ_SIGNER_MAINNET_PORT"
 MAINNET_SIGNER_DEFAULT_HOST = "402signal-pq-signer-mainnet.internal"
 MAINNET_SIGNER_DEFAULT_PORT = 9091
+
+# Hardcoded organization map. Unknown host => not independent.
+ORG_NODELY = "nodely"
+ORG_SIGNAL = "402signal"
+PROVIDER_ORGS = {
+    "testnet-api.algonode.cloud": ORG_NODELY,
+    "testnet-idx.algonode.cloud": ORG_NODELY,
+    "mainnet-api.algonode.cloud": ORG_NODELY,
+    "mainnet-idx.algonode.cloud": ORG_NODELY,
+    "mainnet-api.4160.nodely.dev": ORG_NODELY,
+    "mainnet-idx.4160.nodely.dev": ORG_NODELY,
+    "mainnet-api.4160.nodely.io": ORG_NODELY,
+    "mainnet-idx.4160.nodely.io": ORG_NODELY,
+    "testnet-api.4160.nodely.dev": ORG_NODELY,
+    "testnet-idx.4160.nodely.dev": ORG_NODELY,
+}
+
+# Second MainNet confirm hostname (Nodely current public indexer).
+# Same organization as AlgoNode. Allowlisted for fetch+decode only.
+NODELY_MAINNET_CONFIRM_HOST = "mainnet-idx.4160.nodely.dev"
+NODELY_MAINNET_CONFIRM_TXN_URL = "https://mainnet-idx.4160.nodely.dev/v2/transactions/"
 
 
 @dataclass(frozen=True)
@@ -111,20 +143,29 @@ SUBMIT_HOST_ALLOWLIST = {
     TESTNET_NAME: frozenset({TESTNET.submit_host}),
     MAINNET_NAME: frozenset({MAINNET.submit_host}),
 }
+# Confirm allowlist is fetch+decode hosts. MainNet pending (submit algod)
+# is not treated as independent confirmation.
 CONFIRM_HOST_ALLOWLIST = {
     TESTNET_NAME: frozenset({TESTNET.confirm_host, TESTNET.submit_host}),
-    MAINNET_NAME: frozenset({MAINNET.confirm_host, MAINNET.submit_host}),
+    MAINNET_NAME: frozenset(
+        {MAINNET.confirm_host, NODELY_MAINNET_CONFIRM_HOST}
+    ),
+}
+PENDING_HOST_ALLOWLIST = {
+    TESTNET_NAME: frozenset({TESTNET.submit_host}),
+    MAINNET_NAME: frozenset({MAINNET.submit_host}),
 }
 
-# Default URLs above are both AlgoNode. That is a separable config, not
-# independent confirmation. Same trust domain is not sufficient.
+# Default MainNet submit and confirm are both Nodely (AlgoNode brand).
+# A second allowlisted confirm hostname exists. Same org. Not independent.
 CONFIRM_INDEPENDENT_OF_SUBMIT = False
-CONFIRM_INDEPENDENCE_STATUS = "not_met_algonode_same_trust_domain"
+CONFIRM_INDEPENDENCE_STATUS = "not_met_same_org_nodely"
 CONFIRM_INDEPENDENCE_REQUIREMENT = (
-    "Before MainNet GO, confirmation must use a genuinely independent "
-    "provider or a 402Signal-operated Algorand node. Fetched txn is still "
-    "decoded and semantically verified locally. AlgoNode submit + AlgoNode "
-    "confirm does not satisfy independent confirmation."
+    "Before MainNet GO, confirmation must use a 402Signal-operated "
+    "Algorand node or a public API from a different organization than "
+    "the submit host. AlgoNode and Nodely are the same operator. "
+    "AlgoExplorer public indexer hosts return HTML, not JSON. "
+    "Fetched txn is still decoded and semantically verified locally."
 )
 
 
@@ -156,3 +197,50 @@ def submit_host_allowlisted(network: str, host: str) -> bool:
 def confirm_host_allowlisted(network: str, host: str) -> bool:
     allowed = CONFIRM_HOST_ALLOWLIST.get((network or "").strip().lower(), frozenset())
     return (host or "").strip().lower() in allowed
+
+
+def pending_host_allowlisted(network: str, host: str) -> bool:
+    allowed = PENDING_HOST_ALLOWLIST.get((network or "").strip().lower(), frozenset())
+    return (host or "").strip().lower() in allowed
+
+
+def provider_org(host: str) -> str:
+    """Hardcoded organization for an allowlisted host. Empty if unknown."""
+    return PROVIDER_ORGS.get((host or "").strip().lower(), "")
+
+
+def confirmation_independent(submit_host: str, confirm_host: str) -> bool:
+    """True only when both hosts map to known, different organizations."""
+    submit_org = provider_org(submit_host)
+    confirm_org = provider_org(confirm_host)
+    if not submit_org or not confirm_org:
+        return False
+    return submit_org != confirm_org
+
+
+def mainnet_confirmation_policy(cfg: NetworkConfig | None = None) -> dict:
+    """Descriptor fields for trust v2 and monitor. No secrets."""
+    net = cfg or MAINNET
+    submit_org = provider_org(net.submit_host)
+    confirm_org = provider_org(net.confirm_host)
+    independent = confirmation_independent(net.submit_host, net.confirm_host)
+    return {
+        "require": "fetch_and_decode_actual_txn",
+        "http_200_or_txid_not_sufficient": True,
+        "public_status_from": "confirmed_only",
+        "independent_provider": independent,
+        "same_trust_domain_not_sufficient": True,
+        "submit_host": net.submit_host,
+        "confirm_host": net.confirm_host,
+        "submit_org": submit_org,
+        "confirm_org": confirm_org,
+        "second_confirm_host_allowlisted": NODELY_MAINNET_CONFIRM_HOST,
+        "second_confirm_org": provider_org(NODELY_MAINNET_CONFIRM_HOST),
+        "algonode_and_nodely_same_org": True,
+        "algoexplorer_public_indexer": "retired_html_landing",
+        "default_submit_and_confirm": "nodely_same_org",
+        "before_mainnet_go": (
+            "402Signal-operated node or different-org provider; "
+            "fetch+decode+verify still required"
+        ),
+    }

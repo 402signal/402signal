@@ -156,7 +156,8 @@ Base CDP calls need `CDP_API_KEY_ID` + `CDP_API_KEY_SECRET` (or `CDP_ACCESS_TOKE
 | `LIVE402_PQ_FALCON_ADDRESS` | fly.toml (public TestNet address) | Public Algorand address for Falcon anchors. Never a private key. |
 | `LIVE402_PQ_FALCON_NETWORK` | `testnet` in fly.toml | Live path is `testnet`. `mainnet` never uses the TestNet broadcast flag. |
 | `LIVE402_PQ_FALCON_BROADCAST` | unset | 402signal (router) env. `1` allows POST of a signer-approved SignedTxn to pinned TestNet algod. Default unset: never POST. 402security must GO before anyone sets it to `1`. Signer never reads BROADCAST and never POSTs. Falcon SK must never live on 402signal. This flag never sends MainNet. |
-| `LIVE402_PQ_FALCON_MAINNET_BROADCAST` | unset | Distinct MainNet flag. Default off. Automatic MainNet stays off. A later human canary requires this `=1` plus every other MainNet gate. |
+| `LIVE402_PQ_FALCON_MAINNET_BROADCAST` | unset | Distinct MainNet flag. Default off. Automatic MainNet stays off. Unset is the kill switch: MainNet submit stops, routing continues. |
+| `LIVE402_PQ_FALCON_MAINNET_CANARY` | unset | One-shot human canary gate. Default off. Worker, tick, and boot never read this. Live POST still needs this `=1` and `LIVE402_PQ_FALCON_MAINNET_BROADCAST=1`. |
 | `LIVE402_PQ_FALCON_MAINNET_ADDRESS` | unset | Public MainNet Falcon f1 address after the Ross ceremony. Empty until then. |
 | `LIVE402_PQ_SIGNER_TOKEN` | unset | Shared HMAC for the TestNet 6PN signer client. Unset/empty: never dial, never sign. |
 | `LIVE402_PQ_SIGNER_MAINNET_TOKEN` | unset | HMAC token name for `402signal-pq-signer-mainnet`. Named, never valued in git. |
