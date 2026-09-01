@@ -59,8 +59,9 @@ SIGNER_REVIEWED_HEAD = "6d2480ce5a53c9b7dd574a01c257b4faa2f8dac9"
 SIGNER_PROTOCOL = "pq-anchor/2"
 REQUEST_VERSION = 2
 # Narrow HMAC-bound policy. Flattened into the MAC. Do not add
-# arbitrary txn fields. size_version is required and must be 1.
-HMAC_SIZE_VERSION = 1
+# arbitrary txn fields. size_version is required and must be the
+# JSON string "1" on the wire (Go policy.Snapshot.SizeVersion is string).
+HMAC_SIZE_VERSION = "1"
 HMAC_SIZE_RULE = "deterministic_falcon_envelope_estimate"
 POLICY_KEYS = (
     "canonical_fee",
@@ -173,9 +174,12 @@ def narrow_policy(policy: dict | None) -> dict:
         out["canonical_fee"] = int(out["canonical_fee"])
         out["snapshot_at"] = int(out["snapshot_at"])
         out["size_rule"] = str(out["size_rule"])
-        out["size_version"] = int(out["size_version"])
     except (TypeError, ValueError) as exc:
         raise SignerClientError("policy field missing") from exc
+    # Reject int 1: Go json.Unmarshal into string SizeVersion fails on number.
+    # Do not coerce int→str. Emit/accept only JSON string "1".
+    if not isinstance(out["size_version"], str) or out["size_version"] != HMAC_SIZE_VERSION:
+        raise SignerClientError("policy field missing")
     if out["last_round"] < 1 or out["fv"] < 1 or out["lv"] < 1:
         raise SignerClientError("policy field missing")
     if out["min_fee"] < 1 or out["canonical_fee"] < 1:
@@ -183,8 +187,6 @@ def narrow_policy(policy: dict | None) -> dict:
     if out["fee_per_byte"] < 0 or out["snapshot_at"] < 1:
         raise SignerClientError("policy field missing")
     if out["size_rule"] != HMAC_SIZE_RULE:
-        raise SignerClientError("policy field missing")
-    if out["size_version"] != HMAC_SIZE_VERSION:
         raise SignerClientError("policy field missing")
     return {key: out[key] for key in POLICY_KEYS}
 
@@ -200,7 +202,7 @@ def flatten_policy_fields(policy: dict) -> dict:
         "lv": str(int(bound["lv"])),
         "min_fee": str(int(bound["min_fee"])),
         "size_rule": str(bound["size_rule"]),
-        "size_version": str(int(bound["size_version"])),
+        "size_version": str(bound["size_version"]),
         "snapshot_at": str(int(bound["snapshot_at"])),
     }
 
