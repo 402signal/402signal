@@ -278,8 +278,14 @@ class HomepageProductTests(unittest.TestCase):
         self.assertIn("Return selected route and selected_payment, or a typed miss", html)
 
         css = Path("live402/static/styles.css").read_text(encoding="utf-8")
-        self.assertIn("overflow-wrap: anywhere", css)
+        self.assertIn("overflow-wrap: break-word", css)
         self.assertRegex(css, r"\.flow-box\s*\{[^}]*height:\s*auto")
+        self.assertIn(".signal-row.flow-four", css)
+        # Mobile stack must beat desktop .signal-row.flow-four (2-class) rule.
+        self.assertRegex(
+            css,
+            r"@media \(max-width: 720px\)[\s\S]*?\.signal-row\.flow-four\s*\{[^}]*grid-template-columns:\s*1fr",
+        )
         self.assertIn("TRANSPARENCY", html)
         self.assertIn("Commit route evidence to the append-only log", html)
         self.assertIn("Signed checkpoints are periodically anchored to Algorand TestNet.", html)
