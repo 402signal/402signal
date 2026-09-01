@@ -65,6 +65,7 @@ def _live_base_only(url, catalog_item=None, pay_to=OBS_BASE_PAYTO, amount="20000
                 "asset": payment.USDC_BASE,
                 "amount": amount,
                 "payTo": pay_to,
+                "maxTimeoutSeconds": 60,
                 "extra": {
                     "facilitator": CDP,
                     "displayAmount": "$0.02",

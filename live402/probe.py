@@ -616,19 +616,26 @@ def catalog_known_item(url: str, catalog_item: dict | None = None) -> bool:
     raw = (url or "").strip()
     if not raw:
         return False
+    if fixtures.fixture_mode():
+        try:
+            return bool(fixtures.lookup_url(raw))
+        except Exception:
+            return False
     try:
-        if fixtures.lookup_url(raw):
-            return True
+        from live402 import catalog as catalog_mod
+
+        return bool(catalog_mod.claimed_item_for_url(raw))
     except Exception:
-        pass
-    return False
+        return False
 
 
 def direct_url_allowed(url: str, catalog_item: dict | None = None) -> bool:
-    """Direct URL probe gate. Prefer 443 and catalog-known endpoints.
+    """Direct URL probe gate.
 
-    Unknown public URLs stay supported only on https:443 with existing SSRF
-    rules: no credentials, no non-HTTPS, no unusual ports.
+    Policy: HTTPS only, no URL credentials, public DNS + IP pin (existing SSRF).
+    Unknown direct URLs: destination port 443 only.
+    Catalog-known listings: allow the HTTPS port already present on that listing
+    so a known non-443 catalog endpoint is not broken. Do not invent ports.
     """
     raw = (url or "").strip()
     if not raw:
@@ -1105,10 +1112,12 @@ def _decode_envelope_blob(raw: str) -> dict | None:
         candidates.insert(0, decoded.decode("utf-8"))
     except Exception:
         pass
+    from live402.http_body import reject_json_constant
+
     for item in candidates:
         try:
-            payload = json.loads(item)
-        except (json.JSONDecodeError, UnicodeDecodeError, TypeError):
+            payload = json.loads(item, parse_constant=reject_json_constant)
+        except (json.JSONDecodeError, UnicodeDecodeError, TypeError, ValueError):
             continue
         if isinstance(payload, dict):
             return payload
@@ -1158,10 +1167,12 @@ def parse_envelope(status: int | None, headers: dict[str, str], body: bytes) -> 
     raw = body or b""
     if raw:
         try:
-            parsed = json.loads(raw.decode("utf-8"))
+            from live402.http_body import reject_json_constant
+
+            parsed = json.loads(raw.decode("utf-8"), parse_constant=reject_json_constant)
             if isinstance(parsed, dict):
                 body_env = parsed
-        except (json.JSONDecodeError, UnicodeDecodeError, TypeError):
+        except (json.JSONDecodeError, UnicodeDecodeError, TypeError, ValueError):
             body_env = None
 
     if status != 402:
@@ -1245,7 +1256,7 @@ def _catalog_declares_post(item: dict | None) -> bool:
 
 
 def _post_empty_justified(get_snap: dict | None, catalog_item: dict | None = None) -> bool:
-    """POST {} only with strong method justification. Never after arbitrary 200/400/404."""
+    """POST {} only if GET 405/501 AND catalog declares POST AND no required body."""
     if not get_snap or get_snap.get("live"):
         return False
     miss = get_snap.get("miss_reason")
@@ -1254,13 +1265,13 @@ def _post_empty_justified(get_snap: dict | None, catalog_item: dict | None = Non
     status = get_snap.get("status")
     if get_snap.get("has_402_challenge") or status == 402:
         return False
-    if status in {405, 501}:
-        return True
+    if status not in {405, 501}:
+        return False
     if _catalog_requires_body(catalog_item):
         return False
-    if _catalog_declares_post(catalog_item):
-        return True
-    return False
+    if not _catalog_declares_post(catalog_item):
+        return False
+    return True
 
 
 def _catalog_payto(item: dict | None) -> str | None:

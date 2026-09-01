@@ -2,24 +2,23 @@
 
 from __future__ import annotations
 
-import json
 import os
 import socket
 import threading
+import time
 import unittest
 from email.message import Message
-from http.server import ThreadingHTTPServer
 
 os.environ.setdefault("LIVE402_FIXTURE", "1")
 os.environ.pop("LOCAL_FREE", None)
 
-from live402 import http_body, server
+from live402 import clock, http_body, server
 from live402.http_body import BodyReadError
-from live402.server import Handler, MAX_BODY
+from live402.server import BoundedThreadingHTTPServer, Handler, MAX_BODY
 
 
 def _serve():
-    httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    httpd = BoundedThreadingHTTPServer(("127.0.0.1", 0), Handler)
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
     thread.start()
     _host, port = httpd.server_address
@@ -151,6 +150,59 @@ class ContentLengthUnitTests(unittest.TestCase):
         with self.assertRaises(BodyReadError):
             http_body.loads_json_object(b'{"max_price_usd": Infinity}')
 
+    def test_blank_transfer_encoding_rejected(self):
+        with self.assertRaises(BodyReadError) as ctx:
+            http_body.declared_content_length(
+                _headers_obj(("Transfer-Encoding", ""), ("Content-Length", "2"))
+            )
+        self.assertEqual(ctx.exception.status, 400)
+
+    def test_content_length_digit_bomb(self):
+        with self.assertRaises(BodyReadError) as ctx:
+            http_body.declared_content_length(_headers_obj(("Content-Length", "1" * 40)))
+        self.assertIn(ctx.exception.status, (400, 413))
+
+    def test_json_must_be_object(self):
+        for raw in (b"null", b"[]", b'"x"', b"1", b"true", b"false"):
+            with self.assertRaises(BodyReadError, msg=raw):
+                http_body.loads_json_object(raw)
+
+    def test_empty_bytes_stay_empty_object(self):
+        self.assertEqual(http_body.loads_json_object(b""), {})
+
+    def test_body_deadline_fake_clock(self):
+        class FakeClock:
+            def __init__(self):
+                self.t = 0.0
+
+            def monotonic(self):
+                return self.t
+
+        class Trickle:
+            def __init__(self, data, fake, step):
+                self.data = data
+                self.fake = fake
+                self.step = step
+                self.i = 0
+
+            def read(self, n):
+                if self.i >= len(self.data):
+                    return b""
+                self.fake.t += self.step
+                chunk = self.data[self.i : self.i + 1]
+                self.i += 1
+                return chunk
+
+        fake = FakeClock()
+        orig = clock.monotonic
+        clock.monotonic = fake.monotonic
+        try:
+            with self.assertRaises(BodyReadError) as ctx:
+                http_body.read_exactly(Trickle(b'{"need":"x"}', fake, 1.0), 12, deadline=3.0)
+            self.assertEqual(ctx.exception.status, 408)
+        finally:
+            clock.monotonic = orig
+
 
 class FramingServerTests(unittest.TestCase):
     @classmethod
@@ -207,6 +259,16 @@ class FramingServerTests(unittest.TestCase):
     def test_te_plus_cl(self):
         raw = self._post("Transfer-Encoding: chunked\r\nContent-Length: 2\r\n", b"{}")
         self.assertEqual(_status(raw), 400)
+
+    def test_blank_te_rejected_on_wire(self):
+        raw = self._post("Transfer-Encoding: \r\nContent-Length: 2\r\n", b"{}")
+        self.assertEqual(_status(raw), 400)
+        self.assertIn(b"Connection: close", raw)
+
+    def test_json_null_rejected_on_wire(self):
+        raw = self._post("Content-Length: 4\r\n", b"null")
+        self.assertEqual(_status(raw), 400)
+        self.assertIn(b"Connection: close", raw)
 
     def test_zero_length_body(self):
         raw = self._post("Content-Length: 0\r\n", b"")
@@ -323,6 +385,65 @@ class FramingServerTests(unittest.TestCase):
                 os.environ["LIVE402_MAX_HANDLERS"] = prev
             server._HANDLER_SEMA = None
             server._HANDLER_SEMA_CAP = 0
+
+
+class WorkerThreadCapTests(unittest.TestCase):
+    def test_worker_threads_cannot_exceed_capacity(self):
+        prev = os.environ.get("LIVE402_MAX_HANDLERS")
+        os.environ["LIVE402_MAX_HANDLERS"] = "2"
+        server._HANDLER_SEMA = None
+        server._HANDLER_SEMA_CAP = 0
+        server.reset_request_thread_stats()
+        started = threading.Event()
+        release = threading.Event()
+
+        class SlowHandler(Handler):
+            def do_GET(self) -> None:
+                started.set()
+                release.wait(2.0)
+                return self._json(200, {"ok": True})
+
+        httpd = BoundedThreadingHTTPServer(("127.0.0.1", 0), SlowHandler)
+        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        thread.start()
+        _host, port = httpd.server_address
+        try:
+            socks = []
+            for _ in range(6):
+                sock = socket.create_connection(("127.0.0.1", port), timeout=2)
+                sock.sendall(b"GET /health HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+                socks.append(sock)
+            started.wait(1.0)
+            time.sleep(0.15)
+            active, peak = server.request_thread_stats()
+            self.assertLessEqual(peak, 2, "peak=%s active=%s" % (peak, active))
+            busy = 0
+            for sock in socks:
+                sock.settimeout(0.4)
+                try:
+                    data = sock.recv(256)
+                except socket.timeout:
+                    data = b""
+                if b"503" in data:
+                    busy += 1
+            self.assertGreaterEqual(busy, 1)
+            release.set()
+            for sock in socks:
+                try:
+                    sock.close()
+                except OSError:
+                    pass
+        finally:
+            release.set()
+            httpd.shutdown()
+            httpd.server_close()
+            if prev is None:
+                os.environ.pop("LIVE402_MAX_HANDLERS", None)
+            else:
+                os.environ["LIVE402_MAX_HANDLERS"] = prev
+            server._HANDLER_SEMA = None
+            server._HANDLER_SEMA_CAP = 0
+            server.reset_request_thread_stats()
 
 
 class RateLimitCloseTests(unittest.TestCase):

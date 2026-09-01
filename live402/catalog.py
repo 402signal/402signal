@@ -1229,25 +1229,36 @@ def query_for_need(
     }
 
 
-def item_for_url(url: str) -> dict | None:
-    """Find one listing by URL. Fixture first. Else a scoped search. Never a 44k scan."""
+def claimed_item_for_url(url: str) -> dict | None:
+    """Exact local shadow lookup for claimed invocation metadata. No fixtures, no remote."""
     raw = (url or "").strip()
     if not raw:
         return None
-    found = fixtures.lookup_url(raw)
-    if found:
-        rail = probe._item_rail(found)
-        if rail not in _RAILS:
-            rail = "base"
-        return slim_item(found, rail)
+    try:
+        return shadow.get_resource(raw)
+    except Exception:
+        return None
+
+
+def item_for_url(url: str) -> dict | None:
+    """Find one listing by URL. Fixtures only in fixture mode. Never a 44k scan."""
+    raw = (url or "").strip()
+    if not raw:
+        return None
+    if fixtures.fixture_mode():
+        found = fixtures.lookup_url(raw)
+        if found:
+            rail = probe._item_rail(found)
+            if rail not in _RAILS:
+                rail = "base"
+            return slim_item(found, rail)
+        return None
     try:
         shadowed = shadow.get_resource(raw)
     except Exception:
         shadowed = None
     if shadowed:
         return shadowed
-    if fixtures.fixture_mode():
-        return None
     parsed = urlparse(raw)
     host = (parsed.hostname or "").strip()
     sub = host if len(host) >= 3 else ""

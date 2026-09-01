@@ -37,6 +37,15 @@ def _hit_accept(url, network, asset, amount, rail=None, pay_to=None, **extra):
     rail = rail or payment.rail_of_network(network) or "base"
     if pay_to is None:
         pay_to = _payto_for_network(network)
+    amt = amount if isinstance(amount, str) else str(amount)
+    acc = {
+        "scheme": "exact",
+        "network": network,
+        "asset": asset,
+        "amount": amt,
+        "payTo": pay_to,
+        "maxTimeoutSeconds": 60,
+    }
     row = {
         "url": url,
         "rail": rail,
@@ -44,16 +53,11 @@ def _hit_accept(url, network, asset, amount, rail=None, pay_to=None, **extra):
         "payTo": pay_to,
         "invocable": True,
         "latency_ms": extra.pop("latency", 10),
-        "amount": amount,
+        "amount": amt,
         "asset": asset,
-        "accepts": [
-            {
-                "network": network,
-                "asset": asset,
-                "amount": amount,
-                "payTo": pay_to,
-            }
-        ],
+        "envelope": {"x402Version": 2, "accepts": [acc]},
+        "accepts": [acc],
+        "target": {"accepts": [acc]},
         "history": extra.pop(
             "history",
             {

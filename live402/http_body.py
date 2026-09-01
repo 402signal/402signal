@@ -5,9 +5,14 @@ from __future__ import annotations
 import json
 import math
 
+from live402 import clock
+
 # 64 KiB hard cap. Callers may pass a smaller max_body.
 MAX_BODY = 64 * 1024
 BODY_READ_TIMEOUT = 3.0
+BODY_DEADLINE_SECONDS = 3.0
+# Bound the Content-Length token before int(). 64 KiB is 5 digits.
+MAX_CL_TEXT_LEN = 16
 
 
 class BodyReadError(Exception):
@@ -51,21 +56,42 @@ def _header_values(headers, name: str) -> list[str]:
     return out
 
 
+def transfer_encoding_present(headers) -> bool:
+    """True if Transfer-Encoding is present at all, including a blank value."""
+    if headers is None:
+        return False
+    getter = getattr(headers, "get_all", None)
+    if callable(getter):
+        found = getter("Transfer-Encoding")
+        if found is None:
+            return False
+        if isinstance(found, (list, tuple)):
+            return len(found) > 0
+        return True
+    if hasattr(headers, "get"):
+        return headers.get("Transfer-Encoding") is not None
+    return False
+
+
 def parse_content_length_token(raw: str) -> int:
-    """ASCII decimal only. Reject signed, empty, non-digit, and negatives."""
+    """ASCII decimal only. Reject signed, empty, non-digit, overflow, and bombs."""
     text = str(raw)
     if not text or not text.isascii() or not text.isdigit():
         raise BodyReadError(400, "invalid Content-Length")
-    n = int(text)
+    if len(text) > MAX_CL_TEXT_LEN:
+        raise BodyReadError(413, "body too large")
+    try:
+        n = int(text)
+    except (ValueError, OverflowError):
+        raise BodyReadError(400, "invalid Content-Length") from None
     if n < 0:
         raise BodyReadError(400, "invalid Content-Length")
     return n
 
 
 def declared_content_length(headers) -> int:
-    """Exactly one usable Content-Length. Duplicates and conflicts fail closed."""
-    te = _header_values(headers, "Transfer-Encoding")
-    if te:
+    """Exactly one usable Content-Length. Duplicates, TE, and conflicts fail closed."""
+    if transfer_encoding_present(headers):
         raise BodyReadError(400, "Transfer-Encoding is not allowed")
     values = _header_values(headers, "Content-Length")
     if not values:
@@ -78,8 +104,8 @@ def declared_content_length(headers) -> int:
     return parsed[0]
 
 
-def read_exactly(rfile, n: int) -> bytes:
-    """Read exactly n bytes. Short body fails. Never read(-1). Never unbounded."""
+def read_exactly(rfile, n: int, deadline: float | None = None) -> bytes:
+    """Read exactly n bytes. Short body or deadline fails. Never read(-1)."""
     if n < 0:
         raise BodyReadError(400, "invalid Content-Length")
     if n == 0:
@@ -87,6 +113,8 @@ def read_exactly(rfile, n: int) -> bytes:
     buf = bytearray()
     remaining = n
     while remaining > 0:
+        if deadline is not None and clock.monotonic() >= deadline:
+            raise BodyReadError(408, "body read timeout")
         try:
             chunk = rfile.read(remaining)
         except Exception as exc:
@@ -95,6 +123,8 @@ def read_exactly(rfile, n: int) -> bytes:
             raise BodyReadError(400, "short body")
         buf.extend(chunk)
         remaining -= len(chunk)
+    if deadline is not None and clock.monotonic() >= deadline:
+        raise BodyReadError(408, "body read timeout")
     return bytes(buf)
 
 
@@ -109,9 +139,7 @@ def loads_json_object(raw: bytes) -> dict:
         )
     except (json.JSONDecodeError, UnicodeDecodeError, ValueError, TypeError):
         raise BodyReadError(400, "invalid JSON") from None
-    if payload is None:
-        return {}
-    if not isinstance(payload, dict):
+    if not isinstance(payload, dict) or isinstance(payload, bool):
         raise BodyReadError(400, "JSON object required")
     return payload
 
@@ -123,7 +151,7 @@ def _finite_float(text: str) -> float:
     return n
 
 
-def read_json_object(handler, max_body: int = MAX_BODY) -> dict:
+def read_json_object(handler, max_body: int = MAX_BODY, deadline: float | None = None) -> dict:
     """Shared POST reader. On error: BodyReadError and caller must close."""
     cap = int(max_body) if max_body else MAX_BODY
     if cap < 1:
@@ -131,5 +159,9 @@ def read_json_object(handler, max_body: int = MAX_BODY) -> dict:
     length = declared_content_length(handler.headers)
     if length > cap:
         raise BodyReadError(413, "body too large")
-    raw = read_exactly(handler.rfile, length)
+    if deadline is None:
+        deadline = clock.monotonic() + BODY_DEADLINE_SECONDS
+    if clock.monotonic() >= deadline:
+        raise BodyReadError(408, "body read timeout")
+    raw = read_exactly(handler.rfile, length, deadline=deadline)
     return loads_json_object(raw)

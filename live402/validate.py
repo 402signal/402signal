@@ -12,11 +12,10 @@ def catalog_item_for(url: str) -> dict | None:
     raw = (url or "").strip()
     if not raw:
         return None
-    item = fixtures.lookup_url(raw)
-    if item:
-        return item
+    if fixtures.fixture_mode():
+        return fixtures.lookup_url(raw)
     try:
-        return catalog.item_for_url(raw)
+        return catalog.claimed_item_for_url(raw)
     except Exception:
         return None
 

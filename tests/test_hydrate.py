@@ -216,6 +216,7 @@ class HydrationBoundTests(unittest.TestCase):
                     "asset": payment.USDC_BASE,
                     "amount": "20000",
                     "payTo": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    "maxTimeoutSeconds": 60,
                 }
             ],
         }

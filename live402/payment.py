@@ -369,10 +369,12 @@ def _decode_payment_blob(raw: str) -> dict | None:
         candidates.insert(0, decoded.decode("utf-8"))
     except Exception:
         pass
+    from live402.http_body import reject_json_constant
+
     for item in candidates:
         try:
-            payload = json.loads(item)
-        except (json.JSONDecodeError, UnicodeDecodeError, TypeError):
+            payload = json.loads(item, parse_constant=reject_json_constant)
+        except (json.JSONDecodeError, UnicodeDecodeError, TypeError, ValueError):
             continue
         if isinstance(payload, dict):
             return payload
@@ -414,7 +416,7 @@ def _as_int(val):
 
 
 def rail_of_network(network: str) -> str | None:
-    """Exact supported network identifiers only. No substring / prefix matching."""
+    """Internal rail aliases (our 402, prefer_network, match_accept). Case-folded exact ids."""
     n = _norm(network)
     if not n:
         return None
@@ -424,6 +426,29 @@ def rail_of_network(network: str) -> str | None:
         return "solana"
     if n == "algorand" or n == _norm(ALGORAND_MAINNET):
         return "algorand"
+    return None
+
+
+def rail_of_observed_network(network, version: int) -> str | None:
+    """Seller HTTP 402 validation. Exact CAIP/network ids. No case-fold, no aliases on v2."""
+    if type(network) is not str:
+        return None
+    if version == 2:
+        if network == BASE_CAIP2:
+            return "base"
+        if network == SOLANA_MAINNET:
+            return "solana"
+        if network == ALGORAND_MAINNET:
+            return "algorand"
+        return None
+    if version == 1:
+        if network == "base" or network == BASE_CAIP2:
+            return "base"
+        if network == "solana" or network == SOLANA_MAINNET:
+            return "solana"
+        if network == "algorand" or network == ALGORAND_MAINNET:
+            return "algorand"
+        return None
     return None
 
 
@@ -516,18 +541,16 @@ def _token_equal(a, b, rail) -> bool:
 
 
 def known_usdc_asset(asset, network=None) -> bool:
-    """True only for the three USDC constants in this repo, or the name USDC/USD on a known rail."""
+    """True only for the three exact USDC ids. Bare USDC/USD is not those ids."""
     raw = _text(asset)
     if not raw:
         return False
-    rail = _rail_name(network)
+    _ = network
     if _token_equal(raw, USDC_BASE, "base"):
         return True
     if _token_equal(raw, USDC_SOLANA_MINT, "solana"):
         return True
     if _token_equal(raw, USDC_ALGORAND_ASA, "algorand"):
-        return True
-    if raw.upper() in {"USDC", "USD"} and rail in {"base", "solana", "algorand"}:
         return True
     return False
 
@@ -692,23 +715,34 @@ def observed_accepts(result) -> list[dict]:
     return [a for a in (result.get("accepts") or []) if isinstance(a, dict)]
 
 
+def _accepts_declared(blob) -> bool:
+    return isinstance(blob, dict) and "accepts" in blob
+
+
 def payment_options_from_result(result) -> list[dict]:
-    """Observed payment options only. Catalog claims are never promoted."""
+    """Observed payment options only. Catalog claims are never promoted.
+
+    If accepts[] exists (even all-invalid or empty), return only valid entries.
+    Never synthesize from top-level fields over an existing accepts list.
+    Legacy synthesis only when no accepts list is present.
+    """
     if not isinstance(result, dict):
         return []
     target = result.get("target") if isinstance(result.get("target"), dict) else {}
     env = result.get("envelope") if isinstance(result.get("envelope"), dict) else {}
-    fallback = result.get("network") or result.get("rail")
-    blobs = observed_accepts(result)
-    opts: list[dict] = []
-    for acc in blobs:
-        opt = validate_observed_accept(acc, env)
-        if opt:
-            opts.append(opt)
-    if opts:
+    for blob in (env, target, result):
+        if not _accepts_declared(blob):
+            continue
+        raw = blob.get("accepts")
+        if not isinstance(raw, list):
+            return []
+        opts: list[dict] = []
+        for acc in raw:
+            opt = validate_observed_accept(acc, env)
+            if opt:
+                opts.append(opt)
         return _dedupe_options(opts)
-    # Synthesize from this observation only when no accept list exists.
-    # Never invent from claimed.payment_options / catalog target leftovers.
+    fallback = result.get("network") or result.get("rail")
     extra = {}
     display = target.get("displayAmount") or result.get("displayAmount")
     if display:
@@ -742,7 +776,7 @@ _SOLANA_PAYTO_RE = re.compile(r"^[1-9A-HJ-NP-Za-km-z]{32,44}$")
 
 
 def sane_atomic_amount(val) -> int | None:
-    """Canonical nonnegative atomic amount in a sane integer bound."""
+    """Nonnegative atomic amount in a sane integer bound. Coercing helper, not wire."""
     if isinstance(val, bool) or val is None or val == "":
         return None
     n = _as_int(val)
@@ -751,20 +785,112 @@ def sane_atomic_amount(val) -> int | None:
     return n
 
 
+MAX_ATOMIC_TEXT_LEN = 20
+_B58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+
+
+def canonical_atomic_string(val) -> int | None:
+    """x402 wire amount: canonical decimal STRING only. No floats, signs, or bombs."""
+    if type(val) is not str:
+        return None
+    if not val or not val.isascii() or not val.isdigit():
+        return None
+    if len(val) > MAX_ATOMIC_TEXT_LEN:
+        return None
+    if len(val) > 1 and val[0] == "0":
+        return None
+    try:
+        n = int(val)
+    except (ValueError, OverflowError):
+        return None
+    if n < 0 or n > MAX_ATOMIC_AMOUNT:
+        return None
+    return n
+
+
+def _keccak256(data: bytes) -> bytes | None:
+    try:
+        from Crypto.Hash import keccak as _keccak
+
+        digest = _keccak.new(digest_bits=256)
+        digest.update(data)
+        return digest.digest()
+    except Exception:
+        pass
+    try:
+        import sha3 as _sha3
+
+        return _sha3.keccak_256(data).digest()
+    except Exception:
+        return None
+
+
+def _eip55_ok(addr: str) -> bool:
+    """Mixed-case EIP-55 when keccak is available. All-lower / all-upper always OK."""
+    body = addr[2:]
+    if body == body.lower() or body == body.upper():
+        return True
+    hashed = _keccak256(body.lower().encode("ascii"))
+    if hashed is None:
+        return True
+    hexhash = hashed.hex()
+    for char, nibble in zip(body, hexhash):
+        if not char.isalpha():
+            continue
+        if int(nibble, 16) >= 8:
+            if char != char.upper():
+                return False
+        elif char != char.lower():
+            return False
+    return True
+
+
+def _b58decode32(text: str) -> bool:
+    """Solana payTo: Base58 decode must be exactly 32 bytes."""
+    if type(text) is not str or not text or not text.isascii():
+        return False
+    value = 0
+    for char in text:
+        idx = _B58_ALPHABET.find(char)
+        if idx < 0:
+            return False
+        value = value * 58 + idx
+    pad = 0
+    for char in text:
+        if char == "1":
+            pad += 1
+        else:
+            break
+    if value == 0:
+        raw = b"\x00" * pad
+    else:
+        raw = value.to_bytes((value.bit_length() + 7) // 8, "big")
+        raw = (b"\x00" * pad) + raw
+    return len(raw) == 32
+
+
 def valid_payto_for_rail(addr, rail) -> bool:
-    """Rail-specific payTo shape. Fail closed on the wrong family."""
+    """Rail-specific payTo. Base EIP-55-safe, Algorand checksum, Solana 32-byte."""
     text = _text(addr)
     if not text:
         return False
     r = _rail_name(rail)
     if r == "base":
-        return bool(_BASE_PAYTO_RE.match(text))
+        if not _BASE_PAYTO_RE.match(text):
+            return False
+        return _eip55_ok(text)
     if r == "algorand":
-        return bool(_ALGORAND_PAYTO_RE.match(text.upper()))
+        try:
+            from live402.algo_tx import decode_address
+
+            decode_address(text)
+            return True
+        except Exception:
+            return False
     if r == "solana":
         if text.startswith("0x") or text.startswith("0X"):
             return False
-        return bool(_SOLANA_PAYTO_RE.match(text))
+        return _b58decode32(text)
     return False
 
 
@@ -815,40 +941,85 @@ def _scheme_ok(raw) -> bool:
     return text.lower() in SUPPORTED_SCHEMES
 
 
-def _amounts_consistent(accept: dict) -> bool:
-    a = accept.get("amount")
-    b = accept.get("maxAmountRequired")
-    if a is None or a == "" or b is None or b == "":
-        return True
-    ia, ib = sane_atomic_amount(a), sane_atomic_amount(b)
-    if ia is None or ib is None:
-        return False
-    return ia == ib
+def _literal_x402_version(raw) -> int | None:
+    if type(raw) is int and raw in SUPPORTED_X402_VERSIONS:
+        return raw
+    return None
+
+
+def _literal_timeout(raw) -> int | None:
+    if type(raw) is not int:
+        return None
+    if raw < 1 or raw > MAX_ACCEPT_TIMEOUT_SECONDS:
+        return None
+    return raw
+
+
+def _required_scheme(accept: dict, extra: dict) -> str | None:
+    scheme = accept.get("scheme")
+    extra_scheme = extra.get("scheme") if isinstance(extra, dict) else None
+    if type(scheme) is not str or scheme != "exact":
+        return None
+    if extra_scheme is not None and extra_scheme != "exact":
+        return None
+    return scheme
 
 
 def validate_observed_accept(accept, envelope=None) -> dict | None:
-    """Strict per-accept gate. Parseable 402 ≠ selectable payment option."""
+    """Version-aware seller accept. Parseable 402 ≠ selectable payment option."""
     if not isinstance(accept, dict):
         return None
-    if not _amounts_consistent(accept):
-        return None
-    extra = accept.get("extra") if isinstance(accept.get("extra"), dict) else {}
-    if not _scheme_ok(accept.get("scheme")) or not _scheme_ok(extra.get("scheme")):
-        return None
-    scheme = _text(accept.get("scheme"))
-    extra_scheme = _text(extra.get("scheme"))
-    if scheme and extra_scheme and scheme.lower() != extra_scheme.lower():
-        return None
-    if not _timeout_ok(accept.get("maxTimeoutSeconds")):
-        return None
     env = envelope if isinstance(envelope, dict) else {}
-    # extra.version is the ERC-20 version string, not x402Version.
+    extra = accept.get("extra") if isinstance(accept.get("extra"), dict) else {}
     ver = accept.get("x402Version")
     if ver is None:
         ver = env.get("x402Version")
-    if not _x402_version_ok(ver):
+    version = _literal_x402_version(ver)
+    if version is None:
         return None
-    opt = payment_option_from_accept(accept)
+    if _required_scheme(accept, extra) is None:
+        return None
+    if _literal_timeout(accept.get("maxTimeoutSeconds")) is None:
+        return None
+    rail = rail_of_observed_network(accept.get("network"), version)
+    if rail is None:
+        return None
+    if version == 2:
+        if "amount" not in accept:
+            return None
+        amount = canonical_atomic_string(accept.get("amount"))
+        if amount is None:
+            return None
+        other = accept.get("maxAmountRequired")
+        if other is not None and other != "":
+            if canonical_atomic_string(other) != amount:
+                return None
+    else:
+        if "maxAmountRequired" not in accept:
+            return None
+        amount = canonical_atomic_string(accept.get("maxAmountRequired"))
+        if amount is None:
+            return None
+        other = accept.get("amount")
+        if other is not None and other != "":
+            if canonical_atomic_string(other) != amount:
+                return None
+    if "asset" not in accept or not valid_asset_for_rail(accept.get("asset"), rail):
+        return None
+    if "payTo" not in accept or not valid_payto_for_rail(accept.get("payTo"), rail):
+        return None
+    wire = dict(accept)
+    if version == 2:
+        wire["amount"] = accept.get("amount")
+    else:
+        wire["amount"] = accept.get("maxAmountRequired")
+    opt = payment_option_from_accept(wire)
+    if opt is None:
+        return None
+    opt["amount_atomic"] = amount
+    opt["rail"] = rail
+    opt["network"] = accept.get("network")
+    opt["scheme"] = "exact"
     if not is_complete_payment_option(opt, env):
         return None
     return opt

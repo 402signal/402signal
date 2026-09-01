@@ -59,6 +59,16 @@ class DirectUrlProbeLimitsTests(unittest.TestCase):
             return_value=("https://public.example/x402", [("203.0.113.10", 443)]),
         ), patch("live402.probe._one_request", side_effect=fake_one):
             probe.probe_url("https://public.example/x402")
+        self.assertEqual([c["method"] for c in calls], ["GET"])
+        calls.clear()
+        with patch("live402.probe.fixtures.fixture_mode", return_value=False), patch(
+            "live402.probe._pin_https_target",
+            return_value=("https://public.example/x402", [("203.0.113.10", 443)]),
+        ), patch("live402.probe._one_request", side_effect=fake_one):
+            probe.probe_url(
+                "https://public.example/x402",
+                catalog_item={"url": "https://public.example/x402", "method": "POST"},
+            )
         post = [c for c in calls if c["method"] == "POST"]
         self.assertTrue(post)
         self.assertEqual(post[0]["data"], b"{}")

@@ -149,7 +149,8 @@ def _caller_set(src: dict, key: str) -> bool:
 
 
 def _explicit_present(src: dict, key: str) -> bool:
-    return isinstance(src, dict) and key in src and src.get(key) is not None
+    """Key present (including null) is explicit. Absent keys are unconstrained."""
+    return isinstance(src, dict) and key in src
 
 
 def _reject(message: str) -> None:
@@ -164,6 +165,11 @@ def _require_bool(val, name: str) -> None:
 def _require_int(val, name: str) -> int:
     if isinstance(val, bool) or not isinstance(val, int):
         _reject("%s must be an integer" % name)
+    try:
+        if val.bit_length() > 63:
+            _reject("%s is out of range" % name)
+    except (OverflowError, ValueError):
+        _reject("%s is out of range" % name)
     if val < 0:
         _reject("%s cannot be negative" % name)
     return val

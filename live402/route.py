@@ -22,13 +22,13 @@ def _invalid_need(error: str) -> tuple[int, dict]:
 
 
 def _lookup_claimed(url: str) -> dict | None:
-    item = fixtures.lookup_url(url)
-    if item:
-        return item
+    """Claimed invocation metadata only. Fixtures in fixture mode; else exact local catalog."""
+    if fixtures.fixture_mode():
+        return fixtures.lookup_url(url)
     try:
         from live402 import catalog as catalog_mod
 
-        return catalog_mod.item_for_url(url)
+        return catalog_mod.claimed_item_for_url(url)
     except Exception:
         return None
 

@@ -139,6 +139,9 @@ _VALIDATE_LIMITER = _RateLimiter()
 _HANDLER_SEMA_LOCK = threading.Lock()
 _HANDLER_SEMA: threading.BoundedSemaphore | None = None
 _HANDLER_SEMA_CAP = 0
+_THREAD_STATS_LOCK = threading.Lock()
+_ACTIVE_REQUEST_THREADS = 0
+_PEAK_REQUEST_THREADS = 0
 
 
 def max_handlers() -> int:
@@ -159,6 +162,94 @@ def _handler_sema() -> threading.BoundedSemaphore:
             _HANDLER_SEMA = threading.BoundedSemaphore(cap)
             _HANDLER_SEMA_CAP = cap
         return _HANDLER_SEMA
+
+
+def request_thread_stats() -> tuple[int, int]:
+    """(active worker threads, peak). Test helper for the server-level cap."""
+    with _THREAD_STATS_LOCK:
+        return _ACTIVE_REQUEST_THREADS, _PEAK_REQUEST_THREADS
+
+
+def reset_request_thread_stats() -> None:
+    global _ACTIVE_REQUEST_THREADS, _PEAK_REQUEST_THREADS
+    with _THREAD_STATS_LOCK:
+        _ACTIVE_REQUEST_THREADS = 0
+        _PEAK_REQUEST_THREADS = 0
+
+
+def reject_saturated_socket(sock) -> None:
+    """HTTP 503 Connection: close, then SHUT_RDWR. No request thread is created."""
+    body = b'{"error":"server busy"}'
+    try:
+        sock.sendall(
+            b"HTTP/1.1 503 Service Unavailable\r\n"
+            b"Content-Type: application/json; charset=utf-8\r\n"
+            b"Content-Length: " + str(len(body)).encode("ascii") + b"\r\n"
+            b"Connection: close\r\n"
+            b"Cache-Control: no-store\r\n"
+            b"\r\n" + body
+        )
+    except Exception:
+        pass
+    try:
+        sock.shutdown(socket.SHUT_RDWR)
+    except OSError:
+        pass
+    try:
+        sock.close()
+    except OSError:
+        pass
+
+
+class BoundedThreadingHTTPServer(ThreadingHTTPServer):
+    """Acquire a worker slot before spawning the request thread.
+
+    ThreadingHTTPServer.process_request starts the thread before Handler.handle(),
+    so a semaphore inside handle() cannot bound thread creation.
+    """
+
+    def process_request(self, request, client_address):
+        sema = _handler_sema()
+        if not sema.acquire(blocking=False):
+            reject_saturated_socket(request)
+            return
+
+        def run() -> None:
+            global _ACTIVE_REQUEST_THREADS, _PEAK_REQUEST_THREADS
+            with _THREAD_STATS_LOCK:
+                _ACTIVE_REQUEST_THREADS += 1
+                if _ACTIVE_REQUEST_THREADS > _PEAK_REQUEST_THREADS:
+                    _PEAK_REQUEST_THREADS = _ACTIVE_REQUEST_THREADS
+            try:
+                self.process_request_thread(request, client_address)
+            finally:
+                with _THREAD_STATS_LOCK:
+                    _ACTIVE_REQUEST_THREADS = max(0, _ACTIVE_REQUEST_THREADS - 1)
+                try:
+                    sema.release()
+                except Exception:
+                    pass
+
+        thread = threading.Thread(target=run, name="http-req", daemon=True)
+        if getattr(self, "block_on_close", False):
+            bucket = getattr(self, "_threads", None)
+            if bucket is not None:
+                bucket.append(thread)
+        try:
+            thread.start()
+        except Exception:
+            try:
+                sema.release()
+            except Exception:
+                pass
+            try:
+                self.shutdown_request(request)
+            except Exception:
+                try:
+                    request.close()
+                except Exception:
+                    pass
+            raise
 
 
 def _env_flag(name: str) -> bool:
@@ -291,22 +382,13 @@ class Handler(SimpleHTTPRequestHandler):
             pass
 
     def handle(self) -> None:
-        sema = _handler_sema()
-        if not sema.acquire(blocking=False):
-            self._reject_saturated()
-            return
+        """BaseHTTPRequestHandler owns the keep-alive loop. Cap is at process_request."""
         try:
+            super().handle()
+        except (BrokenPipeError, ConnectionResetError, TimeoutError, OSError):
             self.close_connection = True
-            try:
-                self.handle_one_request()
-                while not self.close_connection:
-                    self.handle_one_request()
-            except (BrokenPipeError, ConnectionResetError, TimeoutError, OSError):
-                self.close_connection = True
-            if self.close_connection:
-                self._shutdown_client()
-        finally:
-            sema.release()
+        if getattr(self, "close_connection", True):
+            self._shutdown_client()
 
     def _shutdown_client(self) -> None:
         """FIN the TCP socket so unread POST bytes cannot become the next request."""
@@ -834,7 +916,7 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
     assert_safe_http_boot(args.host)
     boot_http_process()
-    httpd = ThreadingHTTPServer((args.host, args.port), Handler)
+    httpd = BoundedThreadingHTTPServer((args.host, args.port), Handler)
     # Existing production loop (catalog trickle + PQ tick / confirm).
     catalog.start_refresher()
     print(

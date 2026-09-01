@@ -313,6 +313,7 @@ class ObservedInvariantTests(_IsolatedCatalog):
                     "asset": payment.USDC_BASE,
                     "amount": "20000",
                     "payTo": OBS_BASE_PAYTO,
+                    "maxTimeoutSeconds": 60,
                     "extra": {"facilitator": CDP, "displayAmount": "$0.02"},
                 }
             ],

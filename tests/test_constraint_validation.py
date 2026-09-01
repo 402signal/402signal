@@ -79,6 +79,20 @@ class ExplicitConstraintTests(unittest.TestCase):
         select.validate_explicit_constraints({})
         select.validate_explicit_constraints({"need": "weather"})
 
+    def test_null_present_is_400(self):
+        for key in select.EXPLICIT_CONSTRAINT_KEYS:
+            with self.assertRaises(ConstraintError, msg=key):
+                select.validate_explicit_constraints({key: None})
+
+    def test_absent_is_not_null(self):
+        select.validate_explicit_constraints({"need": "weather", "url": "https://x.example"})
+
+    def test_huge_integer_overflow(self):
+        with self.assertRaises(ConstraintError):
+            select.validate_explicit_constraints({"max_amount_atomic": 2**100})
+        with self.assertRaises(ConstraintError):
+            select.validate_explicit_constraints({"max_latency_ms": 2**63})
+
     def test_nl_unresolved_is_not_guessed(self):
         compiled = policy.compile_policy("weather with high reputation")
         self.assertTrue(compiled["unresolved_constraints"])
