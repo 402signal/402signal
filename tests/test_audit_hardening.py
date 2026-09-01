@@ -328,14 +328,14 @@ class SchemaAndTrustSyncTests(unittest.TestCase):
 
 class BackupScriptTests(unittest.TestCase):
     def test_backup_and_restore_roundtrip(self):
+        import importlib.util
         import sqlite3
         from pathlib import Path
 
-        import importlib.util
-        from pathlib import Path as _P
+        root = Path(__file__).resolve().parents[1]
 
         def _load(name):
-            path = _P("/workspace/scripts/%s.py" % name)
+            path = root / "scripts" / ("%s.py" % name)
             spec = importlib.util.spec_from_file_location(name, path)
             mod = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(mod)
