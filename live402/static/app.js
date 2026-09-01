@@ -6,16 +6,41 @@
   const results = document.getElementById("search-results");
   const copyBtn = document.getElementById("copy-curl");
   const curlEl = document.getElementById("curl-route");
+  const copyRouteJsonBtn = document.getElementById("copy-route-json");
+  const copyRouteCurlBtn = document.getElementById("copy-route-curl");
+  const routeJsonEl = document.getElementById("route-json");
+  const routeCurlEl = document.getElementById("route-curl");
+  const policySummaryEl = document.getElementById("policy-summary");
+  const policyFactsEl = document.getElementById("policy-facts");
+  const maxPrice = document.getElementById("max-price");
+  const minObservations = document.getElementById("min-observations");
+  const requireInvocable = document.getElementById("require-invocable");
+  const maxTotalCost = document.getElementById("max-total-cost");
+  const maxLatency = document.getElementById("max-latency");
 
   const RAIL_NAMES = { base: "Base", solana: "Solana", algorand: "Algorand" };
-  const FORBIDDEN_RESULT_LABELS = /^(recommended|verified|live|payable now|best for)$/i;
+  const FORBIDDEN_RESULT_LABELS = /^(recommended|verified|live|payable now|best for|live now|verified now|best)$/i;
+  const OBJECTIVES = { best: "best", cheapest: "cheapest", fastest: "fastest", most_reliable: "most_reliable" };
+  const RAILS = { base: "base", solana: "solana", algorand: "algorand" };
+  const DEPTHS = { standard: "standard", thorough: "thorough" };
+
+  const policy = {
+    network: "any",
+    objective: "best",
+    preferNetwork: "any",
+    searchDepth: "standard",
+  };
 
   function hasContent() {
     return Boolean(((need && need.value) || "").trim());
   }
 
   function syncSearch() {
-    if (searchBtn) searchBtn.disabled = !hasContent();
+    const ready = hasContent();
+    if (searchBtn) searchBtn.disabled = !ready;
+    if (copyRouteJsonBtn) copyRouteJsonBtn.disabled = !ready;
+    if (copyRouteCurlBtn) copyRouteCurlBtn.disabled = !ready;
+    renderRouteJson();
   }
 
   function hostOf(url) {
@@ -32,6 +57,178 @@
 
   function setStatus(message) {
     text(status, message || "");
+  }
+
+  function parseNonnegNumber(raw) {
+    if (raw == null || String(raw).trim() === "") return null;
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n < 0) return null;
+    return n;
+  }
+
+  function parsePositiveInt(raw, min) {
+    const n = parseNonnegNumber(raw);
+    if (n == null) return null;
+    const i = Math.floor(n);
+    if (i < min) return null;
+    return i;
+  }
+
+  function buildRouteBody() {
+    const body = {};
+    const q = ((need && need.value) || "").trim();
+    if (q) body.need = q;
+    if (policy.network !== "any" && RAILS[policy.network]) {
+      body.networks = [policy.network];
+    }
+    const price = parseNonnegNumber(maxPrice && maxPrice.value);
+    if (price != null) body.max_price_usd = price;
+    if (requireInvocable && requireInvocable.checked) body.require_invocable = true;
+    const minObs = parsePositiveInt(minObservations && minObservations.value, 0);
+    if (minObs != null) body.min_observations = minObs;
+    if (OBJECTIVES[policy.objective]) body.objective = policy.objective;
+    if (policy.preferNetwork !== "any" && RAILS[policy.preferNetwork]) {
+      body.prefer_network = policy.preferNetwork;
+    }
+    const total = parseNonnegNumber(maxTotalCost && maxTotalCost.value);
+    if (total != null) body.max_total_cost_usd = total;
+    const latencyMs = parsePositiveInt(maxLatency && maxLatency.value, 0);
+    if (latencyMs != null) body.max_latency_ms = latencyMs;
+    if (policy.searchDepth === "thorough") body.search_depth = "thorough";
+    return body;
+  }
+
+  function formatUsd(n) {
+    const raw = String(n);
+    if (!raw.includes(".")) return raw;
+    return raw.replace(/\.?0+$/, "");
+  }
+
+  function joinOr(parts) {
+    if (parts.length <= 1) return parts[0] || "";
+    if (parts.length === 2) return parts[0] + " or " + parts[1];
+    return parts.slice(0, -1).join(", ") + ", or " + parts[parts.length - 1];
+  }
+
+  function policyFacts() {
+    const q = ((need && need.value) || "").trim();
+    if (!q) return [];
+    const rows = [];
+    rows.push(["Capability", q]);
+    if (policy.network !== "any" && RAIL_NAMES[policy.network]) {
+      rows.push(["Network", RAIL_NAMES[policy.network] + " (hard lock)"]);
+    } else {
+      rows.push(["Network", "any supported rail"]);
+    }
+    const price = parseNonnegNumber(maxPrice && maxPrice.value);
+    if (price != null) rows.push(["Maximum merchant price", "$" + formatUsd(price)]);
+    if (requireInvocable && requireInvocable.checked) {
+      rows.push(["Require input schema", "yes"]);
+    }
+    const minObs = parsePositiveInt(minObservations && minObservations.value, 0);
+    if (minObs != null) rows.push(["Minimum observations", String(minObs)]);
+    const objLabel = {
+      best: "best (default)",
+      cheapest: "cheapest among currently probed eligible candidates",
+      fastest: "lowest this-request probe RTT",
+      most_reliable: "stronger observed history among currently probed eligible candidates",
+    };
+    rows.push(["Objective", objLabel[policy.objective] || policy.objective]);
+    if (policy.preferNetwork !== "any" && RAIL_NAMES[policy.preferNetwork]) {
+      rows.push(["Prefer network", RAIL_NAMES[policy.preferNetwork] + " (ranking only)"]);
+    }
+    const total = parseNonnegNumber(maxTotalCost && maxTotalCost.value);
+    if (total != null) rows.push(["Maximum total cost", "$" + formatUsd(total)]);
+    const latencyMs = parsePositiveInt(maxLatency && maxLatency.value, 0);
+    if (latencyMs != null) rows.push(["Maximum probe latency", latencyMs + " ms"]);
+    if (policy.searchDepth === "thorough") rows.push(["Search depth", "thorough"]);
+    return rows;
+  }
+
+  function policySummary() {
+    const q = ((need && need.value) || "").trim();
+    if (!q) return "Enter a capability to compose the POST /route body.";
+    const clauses = [];
+    clauses.push("POST /route will search for " + q + " services");
+    if (policy.network !== "any" && RAIL_NAMES[policy.network]) {
+      clauses.push("require a current " + RAIL_NAMES[policy.network] + " payment option");
+    } else {
+      clauses.push("search Base, Solana, and Algorand");
+    }
+    const price = parseNonnegNumber(maxPrice && maxPrice.value);
+    if (price != null) clauses.push("reject observed prices above $" + formatUsd(price));
+    if (requireInvocable && requireInvocable.checked) {
+      clauses.push("require invocation metadata");
+    }
+    const minObs = parsePositiveInt(minObservations && minObservations.value, 0);
+    if (minObs != null) {
+      clauses.push("require at least " + minObs + (minObs === 1 ? " prior observation" : " prior observations"));
+    }
+    if (policy.preferNetwork !== "any" && RAIL_NAMES[policy.preferNetwork]) {
+      clauses.push("rank " + RAIL_NAMES[policy.preferNetwork] + " first without locking other rails");
+    }
+    const total = parseNonnegNumber(maxTotalCost && maxTotalCost.value);
+    if (total != null) {
+      clauses.push("cap merchant price plus known fees at $" + formatUsd(total));
+    }
+    const latencyMs = parsePositiveInt(maxLatency && maxLatency.value, 0);
+    if (latencyMs != null) {
+      clauses.push("drop live hits whose known probe RTT exceeds " + latencyMs + " ms");
+    }
+    if (policy.searchDepth === "thorough") {
+      clauses.push("use a thorough probe plan");
+    }
+    if (policy.objective === "cheapest") {
+      clauses.push("rank the eligible probed candidates by known merchant price");
+    } else if (policy.objective === "fastest") {
+      clauses.push("rank the eligible probed candidates by this-request probe RTT");
+    } else if (policy.objective === "most_reliable") {
+      clauses.push("rank the eligible probed candidates by stronger observed history");
+    }
+    if (clauses.length === 1) return clauses[0] + ".";
+    const head = clauses[0];
+    const tail = clauses.slice(1);
+    if (tail.length === 1) return head + " and " + tail[0] + ".";
+    return head + ", " + tail.slice(0, -1).join(", ") + ", and " + tail[tail.length - 1] + ".";
+  }
+
+  function routeJsonText() {
+    return JSON.stringify(buildRouteBody(), null, 2);
+  }
+
+  function routeCurlText() {
+    const compact = JSON.stringify(buildRouteBody());
+    return "curl -sS -D - https://402signal.com/route -H 'Content-Type: application/json' -d '" + compact + "'";
+  }
+
+  function renderRouteJson() {
+    if (routeJsonEl) routeJsonEl.textContent = routeJsonText();
+    if (routeCurlEl) routeCurlEl.textContent = routeCurlText();
+    if (policySummaryEl) policySummaryEl.textContent = policySummary();
+    if (policyFactsEl) {
+      policyFactsEl.textContent = "";
+      policyFacts().forEach(function (row) {
+        const line = document.createElement("p");
+        const dt = document.createElement("span");
+        dt.className = "fact-label";
+        dt.textContent = row[0];
+        line.appendChild(dt);
+        line.appendChild(document.createTextNode(": " + row[1]));
+        policyFactsEl.appendChild(line);
+      });
+    }
+  }
+
+  function previewUrl() {
+    const q = ((need && need.value) || "").trim();
+    let url = "/preview?need=" + encodeURIComponent(q);
+    if (policy.network !== "any" && RAILS[policy.network]) {
+      url += "&networks=" + encodeURIComponent(policy.network);
+    }
+    if (policy.preferNetwork !== "any" && RAILS[policy.preferNetwork]) {
+      url += "&prefer_network=" + encodeURIComponent(policy.preferNetwork);
+    }
+    return url;
   }
 
   function catalogHits(parsed) {
@@ -116,17 +313,17 @@
     side.className = "result-side claim";
     const label = document.createElement("p");
     label.className = "result-side-label";
-    label.textContent = "DISCOVERED · catalog listing";
+    label.textContent = "DISCOVERY LISTING";
     side.appendChild(label);
     const bits = document.createElement("p");
     bits.className = "result-bits";
+    const source = catalogSource(hit);
+    if (source) appendBit(bits, source);
     appendBit(bits, railOf(hit));
     const price = listedPrice(hit);
     if (price) appendBit(bits, "Listed price " + price);
     const schema = schemaListed(hit);
     if (schema) appendBit(bits, "Schema listed: " + schema);
-    const source = catalogSource(hit);
-    if (source) appendBit(bits, source);
     if (hit && hit.method) appendBit(bits, String(hit.method));
     if (!bits.childNodes.length) appendBit(bits, "Seller fields as listed");
     side.appendChild(bits);
@@ -138,30 +335,31 @@
     side.className = "result-side observation";
     const label = document.createElement("p");
     label.className = "result-side-label";
-    label.textContent = "OBSERVED · prior 402Signal check";
+    label.textContent = "PRIOR 402SIGNAL OBSERVATION";
     side.appendChild(label);
     const bits = document.createElement("p");
     bits.className = "result-bits";
     const obs = observationOf(hit);
     const status = obs && typeof obs.status === "string" ? obs.status : "not_yet_observed";
     if (!obs || status === "not_yet_observed") {
-      appendBit(bits, "Not yet observed");
+      appendBit(bits, "No prior 402Signal observation");
       side.appendChild(bits);
       return side;
     }
-    appendBit(bits, "observed");
     if (obs.payable === true) appendBit(bits, "payable");
     else if (obs.payable === false) appendBit(bits, "not payable");
     if (obs.invocable === true) appendBit(bits, "invocable");
+    else if (obs.invocable === false) appendBit(bits, "not invocable");
     const checked = isoOrEmpty(obs.last_checked);
     if (checked) appendBit(bits, "Last checked " + checked);
+    const n = Number(obs.n_7d);
+    if (Number.isFinite(n) && n > 0) {
+      appendBit(bits, n + (n === 1 ? " observation" : " observations"));
+    }
     if (obs.last_latency_ms != null && obs.last_latency_ms !== "") {
       appendBit(bits, String(obs.last_latency_ms) + " ms");
     }
-    const n7 = Number(obs.n_7d);
-    if (Number.isFinite(n7) && n7 > 0) {
-      appendBit(bits, n7 + (n7 === 1 ? " observation in 7d" : " observations in 7d"));
-    }
+    if (!bits.childNodes.length) appendBit(bits, "Prior observation on file");
     side.appendChild(bits);
     return side;
   }
@@ -217,13 +415,17 @@
     const shown = hits.length;
     const matches = Number(parsed && parsed.discovery_matches);
     const shownLabel = shown === 1 ? "1 shown" : shown + " shown";
-    let text = "DISCOVERED · " + shownLabel;
+    let text = "DISCOVERY LISTING · " + shownLabel + " · not a live check";
     if (Number.isFinite(matches) && matches > shown) {
       const exhaustive = parsed && parsed.discovery_exhaustive === true;
       text += " · " + matches + (exhaustive ? " discovery matches" : " matches returned by discovery");
     }
     heading.textContent = text;
     results.appendChild(heading);
+    const note = document.createElement("p");
+    note.className = "policy-hint";
+    note.textContent = "Preview shows discovery listings and prior 402Signal observations. A paid route may differ after 402Signal checks candidates now.";
+    results.appendChild(note);
     hits.forEach(function (hit) {
       results.appendChild(renderHit(hit));
     });
@@ -234,7 +436,7 @@
       showMessage("Enter a capability to search the catalog.");
       return;
     }
-    setStatus("Searching catalog...");
+    setStatus("Previewing discovery...");
     if (results) results.textContent = "";
     let pulse = null;
     try {
@@ -244,8 +446,7 @@
       pulse = null;
     }
     try {
-      const q = ((need && need.value) || "").trim();
-      const res = await fetch("/preview?need=" + encodeURIComponent(q), { cache: "no-store" });
+      const res = await fetch(previewUrl(), { cache: "no-store" });
       const raw = await res.text();
       let parsed = null;
       try { parsed = JSON.parse(raw); } catch (e) { parsed = null; }
@@ -267,28 +468,54 @@
     }
   }
 
-  async function copyCurl() {
-    if (!curlEl) return;
-    const value = curlEl.textContent || "";
+  async function copyText(value, button, idleLabel) {
+    const label = idleLabel || "Copy";
     try {
       if (navigator.clipboard && navigator.clipboard.writeText) {
         await navigator.clipboard.writeText(value);
       } else {
-        const range = document.createRange();
-        range.selectNodeContents(curlEl);
-        const sel = window.getSelection();
-        if (sel) {
-          sel.removeAllRanges();
-          sel.addRange(range);
-        }
+        const ta = document.createElement("textarea");
+        ta.value = value;
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand("copy");
+        document.body.removeChild(ta);
       }
-      if (copyBtn) {
-        copyBtn.textContent = "Copied";
-        window.setTimeout(function () { copyBtn.textContent = "Copy"; }, 1500);
+      if (button) {
+        button.textContent = "Copied";
+        window.setTimeout(function () { button.textContent = label; }, 1500);
       }
     } catch (e) {
-      if (copyBtn) copyBtn.textContent = "Copy failed";
+      if (button) button.textContent = "Copy failed";
     }
+  }
+
+  async function copyCurl() {
+    if (!curlEl) return;
+    await copyText(curlEl.textContent || "", copyBtn, "Copy");
+  }
+
+  async function copyRouteRequest(button) {
+    if (!hasContent()) return;
+    await copyText(routeJsonText(), button, "Copy JSON");
+  }
+
+  function bindChipGroup(id, attr, key, allowed) {
+    const root = document.getElementById(id);
+    if (!root) return;
+    root.addEventListener("click", function (ev) {
+      const btn = ev.target.closest("[" + attr + "]");
+      if (!btn) return;
+      const value = btn.getAttribute(attr) || "";
+      if (allowed && !allowed[value] && value !== "any") return;
+      policy[key] = value;
+      root.querySelectorAll(".chip").forEach(function (c) {
+        const on = c === btn;
+        c.classList.toggle("active", on);
+        c.setAttribute("aria-pressed", on ? "true" : "false");
+      });
+      syncSearch();
+    });
   }
 
   function bindTabs() {
@@ -324,6 +551,11 @@
     need.addEventListener("input", syncSearch);
     need.addEventListener("change", syncSearch);
   }
+  [maxPrice, minObservations, requireInvocable, maxTotalCost, maxLatency].forEach(function (el) {
+    if (!el) return;
+    el.addEventListener("input", syncSearch);
+    el.addEventListener("change", syncSearch);
+  });
   const chips = document.getElementById("need-chips");
   if (chips) {
     chips.addEventListener("click", function (ev) {
@@ -335,10 +567,27 @@
       syncSearch();
     });
   }
+  bindChipGroup("network-chips", "data-network", "network", RAILS);
+  bindChipGroup("objective-chips", "data-objective", "objective", OBJECTIVES);
+  bindChipGroup("prefer-chips", "data-prefer", "preferNetwork", RAILS);
+  bindChipGroup("depth-chips", "data-depth", "searchDepth", DEPTHS);
   if (copyBtn) {
     copyBtn.addEventListener("click", function (ev) {
       ev.preventDefault();
       copyCurl();
+    });
+  }
+  if (copyRouteJsonBtn) {
+    copyRouteJsonBtn.addEventListener("click", function (ev) {
+      ev.preventDefault();
+      copyRouteRequest(copyRouteJsonBtn);
+    });
+  }
+  if (copyRouteCurlBtn) {
+    copyRouteCurlBtn.addEventListener("click", function (ev) {
+      ev.preventDefault();
+      if (!hasContent()) return;
+      copyText(routeCurlText(), copyRouteCurlBtn, "Copy curl");
     });
   }
   bindTabs();

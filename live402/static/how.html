@@ -3,17 +3,17 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>How 402Signal Works</title>
-  <meta name="description" content="402Signal sits between discovery and spend: find candidates, check now, apply policy, then return a route or an honest miss." />
+  <title>How 402Signal routing works</title>
+  <meta name="description" content="How 402Signal turns discovery metadata into a paid routing check: discover, probe, evaluate, and select a route or typed miss." />
   <link rel="canonical" href="https://402signal.com/how" />
-  <meta property="og:title" content="How 402Signal Works" />
-  <meta property="og:description" content="402Signal sits between discovery and spend: find candidates, check now, apply policy, then return a route or an honest miss." />
+  <meta property="og:title" content="How 402Signal routing works" />
+  <meta property="og:description" content="How 402Signal turns discovery metadata into a paid routing check: discover, probe, evaluate, and select a route or typed miss." />
   <meta property="og:url" content="https://402signal.com/how" />
   <meta property="og:type" content="website" />
   <meta property="og:site_name" content="402Signal" />
   <meta name="twitter:card" content="summary" />
-  <meta name="twitter:title" content="How 402Signal Works" />
-  <meta name="twitter:description" content="402Signal sits between discovery and spend: find candidates, check now, apply policy, then return a route or an honest miss." />
+  <meta name="twitter:title" content="How 402Signal routing works" />
+  <meta name="twitter:description" content="How 402Signal turns discovery metadata into a paid routing check." />
   <meta name="twitter:site" content="@402Signal" />
   <link rel="stylesheet" href="/styles.css" />
 </head>
@@ -25,109 +25,56 @@
         <span class="brand-name">402Signal</span>
       </a>
       <nav class="nav" aria-label="Primary">
+        <a href="/">Home</a>
         <a href="/how" aria-current="page">How it works</a>
+        <a href="/catalog">Explore</a>
         <a href="/developers">Developers</a>
+        <a href="/contact">Contact</a>
       </nav>
     </header>
 
     <main>
       <section class="hero compact">
-        <h1>Why check an API that's already listed?</h1>
-        <p class="lede">Catalogs supply candidates. 402Signal sits between discovery and spend. Directory data can outlive the service it describes. An endpoint can disappear, stop returning a valid 402, change its payment destination or price, or lack enough information for an agent to construct the call.</p>
-        <p class="lede">402Signal keeps the listing and the runtime observation separate.</p>
+        <h1>How routing works</h1>
+        <p class="lede">Discovery sources publish metadata about x402 services. That metadata can describe an endpoint that no longer returns a usable HTTP 402, that changed its payment terms, or that lacks enough information to construct a call. A paid POST /route check observes the endpoint's current HTTP 402 payment requirements and applies the caller's constraints to those observed options.</p>
       </section>
 
       <section class="block">
-        <h2>What happens on a check</h2>
-        <p>Find candidates → check now → apply policy → route or honest miss.</p>
+        <h2>Stages of a paid check</h2>
         <dl class="checks compact">
           <div>
-            <dt>Find candidates</dt>
-            <dd>Search current discovery listings for the need. A listing is an input, not an observation.</dd>
+            <dt>DISCOVER</dt>
+            <dd>Search supported discovery sources for the requested capability and assemble a working set of candidate URLs.</dd>
           </div>
           <div>
-            <dt>Check now</dt>
-            <dd>Probe the live 402 envelope: payment terms, invocation info, and freshness on this request.</dd>
+            <dt>PROBE</dt>
+            <dd>Request each selected candidate and parse the current HTTP 402 payment requirements. A payable hit is a complete observed option. An invocable hit is payable plus enough input-schema information to construct the call.</dd>
           </div>
           <div>
-            <dt>Apply policy</dt>
-            <dd>Network locks and price bounds use this check. Catalog claims do not satisfy a lock.</dd>
+            <dt>EVALUATE</dt>
+            <dd>Apply the caller's constraints to the payment options returned during this request. Discovery listings do not satisfy a network lock or a price bound.</dd>
           </div>
           <div>
-            <dt>Route or honest miss</dt>
-            <dd>Return a live route with evidence, or a typed miss. 402Signal does not substitute an unverified service.</dd>
+            <dt>SELECT</dt>
+            <dd>Return the selected route and selected_payment when an observed option qualifies. Otherwise return a typed miss that reports why evaluation stopped.</dd>
           </div>
         </dl>
       </section>
 
       <section class="block">
-        <h2>402Signal vs your agent</h2>
+        <h2>Execution boundary</h2>
         <dl class="checks compact">
           <div>
             <dt>402Signal</dt>
-            <dd>Finds candidates, checks them live, applies policy, returns a route or miss, and commits evidence. It does not hold keys or pay the seller.</dd>
+            <dd>Discovers candidates, probes them, applies constraints, returns a route or typed miss, and commits routing evidence. It does not hold buyer keys, sign the selected service's payment, or execute that service.</dd>
           </div>
           <div>
-            <dt>Your agent</dt>
-            <dd>Keeps the wallet, signs, pays the seller, and calls the API.</dd>
+            <dt>Caller</dt>
+            <dd>Retains custody of keys, signing, the selected service's payment, and execution of the seller request.</dd>
           </div>
         </dl>
-      </section>
-
-      <section class="block">
-        <h2>What a live check can establish</h2>
-        <dl class="checks compact">
-          <div>
-            <dt>PAYMENT</dt>
-            <dd>Did the endpoint return a valid, parseable x402 challenge?</dd>
-          </div>
-          <div>
-            <dt>TERMS</dt>
-            <dd>What payTo, amount, asset and network did the endpoint return?</dd>
-          </div>
-          <div>
-            <dt>INVOCATION</dt>
-            <dd>Is there enough request information for an agent to construct the call?</dd>
-          </div>
-          <div>
-            <dt>FRESHNESS</dt>
-            <dd>When did 402Signal make the observation?</dd>
-          </div>
-          <div>
-            <dt>EVIDENCE</dt>
-            <dd>Was the observation committed to the append-only history? Confirmed TestNet anchors are asynchronous and never block the route.</dd>
-          </div>
-        </dl>
-      </section>
-
-      <section class="block">
-        <h2>Readiness</h2>
-        <dl class="checks compact">
-          <div>
-            <dt>Discovered</dt>
-            <dd>Found in supported discovery infrastructure.</dd>
-          </div>
-          <div>
-            <dt>Payable</dt>
-            <dd>Valid HTTP 402, parseable payment requirements and usable payTo.</dd>
-          </div>
-          <div>
-            <dt>Invocable</dt>
-            <dd>Enough request/schema information exists for an autonomous agent to construct the call.</dd>
-          </div>
-          <div>
-            <dt>Recently verified</dt>
-            <dd>Passed a sufficiently fresh independent check.</dd>
-          </div>
-        </dl>
-        <p class="note">Health and reliability only appear when there is enough history to support them.</p>
-      </section>
-
-      <section class="block">
-        <h2>402Signal stops before seller execution</h2>
-        <p>402Signal recommends a route. The caller keeps its wallet, signs the seller payment and executes the seller request.</p>
-        <p>The $0.01 routing check pays 402Signal for the check itself. It is separate from whatever the selected seller charges.</p>
-        <p>A check should leave a trail. <a href="/transparency">See the transparency log</a></p>
+        <p>The $0.01 USDC paid on POST /route is a routing fee for this check. It is separate from whatever the selected seller charges.</p>
+        <p>Routing evidence is committed to an append-only log. Signed checkpoints may later be anchored to Algorand TestNet. Routing does not wait for confirmation. <a href="/transparency">View verification details</a></p>
       </section>
     </main>
 
@@ -138,7 +85,6 @@
         <a href="/openapi.json">OpenAPI</a>
         <a href="/mcp.json">MCP</a>
         <a href="/transparency">Transparency</a>
-        <a href="/catalog" class="muted">Catalog</a>
         <a href="mailto:ross@402signal.com">ross@402signal.com</a>
       </p>
     </footer>

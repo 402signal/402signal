@@ -11,7 +11,7 @@ DESC = payment.CATALOG_DESCRIPTION
 OPENAPI_INFO_DESCRIPTION = (
     DESC
     + " Pay $0.01 USDC on Base, Solana, or Algorand for a URL that answers unpaid "
-    "HTTP 402 with a payment envelope, or an honest miss. Reachable 200s are misses. "
+    "HTTP 402 with a payment envelope, or a typed miss. Reachable 200s are misses. "
     "MCP: GET /mcp.json."
 )
 GUIDANCE = (
@@ -28,7 +28,7 @@ GUIDANCE = (
     "Pay $0.01 USDC then retry with PAYMENT-SIGNATURE or X-PAYMENT. We verify, probe, then settle. "
     "Live means a parseable unpaid 402 (PAYMENT-REQUIRED or JSON accepts[]/x402Version), "
     "not merely reachable. HTTP 200 after pay is a live URL plus target contract; "
-    "503 is an honest miss (same $0.01, typed miss_reason). "
+    "503 is a typed miss (same $0.01, typed miss_reason). "
     "If inputSchema is missing, live may still be true with invocable:false and miss_reason no_input_schema. "
     "GET /mcp.json lists the MCP route tool (type mcp, toolName route); "
     "POST /mcp initialize and tools/list need no payment; tools/call route is the paid probe. "
@@ -372,7 +372,7 @@ def openapi_spec(resource_url: str = ROUTE) -> dict:
             "version": "0.5.0",
             "description": OPENAPI_INFO_DESCRIPTION,
             "x-guidance": GUIDANCE,
-            "contact": {"url": ORIGIN, "name": "402Signal", "email": "402signal@gmail.com"},
+            "contact": {"url": ORIGIN, "name": "402Signal", "email": "ross@402signal.com"},
         },
         "servers": [{"url": origin, "description": "This origin"}],
         "tags": [
@@ -431,7 +431,7 @@ def openapi_spec(resource_url: str = ROUTE) -> dict:
                 "post": {
                     "operationId": "route",
                     "tags": ["Paid"],
-                    "summary": "Pay $0.01 USDC for a live paid-API URL or an honest miss",
+                    "summary": "Pay $0.01 USDC for a live paid-API URL or a typed miss",
                     "description": DESC,
                     "x-payment-info": {
                         "price": {"mode": "fixed", "currency": "USD", "amount": "0.01"},
@@ -510,7 +510,7 @@ def openapi_spec(resource_url: str = ROUTE) -> dict:
                             },
                         },
                         "503": {
-                            "description": "Honest miss. Paid probe found nothing live.",
+                            "description": "Typed miss. Paid probe found nothing live.",
                             "content": {
                                 "application/json": {
                                     "schema": live_schema,

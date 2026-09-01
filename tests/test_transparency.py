@@ -89,11 +89,11 @@ class TransparencyPageTests(unittest.TestCase):
         csp = hdrs.get("content-security-policy") or ""
         self.assertIn("script-src 'self'", csp)
         self.assertIn("connect-src 'self'", csp)
-        self.assertIn("Verify 402Signal", html)
+        self.assertIn("Verify the transparency log", html)
         self.assertNotIn("See the check-first flow on the", html)
         self.assertNotIn('class="signal-flow"', html)
         self.assertIn("It is not a merchant payment.", html)
-        self.assertIn("Falcon does not make Base or Solana payments PQ-safe", html)
+        self.assertIn("Falcon-1024 does not make Base or Solana payments PQ-safe", html)
         self.assertIn("Later rewriting inconsistent with published checkpoints becomes detectable.", html)
         self.assertIn("TestNet anchoring has not yet produced a confirmed checkpoint.", html)
         self.assertNotIn("id=\"pq-testnet\"", html)
@@ -107,7 +107,7 @@ class TransparencyPageTests(unittest.TestCase):
         self.assertNotIn("AUTHORIZATION", html)
         self.assertNotIn("SINCE ANCHOR", html)
         self.assertIn("Falcon-1024 · f1", html)
-        self.assertIn("<title>402Signal Transparency. Verify the routing history</title>", html)
+        self.assertIn("<title>402Signal transparency log</title>", html)
         self.assertNotIn("\N{EM DASH}", html)
         self.assertIn("canonical", html)
         self.assertIn("https://402signal.com/transparency", html)
@@ -119,8 +119,9 @@ class TransparencyPageTests(unittest.TestCase):
 
     def test_homepage_omits_pq_card_without_confirmed(self):
         html, _hdrs = self._html("/")
-        self.assertNotIn('id="pq-testnet"', html)
-        self.assertNotIn("PQ transparency · TestNet", html)
+        self.assertIn('id="pq-testnet"', html)
+        self.assertIn("Verifiable routing history", html)
+        self.assertNotIn("Latest confirmed Tree", html)
         self.assertNotIn("Trust the history, too.", html)
         self.assertNotIn("View TestNet transaction", html)
         self.assertIn("Find a paid API that works right now.", html)
@@ -128,6 +129,7 @@ class TransparencyPageTests(unittest.TestCase):
         static = (STATIC / "index.html").read_text(encoding="utf-8")
         self.assertNotIn("Trust the history, too.", static)
         self.assertNotIn("PQ transparency · TestNet", static)
+        self.assertIn("Verifiable routing history", static)
         self.assertNotIn(_LIVE_TX, static)
         self.assertEqual(worker.homepage_pq_html(), "")
 
@@ -140,10 +142,11 @@ class TransparencyPageTests(unittest.TestCase):
         self.assertEqual(status_html, 200)
         self.assertEqual(body_html, "")
         html, _ = self._html("/transparency.html")
-        self.assertIn("Verify 402Signal", html)
+        self.assertIn("Verify the transparency log", html)
 
     def test_human_pages_not_dynamic_filename(self):
         self.assertNotIn("/transparency", HUMAN_PAGES)
+        self.assertIn("/contact", HUMAN_PAGES)
         self.assertIn("/transparency", HUMAN_DYNAMIC_PATHS)
         self.assertFalse((STATIC / "transparency.html").exists())
 
@@ -152,19 +155,16 @@ class TransparencyPageTests(unittest.TestCase):
         _confirm(1, store.root(1), _TX_A, 66860001, 1_700_000_000)
         html, _hdrs = self._html("/")
         self.assertIn('id="pq-testnet"', html)
-        self.assertIn("PQ transparency · TestNet", html)
-        self.assertIn("Trust the history, too.", html)
-        self.assertIn(
-            "As agents start spending money on your behalf, there should be a record of what they relied on.",
-            html,
-        )
-        self.assertIn("Latest anchor · Tree 1 · Block 66860001 · Confirmed", html)
+        self.assertIn("Currently Algorand TestNet", html)
+        self.assertIn("Verifiable routing history", html)
+        self.assertIn("append-only Merkle log", html)
+        self.assertIn("Latest confirmed Tree 1 · Round 66860001", html)
         self.assertIn(
             "Later rewriting inconsistent with published checkpoints becomes detectable.",
             html,
         )
-        self.assertIn("This history proves 402Signal's log, not seller truth.", html)
-        self.assertIn("View transparency", html)
+        self.assertIn("does not make Base or Solana payments PQ-safe", html)
+        self.assertIn("View verification details", html)
         self.assertNotIn("Latest checkpoint · Tree", html)
         self.assertIn('href="/transparency"', html)
         self.assertNotIn("View TestNet transaction", html)
@@ -241,7 +241,7 @@ class TransparencyPageTests(unittest.TestCase):
         self.assertIn("TestNet anchoring has not yet produced a confirmed checkpoint.", html)
         self.assertNotIn(algo_anchor.TESTNET_EXPLORER_TX_URL, html)
         home, _ = self._html("/")
-        self.assertNotIn('id="pq-testnet"', home)
+        self.assertNotIn("Latest confirmed Tree", home)
 
     def test_submitted_not_confirmed(self):
         store.append(b"one")
@@ -262,7 +262,7 @@ class TransparencyPageTests(unittest.TestCase):
         self.assertNotIn("Latest anchor · Tree 1", html)
         self.assertNotIn(algo_anchor.TESTNET_EXPLORER_TX_URL + _TX_A, html)
         home, _ = self._html("/")
-        self.assertNotIn('id="pq-testnet"', home)
+        self.assertNotIn("Latest confirmed Tree", home)
 
     def test_one_anchor_history_delta_and_no_chart(self):
         store.append(b"one")
@@ -402,7 +402,7 @@ class TransparencyPageTests(unittest.TestCase):
         )
         self.assertNotIn("The latest log checkpoint is anchored.", html)
         home, _ = self._html("/")
-        self.assertNotIn('id="pq-testnet"', home)
+        self.assertNotIn("Latest confirmed Tree", home)
         self.assertNotIn("Latest checkpoint · Tree 10", home)
         self.assertNotIn("Latest anchor · Tree 10", home)
         self.assertEqual(worker.homepage_pq_html(), "")
@@ -533,13 +533,15 @@ class TransparencyPrivacyTests(unittest.TestCase):
     def test_transparency_has_no_customer_activity_ui(self):
         status, html, _hdrs = _get(self.port, "/transparency")
         self.assertEqual(status, 200)
-        self.assertIn("Transparent history, not public requests", html)
+        self.assertIn("Public transparency commitments do not expose raw needs, wallets, payment signatures, or seller response bodies.", html)
+        self.assertIn("What is published?", html)
+        self.assertIn("This page publishes 402Signal infrastructure commitments", html)
         low = html.lower()
         self.assertNotIn("is anonymous", low)
         self.assertNotIn("is unlinkable", low)
         self.assertNotIn("is fully private", low)
         self.assertIn("not a claim of anonymous, unlinkable, or fully private", low)
-        self.assertIn("it does not directly publish your wallet, raw request, or payment credentials.", low)
+        self.assertIn("it does not publish agent needs, wallets, payment signatures, seller response bodies, raw requests, or payment credentials.", low)
         self.assertNotIn("doesn’t reveal", html)
         self.assertNotIn("doesn't reveal", html)
         self.assertNotIn("does not reveal", low)

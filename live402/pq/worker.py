@@ -102,7 +102,7 @@ def public_anchor() -> dict | None:
 
 
 def homepage_pq_html() -> str:
-    """Homepage PQ card. Empty unless last_confirmed.size > 0 with a real txid."""
+    """Homepage Latest confirmed line. Empty unless last_confirmed.size > 0 with a real txid."""
     from live402.pq import transparency as pq_view
 
     return pq_view.homepage_pq_html()

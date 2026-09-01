@@ -32,6 +32,8 @@ HUMAN_PAGES = {
     "/how.html": "how.html",
     "/developers": "developers.html",
     "/developers.html": "developers.html",
+    "/contact": "contact.html",
+    "/contact.html": "contact.html",
 }
 # Server-rendered human pages. Intercept before static rewrite. Not STATIC_DIR files.
 HUMAN_DYNAMIC_PATHS = frozenset({"/transparency", "/transparency.html"})
@@ -703,10 +705,13 @@ class Handler(SimpleHTTPRequestHandler):
             section = ""
         if not section:
             return None
-        marker = "</main>"
-        if marker not in html:
+        marker = "<!--PQ_LATEST-->"
+        if marker in html:
+            return html.replace(marker, section, 1)
+        fallback = "</main>"
+        if fallback not in html:
             return html
-        return html.replace(marker, section + "    </main>", 1)
+        return html.replace(fallback, section + "    </main>", 1)
 
     def _transparency_html(self) -> str:
         from live402.pq import transparency as pq_view

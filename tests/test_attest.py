@@ -255,8 +255,9 @@ class HomepageHonestyTests(unittest.TestCase):
             self.assertNotIn("7d reliability", blob)
             self.assertNotIn("healthy", blob)
             self.assertNotIn("Executable Now Rate", blob)
-        self.assertNotIn("objective", app)
-        self.assertNotIn("most_reliable", app)
+        self.assertIn("body.objective", app)
+        self.assertIn("most_reliable", app)
+        self.assertNotIn("7d reliability", app)
 
 
 if __name__ == "__main__":

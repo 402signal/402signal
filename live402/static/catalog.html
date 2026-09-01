@@ -3,17 +3,17 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>x402 API Catalog · 402Signal</title>
-  <meta name="description" content="Search catalog listings of x402 services across Base, Solana and Algorand." />
+  <title>Build a 402Signal /route request</title>
+  <meta name="description" content="Describe a capability, preview discovery metadata, and build an exact POST /route request body. Preview does not probe endpoints again." />
   <link rel="canonical" href="https://402signal.com/catalog" />
-  <meta property="og:title" content="x402 API Catalog · 402Signal" />
-  <meta property="og:description" content="Search catalog listings of x402 services across Base, Solana and Algorand." />
+  <meta property="og:title" content="Build a 402Signal /route request" />
+  <meta property="og:description" content="Describe a capability, preview discovery metadata, and build an exact POST /route request body." />
   <meta property="og:url" content="https://402signal.com/catalog" />
   <meta property="og:type" content="website" />
   <meta property="og:site_name" content="402Signal" />
   <meta name="twitter:card" content="summary" />
-  <meta name="twitter:title" content="x402 API Catalog · 402Signal" />
-  <meta name="twitter:description" content="Search catalog listings of x402 services across Base, Solana and Algorand." />
+  <meta name="twitter:title" content="Build a 402Signal /route request" />
+  <meta name="twitter:description" content="Describe a capability, preview discovery metadata, and build an exact POST /route request body." />
   <meta name="twitter:site" content="@402Signal" />
   <link rel="stylesheet" href="/styles.css" />
 </head>
@@ -25,21 +25,25 @@
         <span class="brand-name">402Signal</span>
       </a>
       <nav class="nav" aria-label="Primary">
+        <a href="/">Home</a>
         <a href="/how">How it works</a>
+        <a href="/catalog" aria-current="page">Explore</a>
         <a href="/developers">Developers</a>
+        <a href="/contact">Contact</a>
       </nav>
     </header>
 
     <main>
-      <section class="hero compact">
-        <h1>Browse x402 services</h1>
-        <p class="lede">Search discovery listings across Base, Solana and Algorand. Prior check, not this request.</p>
+      <section class="hero compact builder">
+        <h1>Build a /route request</h1>
+        <p class="lede">Describe the capability your agent needs, preview current discovery metadata, and compose the exact JSON body for a paid POST /route check.</p>
       </section>
 
-      <form id="search-form">
-        <p class="note persist">Discovery listings are candidates. OBSERVED is a prior 402Signal check, not this request. Before spending, use paid /route.</p>
+      <form id="search-form" class="policy-builder">
         <label class="label" for="need">What does your agent need?</label>
-        <input id="need" class="editable" type="text" value="" placeholder="weather, token risk, web search..." autocomplete="off" spellcheck="false" />
+        <p class="policy-hint">The capability field accepts free text. The examples below are shortcuts, not a fixed list. Describe any capability in plain English.</p>
+        <input id="need" class="editable" type="text" value="" placeholder="Describe a capability…" autocomplete="off" spellcheck="false" />
+        <p class="label">Example capabilities</p>
         <div class="chips" id="need-chips">
           <button type="button" class="chip" data-need="web search">web search</button>
           <button type="button" class="chip" data-need="weather">weather</button>
@@ -47,12 +51,112 @@
           <button type="button" class="chip" data-need="LLM inference">LLM inference</button>
           <button type="button" class="chip" data-need="wallet balance">wallet balance</button>
         </div>
-        <div class="row">
-          <button type="submit" id="search-btn" class="btn" disabled>Search</button>
-          <span id="search-status" class="muted" role="status" aria-live="polite"></span>
-        </div>
+
+        <fieldset class="policy-field lock">
+          <legend>Network lock</legend>
+          <p class="policy-hint">Hard policy lock. Discovery and a paid winner must be on this rail from the current observed 402. Any searches all rails.</p>
+          <div class="chips lock-chips" id="network-chips" role="radiogroup" aria-label="Network lock">
+            <button type="button" class="chip active" data-network="any" aria-pressed="true">Any</button>
+            <button type="button" class="chip" data-network="base" aria-pressed="false">Base</button>
+            <button type="button" class="chip" data-network="solana" aria-pressed="false">Solana</button>
+            <button type="button" class="chip" data-network="algorand" aria-pressed="false">Algorand</button>
+          </div>
+        </fieldset>
+
+        <fieldset class="policy-field prefer">
+          <legend>Prefer network</legend>
+          <p class="policy-hint">Weak preference. Ranks this rail first but still searches all rails the network lock allows. Not a filter.</p>
+          <div class="chips prefer-chips" id="prefer-chips" role="radiogroup" aria-label="Prefer network">
+            <button type="button" class="chip active" data-prefer="any" aria-pressed="true">Any</button>
+            <button type="button" class="chip" data-prefer="base" aria-pressed="false">Base</button>
+            <button type="button" class="chip" data-prefer="solana" aria-pressed="false">Solana</button>
+            <button type="button" class="chip" data-prefer="algorand" aria-pressed="false">Algorand</button>
+          </div>
+        </fieldset>
+
+        <section class="function-pane preview-pane" aria-labelledby="preview-heading">
+          <h2 id="preview-heading">Discovery preview</h2>
+          <p>Search current discovery metadata and show any prior 402Signal observation on file. This does not probe the endpoint again.</p>
+          <p class="preview-split">Discovery preview uses the capability and discovery network settings above. The route constraints below are included in the paid /route request and are not applied to preview results.</p>
+          <div class="row actions">
+            <button type="submit" id="search-btn" class="btn" disabled>Preview discovery</button>
+            <span class="not-live">FREE · NOT A LIVE CHECK</span>
+            <span id="search-status" class="muted" role="status" aria-live="polite"></span>
+          </div>
+        </section>
       </form>
+
       <div id="search-results" aria-live="polite" aria-relevant="additions text"></div>
+
+      <section class="function-pane route-pane route-request" aria-labelledby="route-heading">
+        <h2 id="route-heading">Paid /route request</h2>
+        <p>Configure the constraints that will be applied when POST /route performs the live routing check.</p>
+
+        <div class="policy-grid pair">
+          <div class="policy-field">
+            <label class="label" for="max-price">Max price (USD)</label>
+            <input id="max-price" type="number" min="0" step="0.01" inputmode="decimal" placeholder="0.05" />
+          </div>
+          <div class="policy-field">
+            <label class="label" for="min-observations">Minimum observations</label>
+            <input id="min-observations" type="number" min="0" step="1" inputmode="numeric" placeholder="3" />
+          </div>
+        </div>
+
+        <label class="toggle">
+          <input id="require-invocable" type="checkbox" />
+          <span>Require invocable</span>
+        </label>
+        <p class="policy-hint">If set, a paid /route drops live hits without an input schema.</p>
+
+        <fieldset class="policy-field">
+          <legend>Objective</legend>
+          <p class="policy-hint">Cheapest is cheapest among currently probed eligible candidates. Fastest is this-request probe RTT, not settlement latency.</p>
+          <div class="chips" id="objective-chips" role="radiogroup" aria-label="Objective">
+            <button type="button" class="chip active" data-objective="best" aria-pressed="true">Best (default)</button>
+            <button type="button" class="chip" data-objective="cheapest" aria-pressed="false">Cheapest</button>
+            <button type="button" class="chip" data-objective="fastest" aria-pressed="false">Fastest</button>
+            <button type="button" class="chip" data-objective="most_reliable" aria-pressed="false">Most reliable</button>
+          </div>
+        </fieldset>
+
+        <details class="policy-advanced">
+          <summary>Advanced route constraints</summary>
+          <div class="policy-grid pair">
+            <div class="policy-field">
+              <label class="label" for="max-total-cost">Max total cost (USD)</label>
+              <input id="max-total-cost" type="number" min="0" step="0.01" inputmode="decimal" placeholder="0.10" />
+            </div>
+            <div class="policy-field">
+              <label class="label" for="max-latency">Max probe latency (ms)</label>
+              <input id="max-latency" type="number" min="0" step="1" inputmode="numeric" placeholder="800" />
+            </div>
+          </div>
+          <fieldset class="policy-field">
+            <legend>Search depth</legend>
+            <p class="policy-hint">standard is the typical probe plan. thorough may probe deeper. Hard server ceiling is 20.</p>
+            <div class="chips" id="depth-chips" role="radiogroup" aria-label="Search depth">
+              <button type="button" class="chip active" data-depth="standard" aria-pressed="true">Standard</button>
+              <button type="button" class="chip" data-depth="thorough" aria-pressed="false">Thorough</button>
+            </div>
+          </fieldset>
+        </details>
+
+        <h3>Request documentation</h3>
+        <div id="policy-facts" class="policy-facts"></div>
+        <p id="policy-summary" class="policy-summary">Enter a capability to compose the POST /route body.</p>
+        <div class="code-toolbar">
+          <p class="muted">POST /route JSON from these controls</p>
+          <div class="row">
+            <button type="button" id="copy-route-json" class="copy-btn" disabled>Copy JSON</button>
+            <button type="button" id="copy-route-curl" class="copy-btn" disabled>Copy curl</button>
+            <a href="/developers">Developers</a>
+          </div>
+        </div>
+        <pre id="route-json" class="code" aria-live="polite">{}</pre>
+        <pre id="route-curl" class="code" hidden></pre>
+        <p class="note">Sending this request to POST /route starts the paid routing check. Unpaid returns HTTP 402 for $0.01 USDC. This browser page does not execute the paid request.</p>
+      </section>
     </main>
 
     <footer class="foot">
@@ -62,7 +166,6 @@
         <a href="/openapi.json">OpenAPI</a>
         <a href="/mcp.json">MCP</a>
         <a href="/transparency">Transparency</a>
-        <a href="/catalog" class="muted" aria-current="page">Catalog</a>
         <a href="mailto:ross@402signal.com">ross@402signal.com</a>
       </p>
     </footer>
