@@ -1,14 +1,14 @@
-# Security-sensitive paths. The @402signal/maintainers team must exist
-# before GitHub will assign reviews. Branch protection is a human checklist
-# in docs/github-protection.md; this file does not enable it.
-/.github/ @402signal/maintainers
-/Dockerfile @402signal/maintainers
-/fly.toml @402signal/maintainers
-/requirements.txt @402signal/maintainers
-/live402/server.py @402signal/maintainers
-/live402/route.py @402signal/maintainers
-/live402/probe.py @402signal/maintainers
-/live402/payment.py @402signal/maintainers
-/live402/pq/ @402signal/maintainers
-/scripts/backup_sqlite.py @402signal/maintainers
-/scripts/restore_sqlite.py @402signal/maintainers
+# Security-sensitive paths. Reviews go to @ross402signal.
+# Branch protection is already enabled on main. See
+# docs/github-protection.md. This file does not change GitHub rulesets.
+/.github/ @ross402signal
+/Dockerfile @ross402signal
+/fly.toml @ross402signal
+/requirements.txt @ross402signal
+/live402/server.py @ross402signal
+/live402/route.py @ross402signal
+/live402/probe.py @ross402signal
+/live402/payment.py @ross402signal
+/live402/pq/ @ross402signal
+/scripts/backup_sqlite.py @ross402signal
+/scripts/restore_sqlite.py @ross402signal
