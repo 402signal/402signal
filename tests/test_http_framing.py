@@ -239,6 +239,33 @@ class FramingServerTests(unittest.TestCase):
         raw = self._post("Content-Length: %d\r\n" % len(body), body)
         self.assertEqual(_status(raw), 400)
 
+    def _assert_second_request_not_served(self, sock: socket.socket) -> None:
+        """After a framing 4xx, keep-alive must not answer a valid second POST."""
+        valid = (
+            b"POST /route HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+            b"Content-Type: application/json\r\n"
+            b"Content-Length: 18\r\n\r\n"
+            b'{"need":"weather"}'
+        )
+        try:
+            sock.sendall(valid)
+        except (BrokenPipeError, ConnectionError, OSError):
+            return
+        sock.settimeout(2)
+        try:
+            second = sock.recv(4096)
+        except (socket.timeout, ConnectionError, OSError):
+            second = b""
+        self.assertFalse(
+            second.startswith(b"HTTP/"),
+            "keep-alive reused after framing error: %r" % second[:160],
+        )
+        self.assertEqual(
+            second,
+            b"",
+            "expected TCP close after framing error, leftover=%r" % second[:160],
+        )
+
     def test_framing_abuse_closes_persistent_connection(self):
         sock = socket.create_connection(("127.0.0.1", self.port), timeout=2)
         try:
@@ -249,18 +276,26 @@ class FramingServerTests(unittest.TestCase):
             first = _recv_http_message(sock)
             self.assertEqual(_status(first), 400)
             self.assertIn(b"Connection: close", first)
-            try:
-                sock.sendall(
+            self._assert_second_request_not_served(sock)
+        finally:
+            sock.close()
+
+    def test_oversize_closes_persistent_connection(self):
+        sock = socket.create_connection(("127.0.0.1", self.port), timeout=2)
+        try:
+            declared = MAX_BODY + 1
+            sock.sendall(
+                (
                     b"POST /route HTTP/1.1\r\nHost: 127.0.0.1\r\n"
-                    b"Content-Length: 2\r\n\r\n{}"
+                    b"Content-Type: application/json\r\n"
+                    b"Content-Length: %d\r\n\r\n" % declared
                 )
-                second = sock.recv(4096)
-            except (socket.timeout, ConnectionError, OSError):
-                second = b""
-            # Leftover first-response bytes are not a new status line. A
-            # closed or poisoned keep-alive must never look like success.
-            self.assertNotEqual(_status(second), 200)
-            self.assertTrue(second == b"" or _status(second) in (0, 400))
+                + b"x" * 64
+            )
+            first = _recv_http_message(sock)
+            self.assertEqual(_status(first), 413)
+            self.assertIn(b"Connection: close", first)
+            self._assert_second_request_not_served(sock)
         finally:
             sock.close()
 
@@ -294,6 +329,8 @@ class RateLimitCloseTests(unittest.TestCase):
     def test_rate_limited_post_closes_without_unbounded_discard(self):
         src = open(server.__file__, encoding="utf-8").read()
         self.assertIn("_close_unread_body", src)
+        self.assertIn("_shutdown_client", src)
+        self.assertIn("SHUT_RDWR", src)
         self.assertNotIn("self.rfile.read(-1)", src)
         self.assertNotIn("rfile.read(-1)", src)
 

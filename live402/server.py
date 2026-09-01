@@ -7,6 +7,7 @@ import ipaddress
 import json
 import os
 import re
+import socket
 import sys
 import threading
 import time
@@ -285,9 +286,28 @@ class Handler(SimpleHTTPRequestHandler):
             self._reject_saturated()
             return
         try:
-            return SimpleHTTPRequestHandler.handle(self)
+            self.close_connection = True
+            try:
+                self.handle_one_request()
+                while not self.close_connection:
+                    self.handle_one_request()
+            except (BrokenPipeError, ConnectionResetError, TimeoutError, OSError):
+                self.close_connection = True
+            if self.close_connection:
+                self._shutdown_client()
         finally:
             sema.release()
+
+    def _shutdown_client(self) -> None:
+        """FIN the TCP socket so unread POST bytes cannot become the next request."""
+        self.close_connection = True
+        conn = getattr(self, "connection", None)
+        if conn is None:
+            return
+        try:
+            conn.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
 
     def _reject_saturated(self) -> None:
         self.close_connection = True
@@ -303,10 +323,19 @@ class Handler(SimpleHTTPRequestHandler):
             )
         except Exception:
             pass
+        self._shutdown_client()
 
     def _close_error(self, code: int, error: str) -> None:
         self.close_connection = True
-        self._json(code, {"error": error}, {"Connection": "close"})
+        try:
+            self._json(code, {"error": error}, {"Connection": "close"})
+            try:
+                self.wfile.flush()
+            except Exception:
+                pass
+        finally:
+            # Close now, not after handle() returns. Unread framing bytes stay discarded.
+            self._shutdown_client()
 
     def _read_json_body(self) -> dict | None:
         try:
@@ -433,7 +462,7 @@ class Handler(SimpleHTTPRequestHandler):
         return discover.ORIGIN + "/mcp"
 
     def _close_unread_body(self) -> None:
-        """Rate-limited or rejected POST: close instead of a keep-alive discard."""
+        """Do not read leftover POST bytes. Caller must write then hard-close."""
         self.close_connection = True
 
     def _route_allowed(self) -> bool:
@@ -647,6 +676,7 @@ class Handler(SimpleHTTPRequestHandler):
     def do_POST(self) -> None:
         if self._deny_private_store():
             self._close_unread_body()
+            self._shutdown_client()
             return
         parsed = urlparse(self.path)
         if parsed.path in {"/mcp", "/mcp.json"}:
