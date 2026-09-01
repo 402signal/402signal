@@ -1,19 +1,27 @@
 #!/usr/bin/env python3
 """Safe MainNet canary operator command.
 
-Default refuses to send. Does not Fly. Does not set secrets. Does not
-enable MAINNET_BROADCAST or MAINNET_CANARY. Does not print Falcon SK,
-mnemonic, Ed25519 seed, or HMAC token values.
+Default and --summary-only are READ ONLY. They never call signer auth,
+never persist AUTHORIZED, and never create a SignedTxn.
 
   LIVE402_FIXTURE=1 PYTHONPATH=. python3 scripts/pq_mainnet_canary.py
+  PYTHONPATH=. python3 scripts/pq_mainnet_canary.py --summary-only
+  PYTHONPATH=. python3 scripts/pq_mainnet_canary.py --prepare
+  PYTHONPATH=. python3 scripts/pq_mainnet_canary.py --go
+  PYTHONPATH=. python3 scripts/pq_mainnet_canary.py --discard-authorized
 
-Authorize + persist + summary always (when identity is present).
-Send requires ALL of:
-  LIVE402_PQ_FALCON_MAINNET_BROADCAST=1
-  LIVE402_PQ_FALCON_MAINNET_CANARY=1
-  CONFIRM_MAINNET_CANARY=I_UNDERSTAND
-  --go (explicit)
-  not fixture-mode live POST
+Does not Fly. Does not set secrets. Does not enable MAINNET_BROADCAST
+or MAINNET_CANARY. Does not print Falcon SK, mnemonic, Ed25519 seed,
+or HMAC token values.
+
+--prepare: preflight (all affirmative) → fetch frozen policy → signer
+once → verify → persist AUTHORIZED → print summary / expected txid.
+NO POST.
+
+--go: SEND already-persisted authorization only. Never silently creates
+a fresh auth.
+
+LIVE --prepare/--go fails closed in fixture mode.
 """
 
 from __future__ import annotations
@@ -59,13 +67,19 @@ def _print_summary(info: dict) -> None:
         "router_sha",
         "signer_sha",
         "confirm_provider",
+        "projected_fee",
+        "projected_fv",
+        "projected_lv",
+        "projected_last_round",
     )
     print("=== MainNet canary summary (no secrets) ===")
     for key in keys:
-        print("%s: %s" % (key, info.get(key)))
+        if key in info:
+            print("%s: %s" % (key, info.get(key)))
 
 
-def _preflight_gates() -> list[tuple[str, bool, str]]:
+def _preflight_gates(*, live_action: bool) -> list[tuple[str, bool, str]]:
+    from live402 import fixtures
     from live402.pq import ORIGIN_MAINNET, algo_anchor, log_identity, network as netcfg, store
     from live402.pq import monitor
 
@@ -126,83 +140,156 @@ def _preflight_gates() -> list[tuple[str, bool, str]]:
             "1" if algo_anchor.mainnet_canary_requested() else "unset",
         )
     )
-    from live402 import fixtures
-
-    rows.append(("11 not live fixture POST", True, "fixture=%s" % fixtures.fixture_mode()))
+    fixture = fixtures.fixture_mode()
+    if live_action:
+        rows.append(("11 not live fixture POST", not fixture, "fixture=%s" % fixture))
+    else:
+        rows.append(("11 fixture ok for read-only", True, "fixture=%s" % fixture))
     health = monitor.preflight()
-    rows.append(
-        (
-            "signer reachable+protocol",
-            bool(health["signer"]["available"]),
-            health["signer"].get("error") or "ok" if health["signer"]["probed"] else "not_probed",
-        )
-    )
-    rows.append(
-        (
-            "confirm provider",
-            bool(health["confirm_provider"].get("reachable") or not health["confirm_provider"].get("probed")),
-            health["confirm_provider"].get("host") or "",
-        )
-    )
+    signer = health["signer"]
+    signer_ok = bool(signer.get("probed") and signer.get("reachable") and signer.get("protocol"))
+    signer_detail = signer.get("error") or "ok"
+    if not signer.get("probed"):
+        signer_detail = "not_probed"
+        signer_ok = False
+    rows.append(("signer reachable+protocol", signer_ok, signer_detail))
+    confirm = health["confirm_provider"]
+    confirm_ok = bool(confirm.get("probed") and confirm.get("reachable"))
+    confirm_detail = confirm.get("host") or ""
+    if not confirm.get("probed"):
+        confirm_detail = "not_probed"
+        confirm_ok = False
+    rows.append(("confirm provider", confirm_ok, confirm_detail))
     rows.append(("db integrity", bool(health["db_integrity"] and health["db_sqlite"]), "ok" if health["db_integrity"] else "fail"))
     rows.append(("epoch", health["epoch"] == "mainnet-v1", health["epoch"]))
     rows.append(("origin", health["origin"] == ORIGIN_MAINNET, health["origin"]))
     return rows
 
 
+def _prepare_ready(gates: list[tuple[str, bool, str]]) -> bool:
+    required = {
+        "1 network=mainnet",
+        "2 genesis mainnet-v1.0",
+        "3 mainnet falcon address",
+        "4 mainnet signer token",
+        "5 valid signed checkpoint",
+        "7 fee cap 30000",
+        "8 allowlisted submit host",
+        "11 not live fixture POST",
+        "signer reachable+protocol",
+        "confirm provider",
+        "db integrity",
+        "epoch",
+        "origin",
+    }
+    for name, ok, _detail in gates:
+        if name in required and not ok:
+            return False
+    return True
+
+
+def _go_ready(gates: list[tuple[str, bool, str]]) -> bool:
+    if not _prepare_ready(gates):
+        return False
+    flags = {name: ok for name, ok, _detail in gates}
+    return bool(flags.get("9 MAINNET_BROADCAST") and flags.get("10 MAINNET_CANARY"))
+
+
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="MainNet canary (default refuse)")
+    parser = argparse.ArgumentParser(description="MainNet canary (default refuse, read-only)")
     parser.add_argument(
         "--go",
         action="store_true",
-        help="Request send. Still requires CONFIRM_MAINNET_CANARY=I_UNDERSTAND and both flags.",
+        help="Send already-persisted AUTHORIZED only. Still requires CONFIRM_MAINNET_CANARY=I_UNDERSTAND and both flags.",
     )
-    parser.add_argument("--summary-only", action="store_true", help="Print summary and exit")
+    parser.add_argument(
+        "--prepare",
+        action="store_true",
+        help="Fetch frozen policy, authorize once, persist AUTHORIZED, print expected txid. No POST.",
+    )
+    parser.add_argument("--summary-only", action="store_true", help="Read-only summary and exit")
+    parser.add_argument(
+        "--discard-authorized",
+        action="store_true",
+        help="Explicitly discard a stale AUTHORIZED blob before SEND_ATTEMPTED. Never after SEND_ATTEMPTED.",
+    )
     args = parser.parse_args(argv)
 
     print("HOLD: no Fly, no secrets, no MainNet txn from this script unless every gate is set.")
     print("READY_FOR_PRODUCTION_KEY_INSTALL remains NO until 402security GO and independent_provider true.")
     print("")
+    live_action = bool(args.prepare or args.go)
     print("=== preflight 1-11 ===")
-    gates = _preflight_gates()
+    gates = _preflight_gates(live_action=live_action)
     for name, ok, detail in gates:
         print("[%s] %s (%s)" % ("ok" if ok else "no", name, detail))
 
-    from live402.pq import canary
+    from live402 import fixtures
+    from live402.pq import canary, store
 
-    try:
-        stored = canary.authorize()
-    except canary.CanaryError as exc:
-        print("authorize: %s" % exc)
-        stored = None
-    info = canary.summary(stored, router_sha=_router_sha())
-    _print_summary(info)
-    if args.summary_only:
+    if args.discard_authorized:
+        try:
+            canary.discard_authorized()
+            print("discarded AUTHORIZED (explicit operator action)")
+        except canary.CanaryError as exc:
+            print("discard: %s" % exc)
+            return 1
+        if not args.prepare and not args.go:
+            return 0
+
+    if live_action and fixtures.fixture_mode():
+        print("refused: fixture mode forbids LIVE --prepare/--go")
+        return 2
+
+    if args.summary_only or (not args.prepare and not args.go):
+        info = canary.inspect(router_sha=_router_sha())["summary"]
+        _print_summary(info)
+        if args.summary_only:
+            return 0
+        print("refused: --go not set (default refuse; read-only)")
+        return 2
+
+    if args.prepare:
+        if not _prepare_ready(gates):
+            print("refused: preflight not all affirmative")
+            return 2
+        try:
+            out = canary.prepare(router_sha=_router_sha())
+        except canary.CanaryError as exc:
+            print("prepare: %s" % exc)
+            return 1
+        _print_summary(out["summary"])
+        print("expected_txid: %s" % out.get("expected_txid"))
+        print("state: %s" % out.get("state"))
+        print("prepare: AUTHORIZED persisted; no POST")
+        if not args.go:
+            return 0
+
+    if args.go:
+        if not _go_ready(gates):
+            print("refused: preflight not all affirmative for send")
+            return 2
+        if not canary.human_go_set():
+            print("refused: CONFIRM_MAINNET_CANARY!=I_UNDERSTAND")
+            return 2
+        stored = store.last_authorized_checkpoint()
+        if not stored or not stored.get("signed"):
+            print("refused: no AUTHORIZED blob (use --prepare first; --go does not create auth)")
+            return 2
+        try:
+            out = canary.send_persisted(authorize_human_canary=True, router_sha=_router_sha())
+        except canary.CanaryError as exc:
+            print("send: %s" % exc)
+            return 1
+        if out.get("refused"):
+            print("refused: %s" % out["refused"])
+            return 2
+        latest = store.authorized_at(int(stored["tree_size"]))
+        print("state: %s" % canary.send_state_of(latest))
+        print("result_keys: %s" % sorted(out.get("result", {}).keys()) if isinstance(out.get("result"), dict) else out)
         return 0
-    if not args.go:
-        print("refused: --go not set (default refuse)")
-        return 2
-    if not canary.human_go_set():
-        print("refused: CONFIRM_MAINNET_CANARY!=I_UNDERSTAND")
-        return 2
-    from live402.pq import algo_anchor
 
-    if not algo_anchor.mainnet_broadcast_requested() or not algo_anchor.mainnet_canary_requested():
-        print("refused: dual MainNet flags off")
-        return 2
-    if stored is None:
-        print("refused: no AUTHORIZED blob")
-        return 2
-    try:
-        out = canary.send_durable(stored, authorize_human_canary=True)
-    except canary.CanaryError as exc:
-        print("send: %s" % exc)
-        return 1
-    from live402.pq import store
-
-    print("state: %s" % canary.send_state_of(store.authorized_at(int(stored["tree_size"]))))
-    print("result_keys: %s" % sorted(out.keys()) if isinstance(out, dict) else out)
-    return 0
+    return 2
 
 
 if __name__ == "__main__":

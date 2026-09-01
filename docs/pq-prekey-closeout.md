@@ -61,20 +61,20 @@ Router and signer agree on min fee, fee/byte, lastRound, fv, lv, and
 canonical fee without public caller control. Values come only from
 the trusted MainNet network-parameter path.
 
-No `pq-anchor/1` protocol bump in this PR. The router stores a
-narrow local fee-policy object (min_fee, fee_per_byte, last_round,
-fv, lv, canonical_fee, snapshot_at, size_rule). Unknown extra
-semantic fields are not HMAC-bound into the signer request.
+Follow-up (this PR): protocol is **pq-anchor/2**. The router fetches
+a pinned MainNet suggested-params snapshot itself and HMAC-binds
+the narrow policy (`last_round`, `min_fee`, `fee_per_byte`, `fv`,
+`lv`, `canonical_fee`, `snapshot_at`, `size_rule`, `size_version=1`)
+by flattening those fields into the Go-signer MAC (no nested
+`policy=` blob; MAC `v=pq-anchor/2`; `size_version=1`). Operator
+authorize/prepare does not depend on injected params. Canonical
+fee/fv/lv validation is not loosened.
 
-Follow-up for 402security / private signer
-`402signal/402signal-pq-signer` branch
-`cursor/isolated-falcon-signer-9f06` @ `a901ef7a` (reviewed head
-`9798c38f`): keep using the shared deterministic estimate plus the
-signer's own trusted MainNet suggested-params snapshot. Bump
-pq-anchor/1 only if extra authenticated policy fields become
-unavoidable. Prefer solving on the router first.
-
-Do not loosen fee/fv validation to paper over timing differences.
+Private signer `402signal/402signal-pq-signer` must independently
+fetch MainNet params and validate the router snapshot before
+signing. See `docs/signer-mainnet-spec.md` and the parallel-PR
+checklist there. Reviewed TestNet identity remains merge
+`a901ef7a` / head `9798c38f` until that PR lands.
 
 ## D. Local txid official parity
 
@@ -187,6 +187,41 @@ path. No SQLite OverflowError.
 `confirmation_independent`, `confirm_host_allowlisted`,
 `runtime_confirmation_independent`, `confirmation_status`. Tests
 import those final functions.
+
+## Falcon confirm bootstrap (item 6)
+
+`CONFIRM_FALCON_COMPATIBLE` stays **false** for tatum and nownodes.
+`confirmation_ready` stays **false**. Do not invent Tatum proof.
+
+402security approval model for a later bootstrap exception:
+
+- Org independence is from public company records, not a legal audit.
+- API credentials are Fly secrets **later**. Do not set them here.
+- Schema check on TestNet Falcon if possible; MainNet Falcon is unproven.
+- Staging keys only after GO with `MAINNET_BROADCAST` and `MAINNET_CANARY` **OFF**.
+- The **first** MainNet canary **is** the MainNet compatibility proof.
+- If the provider lacks PQsig, the row stays `SUBMITTED` / unconfirmed.
+- AUTO stays OFF. No second txn to test another provider.
+- Recovery reuses the same expected txid via fallback. Never a new spend.
+
+## Operator modes (item 2)
+
+`scripts/pq_mainnet_canary.py`:
+
+- default / `--summary-only`: read only (epoch, network, DB, checkpoint,
+  address, signer probe, confirm probe, fetch suggested params, show
+  projected policy). Must not authorize, persist AUTHORIZED, or create
+  a SignedTxn.
+- `--prepare`: preflight (every required gate affirmatively true) →
+  fetch frozen policy → signer once → verify → persist AUTHORIZED →
+  print summary / expected txid. No POST.
+- `--go`: send already-persisted AUTHORIZED only. Does not silently
+  create a fresh auth.
+- `--discard-authorized`: explicit discard of AUTHORIZED that expired
+  before SEND_ATTEMPTED. Forbidden after SEND_ATTEMPTED.
+
+LIVE `--prepare` / `--go` fail in fixture mode. `not_probed` is not
+healthy.
 
 ## Residuals (do not claim YES)
 

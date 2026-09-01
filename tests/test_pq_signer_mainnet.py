@@ -28,6 +28,20 @@ def _signed_note(size, root, origin=ORIGIN_MAINNET):
     return "%s\n%s %s %s\n" % (body, ckpt.EMDASH, origin, _SIG)
 
 
+def _policy(now=1_700_000_000, last_round=1, fee=3000):
+    return {
+        "last_round": last_round,
+        "min_fee": 1000,
+        "fee_per_byte": 0,
+        "fv": last_round,
+        "lv": last_round + 1000,
+        "canonical_fee": fee,
+        "snapshot_at": now,
+        "size_rule": "deterministic_falcon_envelope_estimate",
+        "size_version": 1,
+    }
+
+
 def _mainnet_signed(size, root, addr=None, fee=3000, fv=1, lv=1001):
     from live402 import algo_tx
 
@@ -95,6 +109,7 @@ class MainNetSignerIsolationTests(unittest.TestCase):
                     root=b"\x11" * 32,
                     consistency=[],
                     checkpoint=_signed_note(1, b"\x11" * 32),
+                    policy=_policy(),
                 )
             dial.assert_not_called()
 
@@ -121,6 +136,7 @@ class MainNetSignerIsolationTests(unittest.TestCase):
                     root=b"\x11" * 32,
                     consistency=[],
                     checkpoint=_signed_note(1, b"\x11" * 32),
+                    policy=_policy(),
                     host="402signal-pq-signer.internal",
                     port=9091,
                 )
@@ -136,6 +152,7 @@ class MainNetSignerIsolationTests(unittest.TestCase):
                     root=b"\x11" * 32,
                     consistency=[],
                     checkpoint=_signed_note(1, b"\x11" * 32, origin=ORIGIN),
+                    policy=_policy(),
                 )
             dial.assert_not_called()
 
@@ -197,13 +214,17 @@ class MainNetSignerIsolationTests(unittest.TestCase):
             root=root,
             consistency=[],
             checkpoint=note,
+            policy=_policy(),
             host="127.0.0.1",
             port=port,
             params={"minFee": 1000, "fee": 0, "lastRound": 1},
         )
         self.assertEqual(out["signed"], blob)
         self.assertEqual(out["verified"]["fee"], 3000)
-        self.assertEqual(set(received[0]), set(signer_client.REQUEST_KEYS))
+        self.assertEqual(set(received[0]), set(signer_mainnet.REQUEST_KEYS))
+        self.assertEqual(received[0]["v"], 2)
+        self.assertIn("policy", received[0])
+        self.assertEqual(received[0]["policy"]["canonical_fee"], 3000)
         for key in ("fee", "sender", "amount", "txn", "unsigned", "pk", "sk"):
             self.assertNotIn(key, received[0])
 
@@ -220,6 +241,7 @@ class MainNetSignerIsolationTests(unittest.TestCase):
                 root=root,
                 consistency=[],
                 checkpoint=_signed_note(1, root),
+                policy=_policy(),
                 host="127.0.0.1",
                 port=port,
                 params={"minFee": 1000, "fee": 0, "lastRound": 1},
@@ -261,6 +283,8 @@ class MainNetSignerIsolationTests(unittest.TestCase):
         out = signer_mainnet.protocol_probe(host="127.0.0.1", port=port)
         self.assertTrue(out["reachable"])
         self.assertTrue(out["protocol"])
+        self.assertTrue(out["hmac_rejected"])
+        self.assertEqual(out["canonical"], "pq-anchor/2")
         self.assertEqual(store.size(), 0)
         self.assertFalse(store.last_authorized_checkpoint().get("signed"))
         self.assertIn(b"unsigned", received[0])

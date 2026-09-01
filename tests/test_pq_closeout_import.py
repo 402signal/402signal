@@ -10,7 +10,7 @@ from pathlib import Path
 
 os.environ.setdefault("LIVE402_FIXTURE", "1")
 
-from live402.pq import algo_anchor, canary, monitor, network as netcfg, signer_mainnet, store, tiles
+from live402.pq import algo_anchor, canary, mainnet_params, monitor, network as netcfg, signer_mainnet, store, tiles
 
 
 _ROOT = Path(__file__).resolve().parents[1]
@@ -23,6 +23,7 @@ _PY = (
     _ROOT / "live402/pq/tiles.py",
     _ROOT / "live402/pq/http.py",
     _ROOT / "live402/pq/monitor.py",
+    _ROOT / "live402/pq/mainnet_params.py",
     _ROOT / "live402/algo_tx.py",
     _ROOT / "scripts/pq_mainnet_canary.py",
 )
@@ -41,6 +42,11 @@ class CloseoutImportTests(unittest.TestCase):
         self.assertTrue(callable(algo_anchor.required_fee))
         self.assertTrue(callable(algo_anchor.canonical_validity))
         self.assertTrue(callable(canary.send_durable))
+        self.assertTrue(callable(canary.inspect))
+        self.assertTrue(callable(canary.prepare))
+        self.assertTrue(callable(canary.send_persisted))
+        self.assertTrue(callable(mainnet_params.fetch_trusted_mainnet_params))
+        self.assertEqual(signer_mainnet.SIGNER_PROTOCOL, "pq-anchor/2")
         self.assertTrue(callable(signer_mainnet.request_signed))
         self.assertTrue(callable(store.get_tile))
         self.assertEqual(tiles.MAX_TILE_INDEX, 2**63 - 1)

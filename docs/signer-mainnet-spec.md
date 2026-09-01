@@ -5,7 +5,7 @@ Preferred new app name: `402signal-pq-signer-mainnet`.
 This public router repository does not contain the isolated signer and
 must not reimplement it. The live TestNet signer stays
 `402signal-pq-signer` (pq-anchor/1). MainNet uses a new app, a new HMAC
-token name, and a new 6PN hostname.
+token name, a new 6PN hostname, and **pq-anchor/2**.
 
 The signer authorizes only. It never broadcasts. It never reads
 `LIVE402_PQ_FALCON_BROADCAST` or `LIVE402_PQ_FALCON_MAINNET_BROADCAST`.
@@ -31,27 +31,120 @@ spec. Do not add Falcon SK handling to 402signal.
 | Genesis hash | `wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=` |
 | Checkpoint origin | `402signal.com/pq/log/mainnet-v1` |
 | Address env | `LIVE402_PQ_FALCON_MAINNET_ADDRESS` (public, empty until Ross ceremony) |
+| Wire protocol | `pq-anchor/2` (JSON `v=2`; MAC `v=pq-anchor/2`) |
 
 Do not reuse the TestNet HMAC token. Do not reuse the TestNet Falcon
-secret. Do not reuse the TestNet Ed25519 log secret.
+secret. Do not reuse the TestNet Ed25519 log secret. Do not accept a
+pq-anchor/1 MainNet request.
+
+## pq-anchor/2 request
+
+The router sends exactly these JSON keys:
+
+`v`, `origin`, `tree_size`, `root`, `consistency`, `timestamp`,
+`request_id`, `checkpoint`, `policy`, `hmac`
+
+`v` is `2`. `checkpoint` is the Ed25519 signed-note the log already
+produced. `policy` is the **narrow frozen snapshot object only**:
+
+```
+canonical_fee, fee_per_byte, fv, last_round, lv, min_fee,
+size_rule, size_version, snapshot_at
+```
+
+`size_rule` is exactly `deterministic_falcon_envelope_estimate`.
+`size_version` is exactly the integer `1`. The Go signer requires
+`size_version=1` and fail-closes otherwise.
+Do **not** send an arbitrary txn, unsigned blob, fee, firstValid,
+sender, amount, pk, or sk as top-level keys. Unknown JSON keys are
+rejected.
+
+### HMAC canonical bytes (flat; matches Go signer)
+
+The MAC does **not** nest `policy=canonical_fee=…,fee_per_byte=…`.
+Policy fields are flattened into the same sorted `k=v` lines as the
+identity fields (same algorithm as pq-anchor/1: version line, then
+sorted keys, each `k=v\\n`).
+
+Exact field order (`sorted` ASCII; `live402.pq.signer_mainnet.CANONICAL_KEYS`):
+
+```
+canonical_fee
+checkpoint
+consistency
+fee_per_byte
+fv
+last_round
+lv
+min_fee
+origin
+request_id
+root
+size_rule
+size_version
+snapshot_at
+timestamp
+tree_size
+v
+```
+
+```
+pq-anchor/2\n
+canonical_fee=<decimal>\n
+checkpoint=<signed-note>\n
+consistency=<hex nodes joined by comma>\n
+fee_per_byte=<decimal>\n
+fv=<decimal>\n
+last_round=<decimal>\n
+lv=<decimal>\n
+min_fee=<decimal>\n
+origin=<origin>\n
+request_id=<id>\n
+root=<lowercase hex>\n
+size_rule=deterministic_falcon_envelope_estimate\n
+size_version=1\n
+snapshot_at=<decimal unix seconds>\n
+timestamp=<decimal>\n
+tree_size=<decimal>\n
+v=pq-anchor/2\n
+```
+
+Published signer golden (head `1c3e640ae856a6c7a47cd892d0bfa1794df5deb5`)
+is exactly 380 UTF-8 bytes. Router test
+`tests/test_pq_prekey_correction.py` (`FLAT_HMAC_GOLDEN`) must match
+that preimage byte-for-byte. MAC `v` is the protocol id string
+`pq-anchor/2`, not the JSON integer `2`.
+
+Integers are decimal with no leading zeros (except the value `0`).
+`hmac` is hex(HMAC-SHA256(token, canonical)). Golden vector:
+`tests/test_pq_prekey_correction.py` (`FLAT_HMAC_GOLDEN`). Share that
+exact UTF-8 byte string with the private signer repo.
+
+Invalid HMAC must reject with **exactly**:
+
+```
+{"ok":false,"error":"hmac"}
+```
+
+That is the preferred reviewed-signer probe reply. A well-formed
+pq-anchor/2 request with an invalid HMAC must never produce a
+SignedTxn. Router preflight treats `error=hmac` (and the small
+allowlist `hmac_invalid` / `invalid_hmac` / `mac`) as the auth
+boundary. A success reply to an invalid HMAC is a protocol failure.
 
 ## Reconstruction
 
-The router sends exactly these JSON keys (same as pq-anchor/1):
-
-`v`, `origin`, `tree_size`, `root`, `consistency`, `timestamp`,
-`request_id`, `checkpoint`, `hmac`
-
-`checkpoint` is the Ed25519 signed-note the log already produced. The
-signer reconstructs the unsigned PaymentTxn from trusted semantic
-fields only:
+The signer reconstructs the unsigned PaymentTxn from trusted semantic
+fields plus the **HMAC-bound policy**:
 
 - type `pay`
 - amount `0`
 - sender = receiver = configured MainNet Falcon f1 address
 - note = PQ1 84-byte note from origin, tree_size, root
 - genesis ID + hash = MainNet exact values
-- fee = derived Falcon required value (not a router-supplied field)
+- fee = `policy.canonical_fee` (must equal independently derived required)
+- fv = `policy.fv` = `policy.last_round`
+- lv = `policy.lv` = `fv + 1000`
 
 Fee formula (same as the router; 402security must review):
 
@@ -66,21 +159,47 @@ Never derive a smaller fee from a shorter actual Falcon sig.
 
 Protocol base min is 1000 µAlgo today. Falcon-1024 adds 2x that base
 (uncongested floor 3000). algod suggested `fee` is fee per byte.
-Validity: `fv = trusted lastRound`, `lv = fv + 1000` (MaxTxnLife,
+Validity: `fv = frozen last_round`, `lv = fv + 1000` (MaxTxnLife,
 reviewed 402Signal policy). Missing lastRound fails closed. No
-`fv=1` fallback on MainNet. The signer authorizes that exact
-canonical txn. If required > 30000, reject. Do not raise the cap.
-Do not hardcode fee=3000 forever. Caller cannot select the fee.
+`fv=1` fallback on MainNet. Once the signer **accepts** the router
+snapshot, it signs that **exact** HMAC-bound policy. It never
+silently modifies fee, fv, or lv. If required > 30000, reject. Do
+not raise the cap. Do not hardcode fee=3000 forever. Caller cannot
+select the fee.
 
-Do not accept router-supplied fee, firstValid, sender, amount, or an
-unsigned txn blob. Unknown JSON keys are rejected.
+## Independent MainNet params (required)
+
+The signer MUST independently `GET /v2/transactions/params` from an
+approved hardcoded MainNet algod allowlist (HTTPS, no redirects,
+bounded body/timeout, exact MainNet genesis). No caller-controlled
+URL, fee, fv, or lv.
+
+Before signing, the signer MUST validate the router snapshot:
+
+| Check | Rule |
+|---|---|
+| Network | MainNet only (`mainnet-v1.0` + MainNet genesis hash) |
+| Freshness | router `snapshot_at` within `SNAPSHOT_MAX_AGE_S = 90` |
+| lastRound slack | signer-observed last-round not more than `LAST_ROUND_SLACK = 10` ahead or behind `policy.last_round` |
+| min-fee | observed min-fee valid (≥ 1) |
+| Required fee | if signer current required fee **>** frozen `policy.canonical_fee` → **reject** and require a **NEW router snapshot** before auth |
+| Equality | after accept, sign EXACT HMAC-bound fee/fv/lv. Never rewrite them |
+
+Slightly different observation times must either agree on the
+authenticated frozen policy **or** fail closed before AUTHORIZED.
+Do not loosen canonical validation to paper over timing.
+
+Suggested-params allowlist (same as the router reader):
+
+- `mainnet-api.algonode.cloud` (primary)
+- `mainnet-api.4160.nodely.dev` (secondary)
+
+Path is always `/v2/transactions/params`. The signer still does not POST.
 
 ## Fee cap
 
 `MAX_FEE = 30000` microAlgos. Fail closed if the derived Falcon
-required fee exceeds the cap. The signer may read suggested params
-from an allowlisted MainNet algod host to learn `min-fee` and
-fee-per-byte. It still does not POST.
+required fee exceeds the cap.
 
 ## Rejection matrix
 
@@ -88,6 +207,8 @@ Reject (no SignedTxn) when any of these hold:
 
 | Reason | Detail |
 |---|---|
+| Wrong protocol | not pq-anchor/2 / `v!=2` / missing `policy` |
+| size_version | not exactly `1` |
 | Wrong origin | not `402signal.com/pq/log/mainnet-v1` |
 | Wrong genesis | not MainNet ID+hash |
 | Amount nonzero | must be 0 |
@@ -100,8 +221,9 @@ Reject (no SignedTxn) when any of these hold:
 | LogicSig / multisig / ordinary sig | exclusive sig keys |
 | Scheme not `f1` | including f5 or missing pqsig |
 | Fee > 30000 | cap |
+| Policy vs observed | freshness / lastRound slack / required fee > frozen |
 | Unknown request keys | including unsigned txn fields |
-| HMAC fail | token mismatch or stale timestamp |
+| HMAC fail | token mismatch or stale timestamp; reply `{"ok":false,"error":"hmac"}` |
 | Checkpoint unsigned | not a C2SP signed-note |
 
 ## State
@@ -110,6 +232,7 @@ The signer does **not** own AUTHORIZED / SUBMITTED / CONFIRMED. Those
 live on the router log:
 
 - AUTHORIZED: signer returned a SignedTxn (router persists)
+- SEND_ATTEMPTED: router latched expected txid before POST
 - SUBMITTED: router POSTed (signer never does this)
 - CONFIRMED: router fetch+decode+verify of the actual txn
 
@@ -120,8 +243,7 @@ and HMAC token. It MUST retain durable **security** state across
 restarts:
 
 - monotonic checkpoint progression
-- last-authorized identity (origin, tree_size, root, signed-note) for
-  conflict detection
+- last-authorized identity (origin, tree_size, root, signed-note, **and HMAC-bound policy digest**) for conflict detection
 - replay / request-ID tracking
 - freshness (timestamp window)
 - HMAC verification
@@ -129,6 +251,7 @@ restarts:
 - origin / tree / root binding
 - consistency validation
 - reject a conflicting authorization for the same progression
+- explicit operator re-auth of the same X/N/R with a **new** HMAC-bound policy is allowed only before the router has SEND_ATTEMPTED (router discard is local). Signer must still refuse unsafe rollback and refuse a second spend for an already-consumed progression. Prefer reject-replay if the previous policy is still within its validity window
 - safe restart: after authorizing origin=X tree=N root=R, a restart
   must not authorize X/N/R2 or an unsafe rollback
 - bounded request body
@@ -138,10 +261,34 @@ restarts:
 This is a spec, a contract, and signer-repo tests only. Do not
 reimplement the private signer inside this public router.
 
+## Parallel private-signer PR checklist
+
+Private repo: `402signal/402signal-pq-signer`
+Suggested branch: `cursor/isolated-falcon-signer-9f06` follow-up
+Reviewed TestNet head remains `9798c38f` / merge `a901ef7a` until
+the pq-anchor/2 MainNet app lands.
+
+This agent cannot edit that private repo. The public router implements
+the client, protocol docs, and mocks. The signer PR must:
+
+1. Speak **pq-anchor/2** only on the MainNet app. Reject pq-anchor/1.
+2. HMAC-verify flattened policy fields (`size_version=1` required) using the canonical encoding above. Do not nest `policy=` in the MAC.
+3. Independently fetch MainNet `/v2/transactions/params` from the hardcoded allowlist.
+4. Apply freshness / lastRound slack / min-fee / required-fee-vs-frozen rules. Never rewrite fee/fv/lv.
+5. On accept, sign the **exact** HMAC-bound policy. Router verifies equality.
+6. Invalid HMAC → `{"ok":false,"error":"hmac"}`. No SignedTxn.
+7. Keep durable monotonic / replay / conflict state. No automatic second spend.
+8. Never read BROADCAST/CANARY. Never POST. Fixture/CI never hit live MainNet.
+9. Add tests: two observation times agree **or** fail closed; required fee > frozen rejects; policy field missing rejects; unsigned txn keys reject.
+
 ## Tests the signer repo must have
 
-- Reconstructs MainNet pay-0 self-Falcon f1 from origin/tree/root only
+- Reconstructs MainNet pay-0 self-Falcon f1 from origin/tree/root + HMAC policy
+- Signs exact frozen fee/fv/lv after accept
 - Rejects the full matrix above
+- Independently fetched params; required fee > frozen → reject
+- lastRound slack exceeded → reject
+- Stale router snapshot_at → reject
 - Never reads either broadcast env
 - Never POSTs to algod
 - Fixture/CI never hits live MainNet
@@ -150,7 +297,8 @@ reimplement the private signer inside this public router.
 - Durable security state survives restart: no X/N/R2, no unsafe rollback
 - Rejects conflicting auth for the same progression
 - Bounded body, rate limit, unknown-field reject
-- Fee equals derived Falcon required (not router-supplied)
+- Invalid HMAC returns exact `error=hmac`
+- Fee equals derived Falcon required (not a top-level router fee field)
 
 ## Kill switch
 
