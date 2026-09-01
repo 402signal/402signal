@@ -62,13 +62,24 @@ class CloseoutStaticTests(unittest.TestCase):
 
     def test_website_production_mainnet_copy(self):
         home = _read("live402/static/index.html")
-        self.assertIn("Algorand MainNet", home)
+        self.assertIn("Algorand MainNet log · awaiting first confirmed checkpoint", home)
+        self.assertIn("Production log identity is Algorand MainNet", home)
+        self.assertNotIn("Signed checkpoints are periodically anchored to Algorand MainNet", home)
         self.assertNotIn("Currently Algorand TestNet", home)
         self.assertNotIn("quantum-proof", home.lower())
+        self.assertNotIn("—", home)
         trans = _read("live402/pq/transparency.py")
-        self.assertIn("Algorand MainNet", trans)
+        self.assertIn("Algorand MainNet log · awaiting first", trans)
+        self.assertIn("Production log identity is Algorand MainNet", trans)
         self.assertNotIn("Currently Algorand TestNet", trans)
         self.assertIn("Awaiting first confirmed", trans)
+        self.assertIn("Historical TestNet archive", trans)
+        fly = _read("fly.toml")
+        self.assertIn("GVIAG3YMJ7OLJ3JAUBNI2YP5JCQQCQYWN25UAGLC2BTPOBUL3ZZTILIMWU", fly)
+        self.assertNotIn("OBHYXCUVOLSTZVBN5JUFIYBD4X4ZFIAFZMWMU2P45VBYGWT26MV34IFFIU", fly)
+        self.assertNotIn("LIVE402_PQ_FALCON_BROADCAST", fly)
+        self.assertNotIn("LIVE402_PQ_FALCON_MAINNET_BROADCAST", fly)
+        self.assertNotIn("LIVE402_PQ_FALCON_MAINNET_CANARY", fly)
 
     def test_no_mainnet_falcon_submit(self):
         algo = _read("live402/pq/algo_anchor.py")

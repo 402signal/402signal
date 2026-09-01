@@ -114,6 +114,10 @@ class TransparencyPageTests(unittest.TestCase):
         self.assertIn("canonical", html)
         self.assertIn("https://402signal.com/transparency", html)
         self.assertIn("Algorand MainNet", html)
+        self.assertIn("Algorand MainNet log · awaiting first confirmed checkpoint", html)
+        self.assertIn("Production log identity is Algorand MainNet", html)
+        self.assertNotIn("Signed checkpoints are periodically anchored to Algorand MainNet", html)
+        self.assertIn("Historical TestNet archive", html)
         self.assertNotIn("quantum-proof", html.lower())
         self.assertNotIn("raw on-chain note", html.lower())
         for marker in _SECRETS:

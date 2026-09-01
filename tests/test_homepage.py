@@ -278,7 +278,8 @@ class HomepageProductTests(unittest.TestCase):
         self.assertIn("Return selected route + selected_payment, or a typed miss", html)
         self.assertIn("TRANSPARENCY", html)
         self.assertIn("Commit route evidence to the append-only log", html)
-        self.assertIn("Signed checkpoints are periodically anchored to Algorand MainNet.", html)
+        self.assertIn("Production log identity is Algorand MainNet. Awaiting first confirmed MainNet checkpoint.", html)
+        self.assertNotIn("Signed checkpoints are periodically anchored to Algorand MainNet.", html)
         self.assertIn("Falcon-1024 post-quantum transaction authorization.", html)
         self.assertIn(
             "This post-quantum authorization protects the checkpoint transaction. "
@@ -563,11 +564,13 @@ class HomepageProductTests(unittest.TestCase):
         self.assertNotIn("HEALTHY", html)
         self.assertNotIn("honest", html.lower())
         self.assertIn(
-            "Routing evidence committed to append-only log. Signed checkpoints "
-            "periodically anchored to Algorand MainNet using Falcon-1024 "
-            "post-quantum authorization.",
+            "Routing evidence committed to append-only log. Production log identity "
+            "is Algorand MainNet. Awaiting first confirmed MainNet checkpoint. "
+            "Falcon-1024 post-quantum authorization protects confirmed MainNet "
+            "checkpoint transactions when present.",
             html,
         )
+        self.assertNotIn("periodically anchored to Algorand MainNet", html)
         self.assertIn("Routing does not wait for confirmation.", html)
         self.assertNotIn("may later be anchored", html)
 
@@ -628,7 +631,7 @@ class HomepageProductTests(unittest.TestCase):
         self.assertNotIn("algo_bonus", html)
         self.assertNotIn("TestNet Falcon broadcast is off unless explicitly enabled.", html)
         self.assertIn("402Signal maintains a public append-only transparency log", html)
-        self.assertIn("The production transparency log targets Algorand MainNet", html)
+        self.assertIn("Production log identity is Algorand MainNet", html)
         self.assertIn("The human-readable transparency view is available at", html)
         self.assertIn('href="/transparency"', html)
 
@@ -950,6 +953,12 @@ class HomepageProductTests(unittest.TestCase):
     def test_transparency_mainnet_and_not_seller_truth(self):
         html = self.transparency
         self.assertIn("Algorand MainNet", html)
+        self.assertIn("Algorand MainNet log · awaiting first confirmed checkpoint", html)
+        self.assertIn("Production log identity is Algorand MainNet", html)
+        self.assertIn("Awaiting first confirmed MainNet checkpoint", html)
+        self.assertNotIn("Signed checkpoints are periodically anchored to Algorand MainNet", html)
+        self.assertIn("Historical TestNet archive", html)
+        self.assertNotIn("—", html)
         self.assertIn("It is not a merchant payment.", html)
         self.assertIn("does not report whether a seller endpoint described its service accurately", html)
         self.assertIn("native Falcon-1024 post-quantum authorization", html)

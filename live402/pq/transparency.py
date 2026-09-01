@@ -988,8 +988,9 @@ def page_html() -> str:
     model = page_model()
     title = "402Signal transparency log"
     description = (
-        "Verify 402Signal's append-only routing-evidence log, signed checkpoints, "
-        "and Falcon-authorized Algorand MainNet anchors."
+        "Verify 402Signal's append-only routing-evidence log. "
+        "Production log identity is Algorand MainNet. "
+        "Awaiting first confirmed MainNet checkpoint."
     )
     html = (
         _chrome_head(title, description, "https://402signal.com/transparency")
@@ -1040,16 +1041,38 @@ def _verification_details(model: dict) -> str:
     )
 
 
+def _hero_badge(model: dict) -> str:
+    if model.get("confirmed"):
+        return '        <p class="pq-badge">Algorand MainNet log</p>\n'
+    return (
+        '        <p class="pq-badge">Algorand MainNet log · awaiting first '
+        "confirmed checkpoint</p>\n"
+    )
+
+
+def _hero_lede(model: dict) -> str:
+    if model.get("confirmed"):
+        return (
+            "        <p class=\"lede\">402Signal records commitments to its routing evidence in an "
+            "append-only transparency log. Signed checkpoints are periodically anchored to "
+            "Algorand MainNet using native Falcon-1024 post-quantum authorization.</p>\n"
+        )
+    return (
+        "        <p class=\"lede\">402Signal records commitments to its routing evidence in an "
+        "append-only transparency log. Production log identity is Algorand MainNet. "
+        "Awaiting first confirmed MainNet checkpoint. Checkpoint transactions use native "
+        "Falcon-1024 post-quantum authorization when confirmed on MainNet.</p>\n"
+    )
+
+
 def _main(model: dict) -> str:
     return (
         '      <section class="hero compact">\n'
-        '        <p class="pq-badge">Algorand MainNet</p>\n'
-        "        <h1>Verify the transparency log</h1>\n"
-        "        <p class=\"lede\">402Signal records commitments to its routing evidence in an "
-        "append-only transparency log. Signed checkpoints are periodically anchored to "
-        "Algorand MainNet using native Falcon-1024 post-quantum authorization.</p>\n"
-        "        <p class=\"note\">Routing does not wait for confirmation.</p>\n"
-        "        <p class=\"privacy-note\">Public transparency commitments do not expose raw "
+        + _hero_badge(model)
+        + "        <h1>Verify the transparency log</h1>\n"
+        + _hero_lede(model)
+        + "        <p class=\"note\">Routing does not wait for confirmation.</p>\n"
+        + "        <p class=\"privacy-note\">Public transparency commitments do not expose raw "
         "needs, wallets, payment signatures, or seller response bodies.</p>\n"
         '        <details class="tech-details" id="what-is-published">\n'
         "          <summary>What is published?</summary>\n"
@@ -1071,6 +1094,11 @@ def _main(model: dict) -> str:
         + _current_vs_anchored(model)
         + _history(model)
         + _verification_details(model)
+        + '      <section class="block">\n'
+        + "        <h2>Historical TestNet archive</h2>\n"
+        + "        <p>The prior public TestNet log shard remains available for reference. "
+        + "It is not the live production MainNet log.</p>\n"
+        + "      </section>\n"
         + '      <section class="block">\n'
         + "        <h2>What this proves / does not prove</h2>\n"
         + "        <p>Anyone can compare the signed checkpoint, Merkle root, and confirmed "
