@@ -14,6 +14,12 @@ from live402 import probe
 
 
 class DnsBoundTests(unittest.TestCase):
+    def setUp(self):
+        probe.reset_dns_pool()
+
+    def tearDown(self):
+        probe.reset_dns_pool()
+
     def test_timeout_fail_closed(self):
         def hang(*_a, **_k):
             time.sleep(5)

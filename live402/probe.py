@@ -728,6 +728,16 @@ def dns_worker_cap() -> int:
     return MAX_DNS_WORKERS
 
 
+def reset_dns_pool() -> None:
+    """Drop the resolver pool so timed-out workers cannot pin later tests."""
+    global _dns_pool
+    with _dns_lock:
+        old = _dns_pool
+        _dns_pool = None
+    if old is not None:
+        old.shutdown(wait=False, cancel_futures=True)
+
+
 def _getaddrinfo_timed(host: str, timeout: float | None = None, port: int = 443):
     """Bounded getaddrinfo. Timed-out lookups do not spawn extra threads."""
     cap = DNS_TIMEOUT if timeout is None else float(timeout)

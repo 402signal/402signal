@@ -257,6 +257,12 @@ class UnpaidPostProbeMatrixTests(unittest.TestCase):
 
 
 class DnsIpPinTests(unittest.TestCase):
+    def setUp(self):
+        probe.reset_dns_pool()
+
+    def tearDown(self):
+        probe.reset_dns_pool()
+
     def test_toctou_cannot_connect_private_after_public_lookup(self):
         n = {"n": 0}
         connected = []

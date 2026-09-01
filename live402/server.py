@@ -84,7 +84,7 @@ class _RateLimiter:
     def __init__(self, max_keys: int = RATE_LIMIT_MAX_KEYS) -> None:
         self._hits: OrderedDict[str, list[float]] = OrderedDict()
         self._lock = threading.Lock()
-        self._max_keys = max(16, int(max_keys))
+        self._max_keys = max(1, int(max_keys))
 
     def _prune_key(self, key: str, now: float, window: float) -> list[float]:
         hits = [t for t in (self._hits.get(key) or []) if now - t < window]
@@ -121,6 +121,8 @@ class _RateLimiter:
                 hits.append(now)
                 self._hits[key] = hits
                 self._hits.move_to_end(key)
+                if len(self._hits) > self._max_keys:
+                    self._evict(now, window)
                 return True
         except Exception:
             return False

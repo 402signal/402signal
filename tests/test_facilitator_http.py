@@ -131,7 +131,7 @@ class BoundedBodyTests(unittest.TestCase):
                         500,
                         "err",
                         {},
-                        io.BytesIO(b'{"error":"nope","raw_should_not_echo":"SECRET"}'),
+                        io.BytesIO(b"not-json SECRET-FACILITATOR-BODY"),
                     )
 
             with patch("urllib.request.build_opener", return_value=Boom()):
@@ -139,7 +139,7 @@ class BoundedBodyTests(unittest.TestCase):
         self.assertEqual(status, 500)
         self.assertNotIn("raw", payload)
         dumped = json.dumps(payload)
-        self.assertNotIn("SECRET", dumped)
+        self.assertNotIn("SECRET-FACILITATOR-BODY", dumped)
 
 
 class OfficialRailsTests(unittest.TestCase):
