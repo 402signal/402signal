@@ -1,22 +1,42 @@
 # Docker image notes
 
-Base image is the official `python:3.12.11-slim` tag pinned to the
-multi-arch index digest from:
+Base image is the official `python:3.12.14-slim` tag pinned to the
+multi-arch index digest.
+
+Chosen release: **Python 3.12.14**. Why: it is the 3.12 security
+release that includes **gh-150743** (GHSA-w4q2-g22w-6fr4). Outbound
+`http.client` now limits chunked-response trailer lines and interim
+(1xx) responses to 100 each and raises `HTTPException` past either
+limit. A malicious seller can no longer stream `100 Continue` or
+trailers forever and hang a probe even when a socket timeout is set.
+
+`python:3.12.11-slim` does **not** contain that fix. Pinning 3.12.11
+and bounding inbound `http_body` reads does not close this P1.
 
 ```
-docker buildx imagetools inspect python:3.12.11-slim
+docker buildx imagetools inspect python:3.12.14-slim
 ```
 
-Recorded digest (index):
+This cloud environment had no docker CLI (`docker buildx imagetools
+inspect` is the intended pin command). The same official index
+digest was read from the registry APIs that imagetools uses:
 
-`sha256:47ae396f09c1303b8653019811a8498470603d7ffefc29cb07c88f1f8cb3d19f`
+1. Docker Hub `library/python` tag `3.12.14-slim` (`digest` field)
+2. `registry-1.docker.io` `Docker-Content-Digest` for
+   `manifests/3.12.14-slim` (OCI image index)
+
+Reconfirmed 2026-09-01. Both returned:
+
+`sha256:e5c9fa26ffb76e11e0f054f30dc2523a2f9693f0c36c0cf1e39b27e152d899fc`
 
 Dockerfile:
 
-`FROM python:3.12.11-slim@sha256:47ae396f09c1303b8653019811a8498470603d7ffefc29cb07c88f1f8cb3d19f`
+`FROM python:3.12.14-slim@sha256:e5c9fa26ffb76e11e0f054f30dc2523a2f9693f0c36c0cf1e39b27e152d899fc`
 
 linux/amd64 platform manifest under that index:
-`sha256:0b29ab9e420820f53d1cd5ce0157dfe07bea8a7cff5b4754d6d95c07b0e5bc47`
+`sha256:2fe5997d249a808b8eeea52c58a1dbffbba28754dc11699ef5c029f2d818ce79`
+
+Do not invent a digest. Do not roll back to 3.12.11.
 
 ## Hash-locked requirements
 

@@ -2,11 +2,14 @@
 
 Tooling is implemented. Scheduled Fly backups are **not** claimed active.
 
-402Signal keeps three process-local SQLite files on the `/data` volume:
+402Signal keeps process-local SQLite files on the `/data` volume:
 
 - catalog (claims)
 - history (observed probes)
-- pq-log (append-only transparency log)
+- pq-log (live TestNet append-only transparency log)
+- pq-log-mainnet (prepared MainNet file; unused until cutover; do not copy TestNet leaves into it)
+
+The live TestNet file `/data/pq-log.sqlite` stays in place. Do not delete it as part of MainNet prep. A later cutover uses `/data/pq-log-mainnet.sqlite` with a fresh tree.
 
 One machine. One writer. Do not attach a second process to the same files.
 
@@ -35,3 +38,16 @@ Fly scheduled snapshots are off in `fly.toml`. An admin must do this by hand:
 8. Do not set `LIVE402_PQ_FALCON_BROADCAST` as part of backup/restore.
 
 Until a scheduled snapshot policy is enabled by an admin, backups are tooling plus this checklist only.
+
+## Isolated TestNet restore drill (no Fly secrets)
+
+Use a copy of `pq-log.sqlite` on a workstation. Do not use production Fly secrets, Falcon keys, or MainNet hosts.
+
+1. `LIVE402_PQ_LOG_DB=/path/to/pq-log.sqlite PYTHONPATH=. python3 scripts/backup_sqlite.py --dest /tmp/402signal-testnet-drill`
+2. Confirm the snapshot `pq-log-*.sqlite` exists and `PRAGMA integrity_check` is `ok`.
+3. Restore to a throwaway path: `PYTHONPATH=. python3 scripts/restore_sqlite.py --src /tmp/402signal-testnet-drill/pq-log-….sqlite --dest /tmp/pq-log-restored.sqlite --force`
+4. Open the restored file read-only and compare `SELECT COUNT(*) FROM leaves` and the latest checkpoint against the source.
+5. Leave `/data/pq-log.sqlite` untouched. Do not restore over the live file in this drill.
+6. Do not set `LIVE402_PQ_FALCON_BROADCAST` or `LIVE402_PQ_FALCON_MAINNET_BROADCAST`.
+
+See `docs/pq-recovery.md` for drills A-F.

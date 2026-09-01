@@ -601,8 +601,8 @@ class SignerClientProtocolTests(unittest.TestCase):
         src = inspect.getsource(algo_anchor) + inspect.getsource(worker) + inspect.getsource(signer_client)
         self.assertIn("def send_if_allowed", src)
         self.assertIn("def _post_testnet", src)
-        self.assertIn("testnet-api.algonode.cloud/v2/transactions", src)
-        self.assertNotIn("mainnet-api.algonode.cloud/v2/transactions", src)
+        self.assertIn("Never posts MainNet", inspect.getsource(algo_anchor.send_if_allowed))
+        self.assertNotIn("submit_mainnet_canary", inspect.getsource(worker))
         self.assertIn("def send_forbidden", inspect.getsource(algo_anchor))
         with self.assertRaises(RuntimeError):
             algo_anchor.send_forbidden({})

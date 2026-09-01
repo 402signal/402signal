@@ -25,7 +25,9 @@ _PLACEHOLDER_TXID = frozenset({"", "your_txid", "placeholder", "txid", "none", "
 _SECRET_MARKERS = (
     "LIVE402_PQ_FALCON_SK",
     "LIVE402_PQ_LOG_SK",
+    "LIVE402_PQ_LOG_SK_MAINNET",
     "LIVE402_PQ_SIGNER_TOKEN",
+    "LIVE402_PQ_SIGNER_MAINNET_TOKEN",
     "LIVE402_HMAC",
     "HMAC_SECRET",
 )

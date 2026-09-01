@@ -980,7 +980,15 @@ class _PinnedHTTPSConnection(http.client.HTTPSConnection):
     """TCP to the SSRF-checked IP. TLS SNI and HTTP Host stay the original name."""
 
     def __init__(self, host, *args, pinned_addrs=None, server_hostname=None, **kwargs):
-        super().__init__(host, *args, **kwargs)
+        # gh-150743: bound outbound interim 1xx / trailer reads when the
+        # runtime supports max_response_headers (Python 3.12.14+).
+        if "max_response_headers" not in kwargs:
+            kwargs["max_response_headers"] = 100
+        try:
+            super().__init__(host, *args, **kwargs)
+        except TypeError:
+            kwargs.pop("max_response_headers", None)
+            super().__init__(host, *args, **kwargs)
         self._pinned_addrs = list(pinned_addrs or [])
         self._server_hostname = server_hostname
         if not self._server_hostname:

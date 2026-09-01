@@ -32,6 +32,8 @@ _before_append_hooks: list[Callable[[bytes], None]] = []
 # Env name only. Never interpolate the value into logs or exceptions.
 _SK_ENV = "LIVE402_PQ_LOG_SK"
 _VKEY_ENV = "LIVE402_PQ_LOG_VKEY"
+_SK_ENV_MAINNET = "LIVE402_PQ_LOG_SK_MAINNET"
+_VKEY_ENV_MAINNET = "LIVE402_PQ_LOG_VKEY_MAINNET"
 
 
 class ReceiptError(RuntimeError):
@@ -46,6 +48,16 @@ class SignerConfigError(ValueError):
     """LIVE402_PQ_LOG_SK was set but could not be parsed. Do not generate a key."""
 
 
+def _clear_signer_memory() -> None:
+    """Drop the in-memory key without touching sqlite.
+
+    Used when MainNet identity is incomplete so we never open the
+    TestNet database as a side effect of rejecting a SK fallback.
+    """
+    global _signer
+    _signer = None
+
+
 def configure_signer(private_key: Any = None) -> str:
     """Install an in-memory Ed25519 log key. Never log or serialize the private key."""
     global _signer
@@ -56,9 +68,18 @@ def configure_signer(private_key: Any = None) -> str:
     from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
     pk = private_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
-    vkey = ckpt.vkey_encode(ORIGIN, pk)
+    vkey = ckpt.vkey_encode(_log_key_name(), pk)
     store.meta_set("vkey", vkey)
     return vkey
+
+
+def _log_key_name() -> str:
+    from live402.pq import ORIGIN_MAINNET
+    from live402.pq import log_identity
+
+    if log_identity.is_mainnet_epoch():
+        return ORIGIN_MAINNET
+    return store.origin() or ORIGIN
 
 
 def _parse_log_sk(raw: str) -> Any:
@@ -100,14 +121,26 @@ def _parse_log_sk(raw: str) -> Any:
         raise SignerConfigError("invalid seed") from exc
 
 
-def load_signer_from_env() -> str:
-    """Load LIVE402_PQ_LOG_SK into memory. Never generate a key.
+def _public_fingerprint(raw: str):
+    key = _parse_log_sk(raw)
+    from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
-    Unset or blank: leave signer unconfigured (receipts stay unavailable).
-    Malformed: fail closed — clear any signer, do not generate, keep serving.
-    Success: configure_signer + store vkey + LIVE402_PQ_LOG_VKEY from the public key.
+    return key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw), key
+
+
+def load_signer_from_env() -> str:
+    """Load the epoch's Ed25519 log SK. Never generate a key.
+
+    TestNet epoch uses LIVE402_PQ_LOG_SK.
+    MainNet epoch uses LIVE402_PQ_LOG_SK_MAINNET only.
+    reuse_testnet_sk=false: MainNet must not fall back to the TestNet secret
+    and must not load a MainNet secret that matches the TestNet public key.
     Never logs, prints, or writes the secret.
     """
+    from live402.pq import log_identity
+
+    if log_identity.is_mainnet_epoch() or log_identity.configured_network() == log_identity.NETWORK_MAINNET:
+        return _load_mainnet_signer_from_env()
     raw = os.environ.get(_SK_ENV)
     if raw is None or not str(raw).strip():
         return ""
@@ -120,6 +153,43 @@ def load_signer_from_env() -> str:
     vkey = configure_signer(key)
     if vkey:
         os.environ[_VKEY_ENV] = vkey
+    return vkey
+
+
+def _load_mainnet_signer_from_env() -> str:
+    """MainNet epoch: fresh SK only. Never silently use LIVE402_PQ_LOG_SK."""
+    from live402.pq import log_identity
+    from live402.pq import trust
+
+    desc = trust.trust_root_v2()
+    sig = desc.get("log_signature") if isinstance(desc.get("log_signature"), dict) else {}
+    if sig.get("reuse_testnet_sk") is not False:
+        _clear_signer_memory()
+        raise SignerConfigError("reuse_testnet_sk forbidden")
+    testnet_raw = os.environ.get(_SK_ENV)
+    mainnet_raw = os.environ.get(_SK_ENV_MAINNET)
+    if mainnet_raw is None or not str(mainnet_raw).strip():
+        _clear_signer_memory()
+        if testnet_raw and str(testnet_raw).strip():
+            raise SignerConfigError("reuse_testnet_sk forbidden")
+        return ""
+    try:
+        main_fp, key = _public_fingerprint(mainnet_raw)
+    except Exception:
+        _clear_signer_memory()
+        sys.stderr.write("%s malformed; log signing disabled\n" % _SK_ENV_MAINNET)
+        return ""
+    if testnet_raw and str(testnet_raw).strip():
+        try:
+            test_fp, _ignored = _public_fingerprint(testnet_raw)
+        except Exception:
+            test_fp = b""
+        if test_fp and test_fp == main_fp:
+            _clear_signer_memory()
+            raise SignerConfigError("reuse_testnet_sk forbidden")
+    vkey = configure_signer(key)
+    if vkey:
+        os.environ[_VKEY_ENV_MAINNET] = vkey
     return vkey
 
 

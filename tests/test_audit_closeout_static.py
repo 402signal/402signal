@@ -21,10 +21,12 @@ def _read(rel: str) -> str:
 class CloseoutStaticTests(unittest.TestCase):
     def test_dockerfile_digest_pin_and_no_broadcast(self):
         self.assertIn(
-            "python:3.12.11-slim@sha256:47ae396f09c1303b8653019811a8498470603d7ffefc29cb07c88f1f8cb3d19f",
+            "python:3.12.14-slim@sha256:e5c9fa26ffb76e11e0f054f30dc2523a2f9693f0c36c0cf1e39b27e152d899fc",
             DOCKERFILE,
         )
-        self.assertIn("python:3.12.11-slim", DOCKERFILE)
+        self.assertIn("python:3.12.14-slim", DOCKERFILE)
+        self.assertIn("gh-150743", DOCKERFILE)
+        self.assertNotIn("python:3.12.11-slim@", DOCKERFILE)
         self.assertNotIn("LIVE402_PQ_FALCON_BROADCAST", DOCKERFILE)
         self.assertNotIn("LIVE402_PQ_FALCON_SK", DOCKERFILE)
         self.assertFalse(any(ln.startswith("USER ") for ln in DOCKERFILE.splitlines()))
@@ -56,7 +58,14 @@ class CloseoutStaticTests(unittest.TestCase):
     def test_no_mainnet_falcon_submit(self):
         algo = _read("live402/pq/algo_anchor.py")
         self.assertIn("testnet", algo.lower())
-        self.assertNotRegex(algo, r"algod.*mainnet.*submit", re.I)
+        self.assertIn("MAINNET_BROADCAST_ENV", algo)
+        self.assertIn("def automatic_mainnet_enabled", algo)
+        self.assertIn("return False", algo.split("def automatic_mainnet_enabled")[1][:400])
+        self.assertIn("Never posts MainNet", algo)
+        self.assertIn("mainnet canary is not executed in this PR", algo)
+        worker = _read("live402/pq/worker.py")
+        self.assertIn("Automatic MainNet is off", worker)
+        self.assertNotIn("submit_mainnet_canary", worker)
 
     def test_no_raw_payment_logging(self):
         route = _read("live402/route.py")
@@ -69,11 +78,33 @@ class CloseoutStaticTests(unittest.TestCase):
             "docs/settlement-provenance.md",
             "docs/fly-ready-check.md",
             "docs/docker.md",
+            "docs/pq-mainnet-prep.md",
+            "docs/pq-testnet-archive.md",
+            "docs/signer-mainnet-spec.md",
+            "docs/pq-key-ceremony.md",
+            "docs/pq-funding.md",
+            "docs/pq-recovery.md",
+            "docs/pq-first-production-event.md",
+            "docs/backup.md",
         ]
         em = "\u2014"
         for rel in authored:
             text = _read(rel)
             self.assertNotIn(em, text, msg=rel)
+
+    def test_signer_spec_requires_durable_security_state(self):
+        spec = _read("docs/signer-mainnet-spec.md")
+        self.assertIn("durable **security** state", spec)
+        self.assertIn("must not authorize X/N/R2", spec)
+        self.assertNotIn(
+            "The signer is stateless across requests except",
+            spec,
+        )
+        ceremony = _read("docs/pq-key-ceremony.md")
+        self.assertIn("algokey pq generate --scheme f1 --keyfile", ceremony)
+        self.assertIn("algokey pq info --keyfile", ceremony)
+        self.assertIn("TWO separate offline mnemonic backups", ceremony)
+        self.assertIn("algokey pq import", ceremony)
 
     def test_v3_receipt_verify_exists(self):
         self.assertIn("def verify_route_receipt", RECEIPT)

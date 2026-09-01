@@ -201,9 +201,15 @@
     return JSON.stringify(buildRouteBody(), null, 2);
   }
 
+  function shellSingleQuote(value) {
+    // POSIX shlex-style: wrap in single quotes and escape embedded quotes.
+    // Explore need text can contain apostrophes, dollars, backticks, or newlines.
+    return "'" + String(value).replace(/'/g, "'\\''") + "'";
+  }
+
   function routeCurlText() {
     const compact = JSON.stringify(buildRouteBody());
-    return "curl -sS -D - https://402signal.com/route -H 'Content-Type: application/json' -d '" + compact + "'";
+    return "curl -sS -D - https://402signal.com/route -H 'Content-Type: application/json' -d " + shellSingleQuote(compact);
   }
 
   function renderRouteJson() {
