@@ -95,10 +95,14 @@ def handle(path: str) -> tuple[int, bytes, str, dict]:
         data = note.encode("utf-8")
         return 200, data, CHECKPOINT_TYPE, {"Cache-Control": "no-store"}
     if rel.startswith("tile/"):
+        missing = (404, b'{"error": "not found"}', "application/json; charset=utf-8", {})
+        if len(rel) > tilemod.MAX_TILE_RELPATH_LEN + 16:
+            return missing
         try:
             parsed = tilemod.parse_tile_relpath(rel)
-        except ValueError:
-            return 404, b'{"error": "not found"}', "application/json; charset=utf-8", {}
+            tilemod.check_tile_index(int(parsed["n"]))
+        except (ValueError, TypeError, OverflowError, KeyError):
+            return missing
         if parsed["kind"] == "entries":
             blob = store.get_entry_bundle(parsed["n"], parsed["width"])
         else:

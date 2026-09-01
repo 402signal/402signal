@@ -87,7 +87,13 @@ CREATE TABLE IF NOT EXISTS authorized_anchors (
     signed BLOB NOT NULL,
     at INTEGER NOT NULL,
     submitted INTEGER NOT NULL DEFAULT 0,
-    txid TEXT NOT NULL DEFAULT ''
+    txid TEXT NOT NULL DEFAULT '',
+    send_state TEXT NOT NULL DEFAULT '',
+    expected_txid TEXT NOT NULL DEFAULT '',
+    fee_policy TEXT NOT NULL DEFAULT '',
+    fv INTEGER NOT NULL DEFAULT 0,
+    lv INTEGER NOT NULL DEFAULT 0,
+    send_attempted_at INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS confirmed_anchors (
     tree_size INTEGER PRIMARY KEY,
@@ -140,6 +146,7 @@ def _connect() -> sqlite3.Connection:
     _chmod_db_files(path)
     _ensure_meta(conn)
     _migrate_authorized_confirmed(conn)
+    _migrate_canary_state(conn)
     _migrate_authorized_submit(conn)
     try:
         have = _size_unlocked(conn)
@@ -240,6 +247,31 @@ def _migrate_authorized_submit(conn: sqlite3.Connection) -> None:
                 "ON CONFLICT(k) DO UPDATE SET v = excluded.v",
                 (json.dumps(payload),),
             )
+    conn.commit()
+
+
+def _migrate_canary_state(conn: sqlite3.Connection) -> None:
+    """Durable canary columns on authorized_anchors. AUTHORIZED rows stay."""
+    cols = {str(row[1]) for row in conn.execute("PRAGMA table_info(authorized_anchors)")}
+    additions = (
+        ("send_state", "TEXT NOT NULL DEFAULT ''"),
+        ("expected_txid", "TEXT NOT NULL DEFAULT ''"),
+        ("fee_policy", "TEXT NOT NULL DEFAULT ''"),
+        ("fv", "INTEGER NOT NULL DEFAULT 0"),
+        ("lv", "INTEGER NOT NULL DEFAULT 0"),
+        ("send_attempted_at", "INTEGER NOT NULL DEFAULT 0"),
+    )
+    for name, spec in additions:
+        if name not in cols:
+            conn.execute("ALTER TABLE authorized_anchors ADD COLUMN %s %s" % (name, spec))
+    conn.execute(
+        "UPDATE authorized_anchors SET send_state = 'SUBMITTED' "
+        "WHERE submitted = 1 AND txid != '' AND (send_state IS NULL OR send_state = '')"
+    )
+    conn.execute(
+        "UPDATE authorized_anchors SET send_state = 'AUTHORIZED' "
+        "WHERE length(signed) > 0 AND (send_state IS NULL OR send_state = '')"
+    )
     conn.commit()
 
 
@@ -514,29 +546,36 @@ def ready_to_checkpoint(tree_size: int | None = None) -> bool:
 
 
 def get_tile(level: int, n: int, width: int | None = None) -> bytes | None:
+    try:
+        safe_n = tilemod.check_tile_index(int(n))
+        safe_w = tilemod.TILE_WIDTH if width is None else int(width)
+        if safe_w < 1 or safe_w > tilemod.TILE_WIDTH:
+            return None
+    except (TypeError, ValueError, OverflowError):
+        return None
     with _lock:
         conn = _connect()
-        if width is None:
-            cur = conn.execute(
-                "SELECT data FROM tiles WHERE level = ? AND n = ? AND width = ?",
-                (level, n, tilemod.TILE_WIDTH),
-            )
-        else:
-            cur = conn.execute(
-                "SELECT data FROM tiles WHERE level = ? AND n = ? AND width = ?",
-                (level, n, width),
-            )
+        cur = conn.execute(
+            "SELECT data FROM tiles WHERE level = ? AND n = ? AND width = ?",
+            (level, safe_n, safe_w),
+        )
         row = cur.fetchone()
         return bytes(row[0]) if row else None
 
 
 def get_entry_bundle(n: int, width: int | None = None) -> bytes | None:
+    try:
+        safe_n = tilemod.check_tile_index(int(n))
+        safe_w = tilemod.TILE_WIDTH if width is None else int(width)
+        if safe_w < 1 or safe_w > tilemod.TILE_WIDTH:
+            return None
+    except (TypeError, ValueError, OverflowError):
+        return None
     with _lock:
         conn = _connect()
-        w = tilemod.TILE_WIDTH if width is None else int(width)
         cur = conn.execute(
             "SELECT data FROM entry_bundles WHERE n = ? AND width = ?",
-            (n, w),
+            (safe_n, safe_w),
         )
         row = cur.fetchone()
         return bytes(row[0]) if row else None
@@ -602,7 +641,8 @@ def checkpoint_at(tree_size: int) -> str:
 def _authorized_row(conn: sqlite3.Connection, tree_size: int) -> dict | None:
     cur = conn.execute(
         "SELECT tree_size, origin, root, checkpoint, request_id, signed, at, "
-        "submitted, txid FROM authorized_anchors WHERE tree_size = ?",
+        "submitted, txid, send_state, expected_txid, fee_policy, fv, lv, "
+        "send_attempted_at FROM authorized_anchors WHERE tree_size = ?",
         (int(tree_size),),
     )
     row = cur.fetchone()
@@ -619,6 +659,12 @@ def _authorized_row(conn: sqlite3.Connection, tree_size: int) -> dict | None:
         "at": int(row[6] or 0),
         "submitted": bool(int(row[7] or 0)),
         "txid": str(row[8] or ""),
+        "send_state": str(row[9] or ""),
+        "expected_txid": str(row[10] or ""),
+        "fee_policy": str(row[11] or ""),
+        "fv": int(row[12] or 0),
+        "lv": int(row[13] or 0),
+        "send_attempted_at": int(row[14] or 0),
     }
 
 
@@ -658,6 +704,12 @@ def last_authorized_checkpoint() -> dict:
         "root": str(data.get("root") or ""),
         "submitted": False,
         "txid": "",
+        "send_state": "",
+        "expected_txid": "",
+        "fee_policy": "",
+        "fv": 0,
+        "lv": 0,
+        "send_attempted_at": 0,
     }
     row = authorized_at(size) if size else None
     if (not row or not row.get("signed")):
@@ -678,6 +730,12 @@ def last_authorized_checkpoint() -> dict:
                 "tree_size": row["tree_size"],
                 "submitted": bool(row.get("submitted")),
                 "txid": str(row.get("txid") or ""),
+                "send_state": str(row.get("send_state") or ""),
+                "expected_txid": str(row.get("expected_txid") or ""),
+                "fee_policy": str(row.get("fee_policy") or ""),
+                "fv": int(row.get("fv") or 0),
+                "lv": int(row.get("lv") or 0),
+                "send_attempted_at": int(row.get("send_attempted_at") or 0),
             }
         )
     return out
@@ -694,10 +752,21 @@ def save_authorized_checkpoint(
     at: int,
     submitted: bool = False,
     txid: str = "",
+    send_state: str = "",
+    expected_txid: str = "",
+    fee_policy: str = "",
+    fv: int = 0,
+    lv: int = 0,
+    send_attempted_at: int = 0,
 ) -> dict:
     """Persist AUTHORIZED only. Same checkpoint is idempotent. Different checkpoint refused.
 
     submitted + txid record a POST attempt. POST success is not confirmation.
+    send_state advances AUTHORIZED -> SEND_INTENT/SEND_ATTEMPTED -> SUBMITTED.
+    Recovery must reuse the exact stored SignedTxn. A different
+    origin/root/checkpoint is refused (caller fail-closes). The same
+    authorization policy (same origin, tree, root, signed-note) may
+    update send_state / expected_txid.
     """
     size = int(tree_size)
     root_hex = bytes(root).hex() if isinstance(root, (bytes, bytearray)) else str(root or "")
@@ -707,16 +776,49 @@ def save_authorized_checkpoint(
     when = int(at)
     want_submitted = bool(submitted)
     want_txid = str(txid or "").strip()
+    want_state = str(send_state or "").strip()
+    want_expected = str(expected_txid or "").strip()
+    want_policy = fee_policy if isinstance(fee_policy, str) else json.dumps(fee_policy)
+    want_fv = int(fv or 0)
+    want_lv = int(lv or 0)
+    want_attempted = int(send_attempted_at or 0)
     with _lock:
         conn = _connect()
         existing = _authorized_row(conn, size)
         if existing and existing["signed"]:
             if existing["checkpoint"] != note or (existing["root"] and root_hex and existing["root"] != root_hex):
                 return existing
+            if existing["signed"] and blob and existing["signed"] != blob:
+                return existing
+            sets = []
+            args: list = []
             if want_submitted and want_txid:
+                sets.append("submitted = 1")
+                sets.append("txid = ?")
+                args.append(want_txid)
+            if want_state:
+                sets.append("send_state = ?")
+                args.append(want_state)
+            if want_expected:
+                sets.append("expected_txid = ?")
+                args.append(want_expected)
+            if want_policy:
+                sets.append("fee_policy = ?")
+                args.append(want_policy)
+            if want_fv:
+                sets.append("fv = ?")
+                args.append(want_fv)
+            if want_lv:
+                sets.append("lv = ?")
+                args.append(want_lv)
+            if want_attempted:
+                sets.append("send_attempted_at = ?")
+                args.append(want_attempted)
+            if sets:
+                args.append(size)
                 conn.execute(
-                    "UPDATE authorized_anchors SET submitted = 1, txid = ? WHERE tree_size = ?",
-                    (want_txid, size),
+                    "UPDATE authorized_anchors SET " + ", ".join(sets) + " WHERE tree_size = ?",
+                    args,
                 )
             payload = {
                 "size": existing["tree_size"],
@@ -734,8 +836,9 @@ def save_authorized_checkpoint(
             return _authorized_row(conn, size) or existing
         conn.execute(
             "INSERT OR REPLACE INTO authorized_anchors"
-            "(tree_size, origin, root, checkpoint, request_id, signed, at, submitted, txid) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "(tree_size, origin, root, checkpoint, request_id, signed, at, submitted, txid, "
+            "send_state, expected_txid, fee_policy, fv, lv, send_attempted_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 size,
                 origin or "",
@@ -746,6 +849,12 @@ def save_authorized_checkpoint(
                 when,
                 1 if want_submitted else 0,
                 want_txid,
+                want_state or "AUTHORIZED",
+                want_expected,
+                want_policy or "",
+                want_fv,
+                want_lv,
+                want_attempted,
             ),
         )
         payload = {
@@ -773,6 +882,12 @@ def save_authorized_checkpoint(
             "at": when,
             "submitted": want_submitted,
             "txid": want_txid,
+            "send_state": want_state or "AUTHORIZED",
+            "expected_txid": want_expected,
+            "fee_policy": want_policy or "",
+            "fv": want_fv,
+            "lv": want_lv,
+            "send_attempted_at": want_attempted,
         }
 
 

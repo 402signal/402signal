@@ -16,10 +16,25 @@ from live402.pq.merkle import HASH_SIZE, leaf_hash, mth_from_leaf_hashes
 MAX_ENTRY_BYTES = 65535
 LEVEL_MIN = 0
 LEVEL_MAX = 63
+# Inclusive C2SP / SQLite INTEGER bound. Shared with http checkpoint sizes.
+MAX_TILE_INDEX = 9223372036854775807  # 2^63 - 1
+# 7 groups cover 10^21 > 2^63-1. Extra part is always overflow.
+MAX_INDEX_PARTS = 7
+# "tile/entries/" + 7 * "xNNN/" + ".p/255" is well under this.
+MAX_TILE_RELPATH_LEN = 96
 
 _INDEX_LAST = re.compile(r"^(0|[1-9][0-9]*)$")
 _INDEX_GROUP = re.compile(r"^x[0-9]{3}$")
 _INDEX_PADDED = re.compile(r"^[0-9]{3}$")
+
+
+def check_tile_index(n: int) -> int:
+    """Reject indexes outside 0..2^63-1 before any SQLite bind."""
+    if not isinstance(n, int) or isinstance(n, bool):
+        raise ValueError("tile index must be a non-negative integer")
+    if n < 0 or n > MAX_TILE_INDEX:
+        raise ValueError("tile index out of range")
+    return n
 
 
 def encode_tile_index(n: int) -> str:
@@ -28,8 +43,7 @@ def encode_tile_index(n: int) -> str:
     Example from tlog-tiles@v0.1.0: 1234067 → x001/x234/067.
     N < 1000 is plain decimal with no leading zeroes.
     """
-    if not isinstance(n, int) or n < 0:
-        raise ValueError("tile index must be a non-negative integer")
+    check_tile_index(n)
     if n < 1000:
         return str(n)
     parts: list[str] = []
@@ -53,13 +67,21 @@ def decode_tile_index(path: str) -> int:
     raw = (path or "").strip().strip("/")
     if not raw:
         raise ValueError("empty tile index")
+    if len(raw) > MAX_TILE_RELPATH_LEN:
+        raise ValueError("tile index path too long")
     parts = raw.split("/")
+    if len(parts) > MAX_INDEX_PARTS:
+        raise ValueError("tile index path too long")
     if len(parts) == 1:
         if not _INDEX_LAST.match(parts[0]):
             raise ValueError("invalid tile index")
-        return int(parts[0])
+        if len(parts[0]) > 19:
+            raise ValueError("tile index out of range")
+        return check_tile_index(int(parts[0]))
     n = 0
     for i, part in enumerate(parts):
+        if n > MAX_TILE_INDEX // 1000:
+            raise ValueError("tile index out of range")
         if i < len(parts) - 1:
             if not _INDEX_GROUP.match(part):
                 raise ValueError("invalid tile index group")
@@ -68,11 +90,14 @@ def decode_tile_index(path: str) -> int:
             if not _INDEX_PADDED.match(part):
                 raise ValueError("invalid tile index tail")
             n = n * 1000 + int(part)
-    return n
+        if n > MAX_TILE_INDEX:
+            raise ValueError("tile index out of range")
+    return check_tile_index(n)
 
 
 def tile_path(level: int, n: int, width: int | None = None) -> str:
     _check_level(level)
+    check_tile_index(n)
     if width is None or width == TILE_WIDTH:
         return "tile/%d/%s" % (level, encode_tile_index(n))
     if width < 1 or width > 255:
@@ -81,6 +106,7 @@ def tile_path(level: int, n: int, width: int | None = None) -> str:
 
 
 def entries_path(n: int, width: int | None = None) -> str:
+    check_tile_index(n)
     if width is None or width == TILE_WIDTH:
         return "tile/entries/%s" % encode_tile_index(n)
     if width < 1 or width > 255:
@@ -92,8 +118,11 @@ def parse_tile_relpath(rel: str) -> dict:
     """Parse C2SP path relative to the log prefix (no leading slash).
 
     Returns {kind, level, n, width} where width is None for a full tile.
+    Indexes above 2^63-1 and oversized paths raise ValueError (HTTP 404).
     """
     raw = (rel or "").strip().lstrip("/")
+    if len(raw) > MAX_TILE_RELPATH_LEN + 16:
+        raise ValueError("tile path too long")
     if raw.startswith("tile/entries/"):
         rest = raw[len("tile/entries/") :]
         n, width = _split_index_width(rest)

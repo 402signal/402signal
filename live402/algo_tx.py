@@ -208,6 +208,27 @@ def msgpack_decode(raw: bytes) -> dict:
     return obj
 
 
+def txid_from_unsigned(txn: dict) -> str:
+    """Official Algorand txid: base32(SHA512_256('TX' || msgpack(unsigned))).
+
+    52-character no-pad base32. Same algorithm as the SDK Transaction.get_txid.
+    """
+    if not isinstance(txn, dict):
+        raise ValueError("unsigned txn required")
+    raw = encode_unsigned(txn)
+    digest = sha512_256(b"TX" + raw)
+    return base64.b32encode(digest).decode("ascii").rstrip("=")
+
+
+def txid_from_signed(signed: bytes) -> str:
+    """txid of the unsigned txn inside a SignedTxn msgpack blob."""
+    obj = msgpack_decode(bytes(signed))
+    txn = obj.get("txn") if isinstance(obj, dict) else None
+    if not isinstance(txn, dict):
+        raise ValueError("signed txn missing txn")
+    return txid_from_unsigned(txn)
+
+
 def calculate_group_id(txns: list[dict]) -> bytes:
     txids = []
     for txn in txns:
