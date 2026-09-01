@@ -58,7 +58,8 @@ CREATE TABLE IF NOT EXISTS probes (
     amount TEXT,
     miss_reason TEXT,
     rail TEXT,
-    schema_present INTEGER
+    schema_present INTEGER,
+    settled_route_observation INTEGER NOT NULL DEFAULT 1
 );
 CREATE INDEX IF NOT EXISTS probes_url_ts ON probes(url, ts);
 CREATE INDEX IF NOT EXISTS probes_ts ON probes(ts);
@@ -71,7 +72,8 @@ CREATE TABLE IF NOT EXISTS url_state (
     price_changed_at INTEGER,
     schema_changed_at INTEGER,
     last_checked INTEGER,
-    last_success_402 INTEGER
+    last_success_402 INTEGER,
+    pending_payTo TEXT
 );
 CREATE TABLE IF NOT EXISTS observations (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -153,10 +155,24 @@ def _connect() -> sqlite3.Connection:
     conn.execute("PRAGMA synchronous=NORMAL")
     conn.executescript(_SCHEMA)
     conn.commit()
+    _migrate_columns(conn)
     _conn = conn
     _conn_path = path
     _chmod_db_files(path)
     return conn
+
+
+def _migrate_columns(conn: sqlite3.Connection) -> None:
+    """Additive columns only. Never rewrite probe bodies or the PQ log."""
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(probes)").fetchall()}
+    if "settled_route_observation" not in cols:
+        conn.execute(
+            "ALTER TABLE probes ADD COLUMN settled_route_observation INTEGER NOT NULL DEFAULT 1"
+        )
+    state_cols = {row[1] for row in conn.execute("PRAGMA table_info(url_state)").fetchall()}
+    if "pending_payTo" not in state_cols:
+        conn.execute("ALTER TABLE url_state ADD COLUMN pending_payTo TEXT")
+    conn.commit()
 
 
 def _chmod_db_files(path: str) -> None:
@@ -539,7 +555,11 @@ def _write_probe_row(dest: str, snap: dict, meta: dict) -> None:
     claimed = _claimed_blob(snap)
     conn = _connect()
     cur = conn.cursor()
-    cur.execute("SELECT last_payTo, last_amount, schema_present, payTo_changed_at, price_changed_at, schema_changed_at, last_success_402 FROM url_state WHERE url = ?", (dest,))
+    cur.execute(
+        "SELECT last_payTo, last_amount, schema_present, payTo_changed_at, price_changed_at, "
+        "schema_changed_at, last_success_402, pending_payTo FROM url_state WHERE url = ?",
+        (dest,),
+    )
     row = cur.fetchone()
     prev_pay = _text(row[0]) if row else None
     prev_amt = _text(row[1]) if row else None
@@ -548,29 +568,50 @@ def _write_probe_row(dest: str, snap: dict, meta: dict) -> None:
     price_changed_at = row[4] if row else None
     schema_changed_at = row[5] if row else None
     last_ok = row[6] if row else None
+    pending_pay = _text(row[7]) if row and len(row) > 7 else None
     if prev_pay and pay_to and not payment.payto_equal(prev_pay, pay_to, rail):
-        pay_changed_at = ts
-        meta["payTo_flipped"] = True
+        if pending_pay and payment.payto_equal(pending_pay, pay_to, rail):
+            # Second independent observation of the same new dest: establish.
+            meta["payTo_flipped"] = False
+            meta["payTo_established"] = True
+            pending_pay = None
+            prev_pay = pay_to
+        else:
+            pay_changed_at = ts
+            meta["payTo_flipped"] = True
+            meta["payTo_pending"] = True
+            pending_pay = pay_to
+    elif pay_to:
+        pending_pay = None
     claimed_pay = _text(claimed.get("payTo")) if claimed else None
     claimed_rail = _text(claimed.get("rail")) if claimed else None
     if claimed_pay and pay_to and not payment.payto_equal(
         claimed_pay, pay_to, claimed_rail or rail
     ):
-        meta["payTo_flipped"] = True
+        if not meta.get("payTo_established"):
+            meta["payTo_flipped"] = True
     if prev_amt is not None and amount is not None and _price_flipped(prev_amt, amount, snap, rail):
         price_changed_at = ts
         meta["price_flipped"] = True
     if prev_schema is not None and schema_present is not None and int(prev_schema) != int(schema_present):
         schema_changed_at = ts
         meta["schema_flipped"] = True
-    last_pay = pay_to if pay_to else prev_pay
+    if meta.get("payTo_pending"):
+        last_pay = prev_pay
+    else:
+        last_pay = pay_to if pay_to else prev_pay
     last_amt = amount if amount is not None else prev_amt
     last_schema = int(schema_present) if schema_present is not None else prev_schema
     if live:
         last_ok = ts
+    settled = snap.get("settled_route_observation")
+    if settled is None:
+        settled = 1
+    else:
+        settled = 1 if settled else 0
     cur.execute(
-        "INSERT INTO probes (url, ts, live, payable, invocable, latency_ms, payTo, amount, miss_reason, rail, schema_present) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (dest, ts, live, payable, invocable, latency, pay_to, amount, miss, rail, schema_present),
+        "INSERT INTO probes (url, ts, live, payable, invocable, latency_ms, payTo, amount, miss_reason, rail, schema_present, settled_route_observation) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (dest, ts, live, payable, invocable, latency, pay_to, amount, miss, rail, schema_present, settled),
     )
     probe_id = cur.lastrowid
     obs_fields = {
@@ -607,8 +648,8 @@ def _write_probe_row(dest: str, snap: dict, meta: dict) -> None:
         )
     cur.execute(
         """
-        INSERT INTO url_state (url, last_payTo, last_amount, schema_present, payTo_changed_at, price_changed_at, schema_changed_at, last_checked, last_success_402)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO url_state (url, last_payTo, last_amount, schema_present, payTo_changed_at, price_changed_at, schema_changed_at, last_checked, last_success_402, pending_payTo)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(url) DO UPDATE SET
             last_payTo = excluded.last_payTo,
             last_amount = excluded.last_amount,
@@ -617,9 +658,10 @@ def _write_probe_row(dest: str, snap: dict, meta: dict) -> None:
             price_changed_at = excluded.price_changed_at,
             schema_changed_at = excluded.schema_changed_at,
             last_checked = excluded.last_checked,
-            last_success_402 = excluded.last_success_402
+            last_success_402 = excluded.last_success_402,
+            pending_payTo = excluded.pending_payTo
         """,
-        (dest, last_pay, last_amt, last_schema, pay_changed_at, price_changed_at, schema_changed_at, ts, last_ok),
+        (dest, last_pay, last_amt, last_schema, pay_changed_at, price_changed_at, schema_changed_at, ts, last_ok, pending_pay),
     )
     cur.execute(
         "SELECT id FROM probes WHERE url = ? ORDER BY ts DESC, id DESC",
@@ -705,6 +747,8 @@ def persist_route_batch(batch_id: str | None, results: list | None) -> dict:
             for raw in rows:
                 snap = dict(raw)
                 snap["batch_id"] = bid
+                if "settled_route_observation" not in snap:
+                    snap["settled_route_observation"] = 0
                 dest = _text(snap.get("url"))
                 meta = {"payTo_flipped": False, "price_flipped": False, "schema_flipped": False}
                 _write_probe_row(dest, snap, meta)
@@ -720,6 +764,28 @@ def persist_route_batch(batch_id: str | None, results: list | None) -> dict:
         return metas
     except Exception:
         return metas
+
+
+def mark_batch_settled(batch_id: str | None) -> None:
+    """Promote a paid route batch to settled_route_observation. Never raises.
+
+    Settlement-failed routes stay unsettled and are excluded from reputation.
+    """
+    try:
+        bid = _ok_batch_id(batch_id) or _text(batch_id)
+        if not bid:
+            return
+        with _lock:
+            conn = _connect()
+            conn.execute(
+                "UPDATE probes SET settled_route_observation = 1 "
+                "WHERE id IN (SELECT probe_id FROM observations WHERE batch_id = ? AND probe_id IS NOT NULL)",
+                (bid,),
+            )
+            conn.commit()
+            _chmod_db_files(_conn_path or db_path())
+    except Exception:
+        return
 
 
 def record_claim(url: str, fields: dict | None = None, *, source=None, rail=None, ts=None, batch_id=None) -> None:
@@ -1218,7 +1284,8 @@ def reputation_evidence(url: str) -> dict:
                 if state[4] is not None:
                     out["age_s"] = max(0, now - int(state[4]))
             cur.execute(
-                "SELECT ts, live, rail, payTo, amount, schema_present FROM probes WHERE url = ? ORDER BY ts ASC, id ASC",
+                "SELECT ts, live, rail, payTo, amount, schema_present, settled_route_observation "
+                "FROM probes WHERE url = ? ORDER BY ts ASC, id ASC",
                 (dest,),
             )
             rows = cur.fetchall()
@@ -1241,7 +1308,11 @@ def reputation_evidence(url: str) -> dict:
         rail_changes = 0
         rail_changed_at = None
         rails = []
-        for ts, live, rail, pay_to, amount, schema_present in rows:
+        for row in rows:
+            ts, live, rail, pay_to, amount, schema_present = row[:6]
+            settled = int(row[6]) if len(row) > 6 and row[6] is not None else 1
+            if settled == 0:
+                continue
             rname = _text(rail)
             if rname and rname not in rails:
                 rails.append(rname)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import os
 import tempfile
 import unittest
@@ -108,17 +109,32 @@ class ReceiptTests(unittest.TestCase):
         result = {"live": True, "url": "https://fixture.402signal.local/weather"}
         out = receipt.attach_to_route(result, {"need": "weather"})
         tr = out["pq_trust"]["transparency"]
-        self.assertEqual(tr["status"], "unavailable")
+        self.assertEqual(tr["status"], "logged_uncheckpointed")
+        self.assertEqual(tr["state"], "logged_uncheckpointed")
         self.assertNotEqual(tr["status"], "pending")
-        self.assertNotIn("receipt", tr)
+        self.assertIsNotNone(store.leaf_at(tr["index"]))
+        self.assertFalse(store.latest_checkpoint())
         self.assertFalse(out["payment_authorization"]["pq_native"])
         self.assertNotIn("pq_secure", out)
+
+    def test_log_kill_switch_is_unavailable(self):
+        os.environ["LIVE402_PQ_LOG"] = "0"
+        try:
+            result = {"live": True, "url": "https://fixture.402signal.local/weather"}
+            out = receipt.attach_to_route(result, {"need": "weather"})
+            tr = out["pq_trust"]["transparency"]
+            self.assertEqual(tr["status"], "unavailable")
+            self.assertNotEqual(tr["status"], "pending")
+            self.assertNotIn("receipt", tr)
+        finally:
+            os.environ.pop("LIVE402_PQ_LOG", None)
 
     def test_pending_means_durable_and_signed_not_algorand(self):
         result = {"live": True, "url": "https://fixture.402signal.local/weather"}
         out = receipt.attach_to_route(result, {"need": "weather in austin"})
         tr = out["pq_trust"]["transparency"]
         self.assertEqual(tr["status"], "pending")
+        self.assertEqual(tr["state"], "checkpoint_signed")
         self.assertIn("receipt", tr)
         self.assertIsNotNone(store.leaf_at(tr["index"]))
         self.assertTrue(store.latest_checkpoint())
@@ -126,6 +142,11 @@ class ReceiptTests(unittest.TestCase):
         self.assertNotIn("austin", leaf)
         self.assertNotIn("weather in austin", leaf)
         self.assertNotIn("state_proof_covered", str(out))
+        receipt.verify_receipt(tr["receipt"], self.vkey)
+        self.assertTrue(tr["receipt"].get("leaf_hash"))
+        self.assertTrue(events.verify_reveal(tr["reveal"]["commitment"], tr["reveal"]))
+        self.assertNotIn("salt", json.loads(leaf))
+        self.assertNotIn("need", json.loads(leaf))
 
     def test_route_still_succeeds_when_log_unavailable(self):
         receipt.configure_signer(None)
@@ -138,7 +159,7 @@ class ReceiptTests(unittest.TestCase):
             )
             self.assertEqual(code, 200)
             self.assertTrue(body["live"])
-            self.assertEqual(body["pq_trust"]["transparency"]["status"], "unavailable")
+            self.assertEqual(body["pq_trust"]["transparency"]["status"], "logged_uncheckpointed")
             self.assertFalse(body["payment_authorization"]["pq_native"])
             self.assertNotEqual(body["pq_trust"]["transparency"]["status"], "pending")
         finally:

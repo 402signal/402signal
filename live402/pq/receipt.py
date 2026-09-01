@@ -1,11 +1,14 @@
 """Receipt / tlog-proof. Never sign before the leaf is durable.
 
-Flow: canonicalize → durable append → assigned index → sign C2SP checkpoint
-→ return {index, inclusion_path, checkpoint}.
+Flow: canonicalize → durable append (independent of Ed25519) → assigned
+index → optional sign C2SP checkpoint → return receipt.
 
-pending = durable leaf + signed checkpoint, not yet Algorand-anchored.
-unavailable = log could not produce that pair. Never call unavailable "pending".
-Do not wait for Algorand on the request path. Never emit pq_secure:true.
+States: logged_uncheckpointed → checkpoint_signed → authorized →
+submitted → confirmed. Public status "pending" still means durable leaf
++ signed checkpoint (checkpoint_signed), not an Algorand inclusion.
+Never say pending if the leaf is not durable. Never say signed if there
+is no checkpoint. unavailable = could not append. Do not wait for
+Algorand on the request path. Never emit pq_secure:true.
 """
 
 from __future__ import annotations
@@ -130,25 +133,36 @@ def install_before_append_hook(fn: Callable[[bytes], None] | None) -> None:
         _before_append_hooks.append(fn)
 
 
+def log_enabled() -> bool:
+    """True when the append-only log may accept a leaf. Independent of Ed25519."""
+    return os.environ.get("LIVE402_PQ_LOG") != "0"
+
+
 def available() -> bool:
-    if os.environ.get("LIVE402_PQ_LOG") == "0":
-        return False
-    return _signer is not None
+    """True when a signed checkpoint receipt can be issued."""
+    return log_enabled() and _signer is not None
 
 
-def issue(event: dict) -> dict:
-    """Canonicalize, durable-append, then sign. No receipt if any step fails."""
-    if not available():
+def append_event(event: dict) -> dict:
+    """Durable append only. Does not sign. Independent of Ed25519."""
+    if not log_enabled():
         raise ReceiptError("pq log unavailable")
     body = events.leaf_bytes(event)
     for hook in list(_before_append_hooks):
         hook(body)
     rec = store.append(body)
     idx = int(rec["idx"])
-    tree_size = int(rec["size"])
     if store.leaf_at(idx) is None:
         raise ReceiptError("leaf not durable")
-    store.publish_up_to(tree_size)
+    store.publish_up_to(int(rec["size"]))
+    return rec
+
+
+def issue(event: dict) -> dict:
+    """Canonicalize, durable-append, then sign. No signed receipt if signing fails."""
+    rec = append_event(event)
+    idx = int(rec["idx"])
+    tree_size = int(rec["size"])
     if not store.ready_to_checkpoint(tree_size):
         raise ReceiptError("tiles/bundles missing; refusing to sign")
     signer = _signer
@@ -166,6 +180,7 @@ def issue(event: dict) -> dict:
         "checkpoint": note,
         "checkpoint_size": tree_size,
         "leaf_hash": rec["leaf_hash"].hex(),
+        "state": "checkpoint_signed",
     }
 
 
@@ -196,8 +211,21 @@ def verify_receipt(receipt: dict, vkey: str | None = None) -> dict:
     return verified
 
 
+def _unavailable(result: dict, origin: str) -> dict:
+    result["pq_trust"] = {
+        "transparency": {
+            "status": "unavailable",
+            "state": "unavailable",
+            "log_origin": origin,
+        }
+    }
+    return result
+
+
 def attach_to_route(result: dict, request_body: dict | None = None) -> dict:
-    """Best-effort transparency object. Paid /route still succeeds if this fails."""
+    """Best-effort transparency object. Paid /route still succeeds if this fails
+    unless the caller set require_transparency (handled by route.py).
+    """
     if not isinstance(result, dict):
         return {}
     pay = result.get("payment_authorization")
@@ -207,42 +235,60 @@ def attach_to_route(result: dict, request_body: dict | None = None) -> dict:
     result["payment_authorization"] = pay
     result.pop("pq_secure", None)
     origin = store.origin() or ORIGIN
-    if not available():
-        result["pq_trust"] = {
-            "transparency": {
-                "status": "unavailable",
-                "log_origin": origin,
-            }
-        }
-        return result
+    if not log_enabled():
+        return _unavailable(result, origin)
     try:
         req = request_body if isinstance(request_body, dict) else {}
-        ev = events.route_decision_event(
+        ev, reveal = events.route_decision_event_v2(
             need=req.get("need") if isinstance(req.get("need"), str) else "",
             url=(req.get("url") if isinstance(req.get("url"), str) else "")
             or (result.get("url") if isinstance(result.get("url"), str) else ""),
             live=result.get("live"),
             miss_reason=result.get("miss_reason") if isinstance(result.get("miss_reason"), str) else None,
         )
-        proof = issue(ev)
-        result["pq_trust"] = {
-            "transparency": {
-                "status": "pending",
-                "log_origin": origin,
-                "index": proof["index"],
-                "checkpoint_size": proof["checkpoint_size"],
-                "receipt": {
-                    "index": proof["index"],
-                    "inclusion_path": proof["inclusion_path"],
-                    "checkpoint": proof["checkpoint"],
-                },
-            }
+        transparency = {
+            "log_origin": origin,
+            "leaf_type": events.TYPE_ROUTE_DECISION_V2,
+            "reveal": reveal,
         }
+        if available():
+            try:
+                proof = issue(ev)
+                transparency.update(
+                    {
+                        "status": "pending",
+                        "state": "checkpoint_signed",
+                        "index": proof["index"],
+                        "checkpoint_size": proof["checkpoint_size"],
+                        "receipt": {
+                            "index": proof["index"],
+                            "inclusion_path": proof["inclusion_path"],
+                            "checkpoint": proof["checkpoint"],
+                            "leaf_hash": proof["leaf_hash"],
+                        },
+                    }
+                )
+            except ReceiptError:
+                rec = append_event(ev)
+                transparency.update(
+                    {
+                        "status": "logged_uncheckpointed",
+                        "state": "logged_uncheckpointed",
+                        "index": rec["idx"],
+                        "receipt": {"index": rec["idx"], "leaf_hash": rec["leaf_hash"].hex()},
+                    }
+                )
+        else:
+            rec = append_event(ev)
+            transparency.update(
+                {
+                    "status": "logged_uncheckpointed",
+                    "state": "logged_uncheckpointed",
+                    "index": rec["idx"],
+                    "receipt": {"index": rec["idx"], "leaf_hash": rec["leaf_hash"].hex()},
+                }
+            )
+        result["pq_trust"] = {"transparency": transparency}
     except Exception:
-        result["pq_trust"] = {
-            "transparency": {
-                "status": "unavailable",
-                "log_origin": origin,
-            }
-        }
+        return _unavailable(result, origin)
     return result

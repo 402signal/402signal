@@ -334,10 +334,22 @@ class ConstraintTests(unittest.TestCase):
             select.pick_winner([other_rail], "best", {"rails": frozenset({"solana"})})
         )
 
-    def test_payto_changed_is_still_selectable(self):
+    def test_payto_changed_is_not_selectable_without_opt_in(self):
         flipped = _hit(url="https://flip.example/x", payTo_changed=True, risk=["payTo_changed"])
         self.assertTrue(select.passes_constraints(flipped, {}))
-        self.assertIs(select.pick_winner([flipped], "best", None), flipped)
+        self.assertIsNone(select.pick_winner([flipped], "best", None))
+        self.assertIs(
+            select.pick_winner([flipped], "best", {"accept_payTo_change": True}),
+            flipped,
+        )
+
+    def test_all_changed_window_empty_unless_opt_in(self):
+        a = _hit(url="https://a.example/x", payTo_changed=True)
+        b = _hit(url="https://b.example/x", payTo_changed=True)
+        stable = _hit(url="https://stable.example/x")
+        self.assertIsNone(select.pick_winner([a, b], "best", None))
+        self.assertIs(select.pick_winner([a, b, stable], "best", None), stable)
+        self.assertIs(select.pick_winner([a, b], "best", {"accept_payTo_change": True}), a)
 
     def test_unknown_probe_latency_fails_closed(self):
         unknown = _hit(url="https://unk-lat.example/x", latency=None)

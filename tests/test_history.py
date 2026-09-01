@@ -235,8 +235,11 @@ class HistoryDbTests(unittest.TestCase):
         history.record_probe(url, _snap(live=True, payTo="0xaaa", ts=t0))
         history.record_probe(url, _snap(live=True, payTo="0xbbb", ts=t0 + 2))
         summ = history.summary(url)
-        self.assertEqual(summ["last_payTo"], "0xbbb")
+        self.assertEqual(summ["last_payTo"], "0xaaa")
         self.assertEqual(summ["payTo_changed_at"], t0 + 2)
+        history.record_probe(url, _snap(live=True, payTo="0xbbb", ts=t0 + 4))
+        established = history.summary(url)
+        self.assertEqual(established["last_payTo"], "0xbbb")
 
     def test_base_payto_case_is_not_a_flip(self):
         url = "https://hist.example/base-case"
@@ -940,6 +943,40 @@ class HistoryShortlistTests(unittest.TestCase):
             ranked, need="weather forecast", prefer_network=None
         )
         self.assertEqual(probe._resource_url(boosted[0]), mature["url"])
+
+
+class SettlementReputationTests(unittest.TestCase):
+    def setUp(self):
+        self._prev = os.environ.get("LIVE402_HISTORY_DB")
+        fd, self._path = tempfile.mkstemp(suffix=".sqlite")
+        os.close(fd)
+        os.environ["LIVE402_HISTORY_DB"] = self._path
+        history.reset()
+
+    def tearDown(self):
+        history.reset()
+        if self._prev is None:
+            os.environ.pop("LIVE402_HISTORY_DB", None)
+        else:
+            os.environ["LIVE402_HISTORY_DB"] = self._prev
+        for p in (self._path, self._path + "-wal", self._path + "-shm"):
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+
+    def test_unsettled_route_batch_is_not_reputation_evidence(self):
+        url = "https://hist.example/unsettled-route"
+        bid = "batch-unsettled-rep-1"
+        snap = _snap(live=True, payTo=VALID_BASE_PAYTO, url=url, ts=int(time.time()) - 10)
+        history.persist_route_batch(bid, [snap])
+        ev = history.reputation_evidence(url)
+        self.assertEqual(ev["n_7d"], 0)
+        self.assertIsNone(ev["success_7d"])
+        history.mark_batch_settled(bid)
+        settled = history.reputation_evidence(url)
+        self.assertEqual(settled["n_7d"], 1)
+        self.assertEqual(settled["ok_7d"], 1)
 
 
 if __name__ == "__main__":

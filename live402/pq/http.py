@@ -10,6 +10,8 @@ Height 8 is implicit. Not sumdb /tile/H/L/N.
 
 from __future__ import annotations
 
+import json
+
 from live402.pq import HTTP_PREFIX
 from live402.pq import store
 from live402.pq import tiles as tilemod
@@ -63,6 +65,11 @@ def handle(path: str) -> tuple[int, bytes, str, dict]:
     if raw != HTTP_PREFIX and not raw.startswith(HTTP_PREFIX + "/"):
         return 404, b'{"error": "not found"}', "application/json; charset=utf-8", {}
     rel = raw[len(HTTP_PREFIX) :].lstrip("/")
+    if rel == "trust":
+        from live402.pq import trust
+
+        body = json.dumps(trust.public_descriptor()).encode("utf-8")
+        return 200, body, "application/json; charset=utf-8", {"Cache-Control": "no-store"}
     if rel == "checkpoint":
         note = store.latest_checkpoint()
         if not note:

@@ -16,7 +16,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from live402 import catalog, discover, history, mcp, payment, pulse, rails, reqctx, validate
+from live402 import catalog, discover, history, mcp, payment, pulse, rails, ready, reqctx, validate
 from live402 import http_body
 from live402.http_body import BodyReadError
 from live402.route import handle_route
@@ -523,6 +523,10 @@ class Handler(SimpleHTTPRequestHandler):
         finally:
             reqctx.request_id.reset(token)
 
+    def version_string(self) -> str:
+        """Do not advertise CPython / BaseHTTP version."""
+        return "402Signal"
+
     def end_headers(self) -> None:
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("X-Frame-Options", "DENY")
@@ -733,6 +737,9 @@ class Handler(SimpleHTTPRequestHandler):
             return self._json(402, required, extra)
         if parsed.path == "/health":
             return self._json(200, {"ok": True})
+        if parsed.path == "/ready":
+            payload = ready.readiness()
+            return self._json(200 if payload.get("ok") else 503, payload)
         if parsed.path == "/preview":
             if not self._preview_allowed():
                 return self._json(429, {"error": "rate limit"})
@@ -917,8 +924,10 @@ def main(argv: list[str] | None = None) -> None:
     assert_safe_http_boot(args.host)
     boot_http_process()
     httpd = BoundedThreadingHTTPServer((args.host, args.port), Handler)
-    # Existing production loop (catalog trickle + PQ tick / confirm).
     catalog.start_refresher()
+    from live402.pq import worker as pq_worker
+
+    pq_worker.start_worker()
     print(
         "402Signal http://%s:%s  fixture=%r local_free=%r"
         % (

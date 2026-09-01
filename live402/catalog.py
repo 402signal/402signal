@@ -1403,18 +1403,12 @@ def trickle_once() -> str:
 
 
 def _trickle_loop() -> None:
-    """Existing production loop. Catalog trickle plus PQ submit/confirm tick."""
+    """Catalog trickle only. PQ submit/confirm runs on its own worker thread."""
     while not _refresh_stop.wait(shadow.trickle_sleep_s()):
         if fixtures.fixture_mode() or _refresh_disabled():
             continue
         try:
             trickle_once()
-        except Exception:
-            pass
-        try:
-            from live402.pq import worker as pq_worker
-
-            pq_worker.tick()
         except Exception:
             continue
 

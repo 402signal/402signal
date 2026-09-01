@@ -1845,7 +1845,10 @@ class ProductBriefTests(unittest.TestCase):
         self.assertLessEqual(len(route["description"]), 500)
         self.assertEqual(route["description"], payment.CATALOG_DESCRIPTION)
         self.assertNotIn("Signal402", route["description"])
-        self.assertEqual(route["inputSchema"].get("required"), ["need"])
+        self.assertEqual(
+            route["inputSchema"].get("anyOf"),
+            [{"required": ["need"]}, {"required": ["url"]}],
+        )
         self.assertIn("prefer_network", (route["inputSchema"].get("properties") or {}))
         props = (route.get("outputSchema") or {}).get("properties") or {}
         for key in (
@@ -1896,8 +1899,8 @@ class ProductBriefTests(unittest.TestCase):
         self.assertIn("help", post_402)
         self.assertIn("bazaar", (post_402.get("extensions") or {}))
         self.assertEqual(post_402.get("network"), "base")
-        need_req = spec["paths"]["/route"]["post"]["requestBody"]["content"]["application/json"]["schema"].get("required")
-        self.assertEqual(need_req, ["need"])
+        route_schema = spec["paths"]["/route"]["post"]["requestBody"]["content"]["application/json"]["schema"]
+        self.assertEqual(route_schema.get("anyOf"), [{"required": ["need"]}, {"required": ["url"]}])
         probes = spec["paths"]["/route"]["post"]["responses"]["200"]["content"]["application/json"]["schema"]["properties"]["probes"]
         self.assertIn("items", probes)
         live_props = spec["paths"]["/route"]["post"]["responses"]["200"]["content"]["application/json"]["schema"]["properties"]

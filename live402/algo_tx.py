@@ -113,6 +113,8 @@ def msgpack_encode(d: dict) -> bytes:
             encoded = _mp_str(val)
         elif isinstance(val, (bytes, bytearray)):
             encoded = _mp_bin(bytes(val))
+        elif isinstance(val, dict):
+            encoded = msgpack_encode(val)
         elif isinstance(val, list):
             encoded = _mp_array(
                 [_mp_bin(x) if isinstance(x, (bytes, bytearray)) else _mp_uint(int(x)) for x in val]
@@ -125,6 +127,85 @@ def msgpack_encode(d: dict) -> bytes:
 
 def encode_unsigned(txn: dict) -> bytes:
     return msgpack_encode(txn)
+
+
+def _mp_read_uint(buf: bytes, i: int) -> tuple[int, int]:
+    if i >= len(buf):
+        raise ValueError("truncated msgpack")
+    b = buf[i]
+    if b < 128:
+        return b, i + 1
+    if b == 0xCC:
+        return buf[i + 1], i + 2
+    if b == 0xCD:
+        return int.from_bytes(buf[i + 1 : i + 3], "big"), i + 3
+    if b == 0xCE:
+        return int.from_bytes(buf[i + 1 : i + 5], "big"), i + 5
+    if b == 0xCF:
+        return int.from_bytes(buf[i + 1 : i + 9], "big"), i + 9
+    raise ValueError("unsupported msgpack int")
+
+
+def _mp_read(buf: bytes, i: int):
+    if i >= len(buf):
+        raise ValueError("truncated msgpack")
+    b = buf[i]
+    if b == 0xC2:
+        return False, i + 1
+    if b == 0xC3:
+        return True, i + 1
+    if b < 128 or b in (0xCC, 0xCD, 0xCE, 0xCF):
+        return _mp_read_uint(buf, i)
+    if 0xA0 <= b <= 0xBF:
+        n = b - 0xA0
+        return buf[i + 1 : i + 1 + n].decode("utf-8"), i + 1 + n
+    if b == 0xD9:
+        n = buf[i + 1]
+        return buf[i + 2 : i + 2 + n].decode("utf-8"), i + 2 + n
+    if b == 0xC4:
+        n = buf[i + 1]
+        return bytes(buf[i + 2 : i + 2 + n]), i + 2 + n
+    if b == 0xC5:
+        n = int.from_bytes(buf[i + 1 : i + 3], "big")
+        return bytes(buf[i + 3 : i + 3 + n]), i + 3 + n
+    if b == 0xC6:
+        n = int.from_bytes(buf[i + 1 : i + 5], "big")
+        return bytes(buf[i + 5 : i + 5 + n]), i + 5 + n
+    if 0x80 <= b <= 0x8F:
+        n = b - 0x80
+        i += 1
+        out = {}
+        for _ in range(n):
+            key, i = _mp_read(buf, i)
+            val, i = _mp_read(buf, i)
+            out[str(key)] = val
+        return out, i
+    if b == 0xDE:
+        n = int.from_bytes(buf[i + 1 : i + 3], "big")
+        i += 3
+        out = {}
+        for _ in range(n):
+            key, i = _mp_read(buf, i)
+            val, i = _mp_read(buf, i)
+            out[str(key)] = val
+        return out, i
+    if 0x90 <= b <= 0x9F:
+        n = b - 0x90
+        i += 1
+        items = []
+        for _ in range(n):
+            val, i = _mp_read(buf, i)
+            items.append(val)
+        return items, i
+    raise ValueError("unsupported msgpack type")
+
+
+def msgpack_decode(raw: bytes) -> dict:
+    """Minimal decoder for Algorand SignedTxn maps we encode. Fail closed."""
+    obj, end = _mp_read(bytes(raw), 0)
+    if end != len(raw) or not isinstance(obj, dict):
+        raise ValueError("invalid msgpack map")
+    return obj
 
 
 def calculate_group_id(txns: list[dict]) -> bytes:

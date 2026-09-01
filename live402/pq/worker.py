@@ -30,6 +30,8 @@ confirm_testnet_anchor decodes, verifies, and persists last_confirmed.
 
 from __future__ import annotations
 
+import os
+import threading
 import time
 import uuid
 
@@ -205,9 +207,11 @@ def _recover_authorized(size: int, origin: str, root_hex: str, note: str) -> dic
         "request_id": existing.get("request_id") or "",
         "submitted": submitted,
         "txid": txid if submitted else "",
-        "status": "pending",
+        "status": "authorized",
         "authorized": True,
         "confirmed": False,
+        "origin": existing.get("origin") or "",
+        "root": existing.get("root") or "",
     }
 
 
@@ -286,6 +290,29 @@ def _maybe_broadcast(out: dict, *, send_fn, sender: str | None, params: dict) ->
         return out
     addr = algo_anchor.falcon_address(sender)
     if not algo_anchor.submit_allowed(sender=addr, params=params):
+        return out
+    origin = str(out.get("origin") or "")
+    size = int(out.get("tree_size") or 0)
+    root = out.get("root")
+    if not origin or size < 1:
+        existing = store.authorized_at(int(out.get("tree_size") or 0)) if out.get("tree_size") else None
+        if existing:
+            origin = existing.get("origin") or store.origin() or ORIGIN
+            size = int(existing.get("tree_size") or 0)
+            root = existing.get("root")
+    if not origin or size < 1:
+        origin = store.origin() or ORIGIN
+        size = int(out.get("tree_size") or store.size())
+        root = store.root(size)
+    try:
+        algo_anchor.validate_signed_txn(
+            bytes(blob),
+            expected_origin=origin,
+            expected_size=size,
+            expected_root=root,
+            expected_address=addr,
+        )
+    except algo_anchor.AnchorError:
         return out
     txid = algo_anchor.send_if_allowed(bytes(blob), send_fn=send_fn, sender=addr, params=params)
     if not txid:
@@ -383,9 +410,11 @@ def maybe_submit(
         "signed": bytes(stored.get("signed") or signed),
         "request_id": stored.get("request_id") or request_id,
         "submitted": False,
-        "status": "pending",
+        "status": "authorized",
         "authorized": True,
         "confirmed": False,
+        "origin": origin,
+        "root": root.hex() if isinstance(root, (bytes, bytearray)) else str(root or ""),
     }
     return _maybe_broadcast(out, send_fn=send_fn, sender=sender, params=p)
 
@@ -462,6 +491,57 @@ def maybe_confirm(fetch_fn=None, at: int | None = None) -> dict | None:
         return None
 
 
+_tick_lock = threading.Lock()
+_tick_thread: threading.Thread | None = None
+_tick_stop = threading.Event()
+_TICK_DEFAULT_S = 5.0
+
+
+def _tick_sleep_s() -> float:
+    raw = (os.environ.get("LIVE402_PQ_TICK_S") or "").strip()
+    try:
+        n = float(raw) if raw else _TICK_DEFAULT_S
+    except ValueError:
+        n = _TICK_DEFAULT_S
+    return max(1.0, min(30.0, n))
+
+
+def start_worker() -> None:
+    """Independent PQ tick loop. Fixture mode is network-free and does not start."""
+    from live402 import fixtures
+
+    if fixtures.fixture_mode():
+        return
+    global _tick_thread
+    with _tick_lock:
+        if _tick_thread is not None and _tick_thread.is_alive():
+            return
+        _tick_stop.clear()
+        _tick_thread = threading.Thread(target=_tick_loop, name="pq-anchor", daemon=True)
+        _tick_thread.start()
+
+
+def stop_worker() -> None:
+    _tick_stop.set()
+
+
+def _tick_loop() -> None:
+    from live402 import fixtures
+
+    while not _tick_stop.wait(_tick_sleep_s()):
+        if fixtures.fixture_mode():
+            continue
+        try:
+            tick()
+        except Exception:
+            continue
+
+
+def worker_running() -> bool:
+    thread = _tick_thread
+    return thread is not None and thread.is_alive()
+
+
 def tick(
     signer_callback=None,
     sender: str | None = None,
@@ -473,8 +553,8 @@ def tick(
 ) -> dict | None:
     """Existing PQ worker tick. Submit if needed, then independently confirm.
 
-    Called from the catalog trickle loop (server.main → start_refresher).
-    Does not start a second loop. POST success is not confirmation.
+    Called from the independent pq-anchor thread (server.main → start_worker).
+    Catalog trickle must not start a second copy. POST success is not confirmation.
     """
     try:
         maybe_submit(

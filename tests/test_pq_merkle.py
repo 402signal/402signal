@@ -200,6 +200,37 @@ class TrustRootTests(unittest.TestCase):
         self.assertEqual(desc["rotation"], "new-shard")
         self.assertTrue(desc["not_mainnet_go"])
 
+    def test_incremental_frontier_matches_full_rebuild(self):
+        tmp = tempfile.TemporaryDirectory()
+        os.environ["LIVE402_PQ_LOG_DB"] = os.path.join(tmp.name, "pq-log.sqlite")
+        store.reset()
+        try:
+            bodies = [b"leaf-%04d" % i for i in range(64)]
+            hashes = []
+            roots = []
+            for body in bodies:
+                rec = store.append(body)
+                hashes.append(rec["leaf_hash"])
+                roots.append(store.root(rec["size"]))
+            for n in (1, 2, 3, 7, 8, 16, 31, 32, 63, 64):
+                rebuilt = merkle.mth_from_leaf_hashes(hashes[:n])
+                self.assertEqual(store.root(n), rebuilt, "root n=%s" % n)
+                self.assertEqual(roots[n - 1], rebuilt)
+                path = store.inclusion_path(n - 1, n)
+                naive = merkle.inclusion_path(n - 1, hashes[:n])
+                self.assertEqual(path, naive)
+                if n > 1:
+                    cons = store.consistency_path(n // 2, n)
+                    naive_c = merkle.consistency_path(n // 2, hashes[:n])
+                    self.assertEqual(cons, naive_c)
+                    self.assertTrue(
+                        merkle.verify_consistency(n // 2, n, roots[n // 2 - 1], roots[n - 1], cons)
+                    )
+        finally:
+            store.reset()
+            os.environ.pop("LIVE402_PQ_LOG_DB", None)
+            tmp.cleanup()
+
     def test_unknown_algorithm_fail_closed(self):
         bad = trust.load_descriptor()
         bad = dict(bad)

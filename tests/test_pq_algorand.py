@@ -425,7 +425,7 @@ class TestNetSubmitTests(unittest.TestCase):
         desc = trust.trust_root()
         self.assertTrue(desc["not_mainnet_go"])
         self.assertEqual(desc["falcon"]["allowed_broadcast"], "testnet")
-        self.assertEqual(desc["falcon"]["network"], "mainnet-v1.0")
+        self.assertEqual(desc["falcon"]["network"], "testnet-v1.0")
         self.assertEqual(trust.falcon_allowed_broadcast(), "testnet")
 
 

@@ -386,6 +386,104 @@ def _pinned_https(url: str, host: str) -> bool:
     return True
 
 
+_FORBIDDEN_SIGNED_KEYS = frozenset(
+    {"sgnr", "sig", "msig", "lsig", "lsg", "auth-addr", "authAddr", "auth_addr"}
+)
+_FORBIDDEN_TXN_TYPES = frozenset({"axfer", "appl", "acfg", "afrz", "keyreg", "stpf"})
+
+
+def validate_signed_txn(
+    signed: bytes,
+    *,
+    expected_origin: str,
+    expected_size: int,
+    expected_root,
+    expected_address: str | None = None,
+) -> dict:
+    """Semantic verify of a SignedTxn before any broadcast.
+
+    TestNet pay-0 self-Falcon, expected note/origin/size/root, fee cap,
+    no AuthAddr/rekey/close/group/lease/axfer/appcall. Does not parse a
+    Falcon secret key. Does not POST.
+    """
+    if not isinstance(signed, (bytes, bytearray)) or not signed:
+        raise AnchorError("not a signed pq1 txn")
+    blob = bytes(signed)
+    if blob == PQSIG_MARKER.encode("utf-8"):
+        raise AnchorError("pqsig marker is not a signed txn")
+    try:
+        obj = algo_tx.msgpack_decode(blob)
+    except Exception as exc:
+        raise AnchorError("not a signed pq1 txn") from exc
+    if not isinstance(obj, dict):
+        raise AnchorError("not a signed pq1 txn")
+    for key in _FORBIDDEN_SIGNED_KEYS:
+        if key in obj and _nonzero_blob(obj.get(key)):
+            raise AnchorError("auth address forbidden")
+    txn = obj.get("txn")
+    if not isinstance(txn, dict):
+        raise AnchorError("not a signed pq1 txn")
+    tx_type = str(txn.get("type") or "")
+    if tx_type in _FORBIDDEN_TXN_TYPES or tx_type != "pay":
+        raise AnchorError("not a payment")
+    if any(k in txn for k in ("close", "rekey", "lx", "grp", "aamt", "xaid", "apid", "arcv")):
+        raise AnchorError("not pq1 construction")
+    if _nonzero_blob(txn.get("close")) or _nonzero_blob(txn.get("rekey")):
+        raise AnchorError("rekey/close forbidden")
+    if _nonzero_blob(txn.get("grp")) or _nonzero_blob(txn.get("lx")):
+        raise AnchorError("group/lease forbidden")
+    amt = txn.get("amt")
+    if amt not in (None, 0):
+        raise AnchorError("amount must be 0")
+    gen = str(txn.get("gen") or "")
+    if gen == MAINNET_GENESIS_ID or gen != TESTNET_GENESIS_ID:
+        raise AnchorError("not testnet genesis")
+    fee = int(txn.get("fee") or 0)
+    if fee < 1 or fee > MAX_FEE:
+        raise AnchorError("fee out of range")
+    addr = (expected_address or falcon_address() or "").strip()
+    if not addr:
+        raise AnchorError("falcon address required")
+    try:
+        want = algo_tx.decode_address(addr)
+        snd = _field_bytes(txn.get("snd"))
+        rcv = _field_bytes(txn.get("rcv"))
+    except Exception as exc:
+        raise AnchorError("sender/receiver mismatch") from exc
+    if snd != want or rcv != want:
+        raise AnchorError("sender/receiver mismatch")
+    try:
+        note = txn.get("note")
+        if isinstance(note, str):
+            note = bytes.fromhex(note)
+        parsed = decode_note(bytes(note))
+    except Exception as exc:
+        raise AnchorError("invalid note") from exc
+    if parsed["origin_hash"] != origin_hash(expected_origin):
+        raise AnchorError("origin mismatch")
+    if int(parsed["tree_size"]) != int(expected_size):
+        raise AnchorError("tree size mismatch")
+    if isinstance(expected_root, (bytes, bytearray)):
+        want_root = bytes(expected_root)
+    else:
+        try:
+            want_root = bytes.fromhex(str(expected_root or ""))
+        except ValueError as exc:
+            raise AnchorError("invalid root") from exc
+    if parsed["root"] != want_root:
+        raise AnchorError("root mismatch")
+    pq = _pq_auth_from_obj(obj)
+    if not pq:
+        raise AnchorError("falcon authorization missing")
+    return {
+        "origin": expected_origin,
+        "tree_size": int(parsed["tree_size"]),
+        "root": parsed["root"],
+        "address": addr,
+        "fee": fee,
+    }
+
+
 def send_if_allowed(signed: bytes, *, send_fn=None, sender: str | None = None, params: dict | None = None) -> str | None:
     """POST signer-approved SignedTxn bytes only when submit_allowed.
 

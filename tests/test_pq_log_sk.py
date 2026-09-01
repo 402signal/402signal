@@ -79,8 +79,8 @@ class LogSkEnvTests(unittest.TestCase):
             {"live": True, "url": "https://fixture.402signal.local/weather"},
             {"need": "weather"},
         )
-        self.assertEqual(out["pq_trust"]["transparency"]["status"], "unavailable")
-        self.assertNotIn("receipt", out["pq_trust"]["transparency"])
+        self.assertEqual(out["pq_trust"]["transparency"]["status"], "logged_uncheckpointed")
+        self.assertNotEqual(out["pq_trust"]["transparency"]["status"], "pending")
         self.assertFalse(out["payment_authorization"]["pq_native"])
 
     def test_kill_switch_overrides_configured_signer(self):
@@ -155,7 +155,8 @@ class LogSkEnvTests(unittest.TestCase):
             {"live": True, "url": "https://fixture.402signal.local/weather"},
             {"need": "weather"},
         )
-        self.assertEqual(out["pq_trust"]["transparency"]["status"], "unavailable")
+        self.assertEqual(out["pq_trust"]["transparency"]["status"], "logged_uncheckpointed")
+        self.assertNotEqual(out["pq_trust"]["transparency"]["status"], "pending")
 
     def test_malformed_hex_length_and_pem_fail_closed(self):
         for bad in ("ab", "zz" * 32, self.hex_sk + "00", "-----BEGIN PRIVATE KEY-----\nbad\n-----END PRIVATE KEY-----"):

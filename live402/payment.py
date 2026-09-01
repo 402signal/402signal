@@ -9,7 +9,6 @@ import re
 
 DEFAULT_PAYTO = "0xb18fc2275f36dae99eb215caeff03b431f887d16"
 USDC_BASE = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
-# Ross's Algorand receive address (no key stored here).
 DEFAULT_PAYTO_ALGORAND = "N2JSJZCSORMYGYO2NSIYRUEMBFRHEOMYODVXV2MXYYHB5H2JVUGG6NJ4NQ"
 USDC_ALGORAND_ASA = "31566704"  # USDC on Algorand mainnet
 ALGORAND_MAINNET = "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8="
@@ -84,7 +83,7 @@ BAZAAR_EXTENSION = {
                             "need": {"type": "string"},
                             "url": {"type": "string"},
                         },
-                        "required": ["need"],
+                        "anyOf": [{"required": ["need"]}, {"required": ["url"]}],
                     },
                     "queryParams": {
                         "type": "object",
@@ -167,8 +166,27 @@ BAZAAR_MCP = {
                         "enum": ["base", "solana", "algorand"],
                         "description": "Prefer this pay-in rail when ranking. Searches all supported rails; does not restrict to this rail. Use networks to restrict.",
                     },
+                    "objective": {
+                        "type": "string",
+                        "enum": [
+                            "best",
+                            "cheapest",
+                            "fastest",
+                            "most_reliable",
+                            "lowest_total_cost",
+                            "fastest_settlement",
+                        ],
+                    },
+                    "accept_payTo_change": {
+                        "type": "boolean",
+                        "description": "If true, allow selecting a destination whose payTo just changed for the first time.",
+                    },
+                    "require_transparency": {
+                        "type": "boolean",
+                        "description": "If true, paid /route fails when a signed checkpoint receipt cannot be produced.",
+                    },
                 },
-                "required": ["need"],
+                "anyOf": [{"required": ["need"]}, {"required": ["url"]}],
             },
             "example": {"need": "erc20 token balance"},
         },

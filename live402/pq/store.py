@@ -35,6 +35,11 @@ _lock = threading.RLock()
 _conn: sqlite3.Connection | None = None
 _conn_path: str | None = None
 
+
+class ConflictError(ValueError):
+    """Refusing a confirmed-checkpoint write that would fork history."""
+
+
 # Tests may install a hook between durable append and later steps.
 _after_durable_hooks: list[Callable[[int, bytes], None]] = []
 
@@ -320,8 +325,21 @@ def _size_unlocked(conn: sqlite3.Connection) -> int:
 def root(tree_size: int | None = None) -> bytes:
     with _lock:
         conn = _connect()
-        hashes = _leaf_hashes_unlocked(conn, tree_size)
-        return merkle.mth_from_leaf_hashes(hashes, get_range=lambda a, b: _cached_range(conn, a, b))
+        target = _size_unlocked(conn) if tree_size is None else int(tree_size)
+        if target < 0:
+            raise ValueError("negative tree size")
+        if target == 0:
+            return merkle.empty_tree_hash()
+        cached = _cached_range(conn, 0, target)
+        if cached is not None:
+            return cached
+        return merkle.mth_range(
+            0,
+            target,
+            lambda a, b: _cached_range(conn, a, b),
+            lambda a, b, h: _store_range(conn, a, b, h),
+            lambda i: _leaf_hash_at_unlocked(conn, i),
+        )
 
 
 def _cached_range(conn: sqlite3.Connection, start: int, end: int) -> bytes | None:
@@ -338,6 +356,14 @@ def _store_range(conn: sqlite3.Connection, start: int, end: int, digest: bytes) 
         "INSERT OR REPLACE INTO tree_hashes(start_idx, end_idx, hash) VALUES (?, ?, ?)",
         (start, end, digest),
     )
+
+
+def _leaf_hash_at_unlocked(conn: sqlite3.Connection, idx: int) -> bytes:
+    cur = conn.execute("SELECT leaf_hash FROM leaves WHERE idx = ?", (int(idx),))
+    row = cur.fetchone()
+    if not row:
+        raise ValueError("missing leaf hash")
+    return bytes(row[0])
 
 
 def _leaf_hashes_unlocked(conn: sqlite3.Connection, tree_size: int | None = None) -> list[bytes]:
@@ -408,11 +434,13 @@ def append(body: bytes) -> dict:
             "INSERT INTO leaves(idx, body, leaf_hash) VALUES (?, ?, ?)",
             (idx, raw, digest),
         )
-        _store_range(conn, idx, idx + 1, digest)
         new_size = idx + 1
-        hashes = _leaf_hashes_unlocked(conn, new_size)
-        root_h = merkle.mth_from_leaf_hashes(hashes)
-        _store_range(conn, 0, new_size, root_h)
+        merkle.incremental_root(
+            new_size,
+            digest,
+            lambda a, b: _cached_range(conn, a, b),
+            lambda a, b, h: _store_range(conn, a, b, h),
+        )
         conn.execute(
             "INSERT INTO meta(k, v) VALUES ('size', ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v",
             (str(new_size),),
@@ -524,15 +552,29 @@ def get_entry_bundle(n: int, width: int | None = None) -> bytes | None:
 def inclusion_path(index: int, tree_size: int | None = None) -> list[bytes]:
     with _lock:
         conn = _connect()
-        hashes = _leaf_hashes_unlocked(conn, tree_size)
-        return merkle.inclusion_path(index, hashes)
+        have = _size_unlocked(conn)
+        target = have if tree_size is None else int(tree_size)
+        return merkle.inclusion_path_cached(
+            index,
+            target,
+            lambda a, b: _cached_range(conn, a, b),
+            lambda i: _leaf_hash_at_unlocked(conn, i),
+            lambda a, b, h: _store_range(conn, a, b, h),
+        )
 
 
 def consistency_path(old_size: int, new_size: int | None = None) -> list[bytes]:
     with _lock:
         conn = _connect()
-        hashes = _leaf_hashes_unlocked(conn, new_size)
-        return merkle.consistency_path(old_size, hashes)
+        have = _size_unlocked(conn)
+        target = have if new_size is None else int(new_size)
+        return merkle.consistency_path_cached(
+            old_size,
+            target,
+            lambda a, b: _cached_range(conn, a, b),
+            lambda i: _leaf_hash_at_unlocked(conn, i),
+            lambda a, b, h: _store_range(conn, a, b, h),
+        )
 
 
 def save_checkpoint(tree_size: int, note: str) -> None:
@@ -770,26 +812,80 @@ def save_confirmed_checkpoint(
     confirmed_round: int,
     at: int,
 ) -> dict:
-    """Persist CONFIRMED only. Does not write authorized. Does not POST."""
+    """Persist CONFIRMED only. Does not write authorized. Does not POST.
+
+    Invariants (transactional):
+      - tree_size is monotonic vs last confirmed (strictly greater, or equal if identical)
+      - origin/root match the authorized row for that size when one exists
+      - txid is a 52-char Algorand txid; confirmed_round >= 1
+      - conflicting re-save of the same size is rejected
+      - identical re-save is idempotent
+    """
+    from live402.pq import algo_anchor
+
     size = int(tree_size)
+    if size < 1:
+        raise ConflictError("invalid tree size")
     root_hex = bytes(root).hex() if isinstance(root, (bytes, bytearray)) else str(root or "")
-    when = int(at)
+    if not root_hex or len(root_hex) != 64:
+        raise ConflictError("invalid root")
+    want_origin = origin or ""
+    want_txid = str(txid or "").strip()
+    if not algo_anchor._looks_like_txid(want_txid):
+        raise ConflictError("invalid txid")
     rnd = int(confirmed_round)
+    if rnd < 1:
+        raise ConflictError("invalid confirmed_round")
+    when = int(at)
     with _lock:
         conn = _connect()
+        last = last_confirmed_checkpoint()
+        last_size = int(last.get("size") or 0)
+        if last_size and size < last_size:
+            raise ConflictError("size not monotonic")
+        if last_size and size == last_size:
+            same = (
+                str(last.get("origin") or "") == want_origin
+                and str(last.get("root") or "") == root_hex
+                and str(last.get("txid") or "") == want_txid
+                and int(last.get("round") or 0) == rnd
+            )
+            if same:
+                return last
+            raise ConflictError("confirmed checkpoint conflict")
+        existing = conn.execute(
+            "SELECT origin, root, txid, confirmed_round FROM confirmed_anchors WHERE tree_size = ?",
+            (size,),
+        ).fetchone()
+        if existing:
+            same = (
+                str(existing[0] or "") == want_origin
+                and str(existing[1] or "") == root_hex
+                and str(existing[2] or "") == want_txid
+                and int(existing[3] or 0) == rnd
+            )
+            if same:
+                return last_confirmed_checkpoint()
+            raise ConflictError("confirmed checkpoint conflict")
+        auth = _authorized_row(conn, size)
+        if auth:
+            if auth.get("origin") and want_origin and auth["origin"] != want_origin:
+                raise ConflictError("origin mismatch")
+            if auth.get("root") and root_hex and auth["root"] != root_hex:
+                raise ConflictError("root mismatch")
         conn.execute(
-            "INSERT OR REPLACE INTO confirmed_anchors"
+            "INSERT INTO confirmed_anchors"
             "(tree_size, origin, root, txid, confirmed_round, at) "
             "VALUES (?, ?, ?, ?, ?, ?)",
-            (size, origin or "", root_hex, txid, rnd, when),
+            (size, want_origin, root_hex, want_txid, rnd, when),
         )
         payload = {
             "size": size,
             "at": when,
-            "txid": txid,
+            "txid": want_txid,
             "round": rnd,
             "root": root_hex,
-            "origin": origin or "",
+            "origin": want_origin,
         }
         conn.execute(
             "INSERT INTO meta(k, v) VALUES ('last_confirmed_checkpoint', ?) "

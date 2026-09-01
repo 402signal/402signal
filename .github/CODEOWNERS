@@ -1,0 +1,14 @@
+# Security-sensitive paths. The @402signal/maintainers team must exist
+# before GitHub will assign reviews. Branch protection is a human checklist
+# in docs/github-protection.md; this file does not enable it.
+/.github/ @402signal/maintainers
+/Dockerfile @402signal/maintainers
+/fly.toml @402signal/maintainers
+/requirements.txt @402signal/maintainers
+/live402/server.py @402signal/maintainers
+/live402/route.py @402signal/maintainers
+/live402/probe.py @402signal/maintainers
+/live402/payment.py @402signal/maintainers
+/live402/pq/ @402signal/maintainers
+/scripts/backup_sqlite.py @402signal/maintainers
+/scripts/restore_sqlite.py @402signal/maintainers

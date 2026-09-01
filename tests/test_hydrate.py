@@ -245,5 +245,43 @@ class HydrationBoundTests(unittest.TestCase):
         self.assertNotEqual(claimed.get("payTo"), selected["payTo"])
 
 
+class UntrustedSchemaTests(unittest.TestCase):
+    def test_remote_ref_stripped_local_fragment_kept(self):
+        raw = {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "$id": "https://evil.example/schema",
+            "$ref": "https://evil.example/remote.json",
+            "type": "object",
+            "properties": {
+                "city": {"type": "string", "$ref": "#/definitions/city"},
+                "nested": {"$ref": "//cdn.example/x"},
+            },
+            "definitions": {"city": {"type": "string"}},
+        }
+        cleaned = hydrate.sanitize_untrusted_schema(raw)
+        self.assertNotIn("$ref", cleaned)
+        self.assertNotIn("$schema", cleaned)
+        self.assertNotIn("$id", cleaned)
+        self.assertEqual(cleaned["properties"]["city"]["$ref"], "#/definitions/city")
+        self.assertNotIn("$ref", cleaned["properties"].get("nested") or {})
+        bounded, _n, _trunc = hydrate._bounded_schema(raw)
+        blob = json.dumps(bounded)
+        self.assertNotIn("https://evil.example", blob)
+        self.assertIn("#/definitions/city", blob)
+
+    def test_claimed_contract_is_untrusted(self):
+        stash = {}
+        slim = catalog.slim_item(
+            _raw("https://wx.example/untrusted", {"type": "object", "properties": {"q": {"type": "string"}}}),
+            "base",
+            stash=stash,
+        )
+        hydrate.hydrate_finalists([slim], stash=stash, n=5)
+        contract = slim.get("_claimed_contract") or {}
+        self.assertEqual(contract.get("origin"), hydrate.ORIGIN_CLAIMED)
+        self.assertTrue(contract.get("untrusted"))
+        self.assertIn("system prompts", contract.get("client_warning") or "")
+
+
 if __name__ == "__main__":
     unittest.main()

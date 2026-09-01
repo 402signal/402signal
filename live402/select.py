@@ -41,6 +41,8 @@ EXPLICIT_CONSTRAINT_KEYS = (
     "max_settlement_latency_ms",
     "search_depth",
     "max_candidates_to_probe",
+    "accept_payTo_change",
+    "require_transparency",
 )
 
 
@@ -322,6 +324,8 @@ def parse_constraints(body: dict) -> dict:
         "min_reputation_score": min_rep,
         "min_reputation_confidence": min_conf,
         "unmeasured": unmeasured,
+        "accept_payTo_change": _truthy(src.get("accept_payTo_change"), False),
+        "require_transparency": _truthy(src.get("require_transparency"), False),
     }
 
 
@@ -850,42 +854,58 @@ _CMP = {
 }
 
 
+def _payto_selectable(result: dict, constraints: dict | None = None) -> bool:
+    """First unexpected payTo change is not selectable unless accept_payTo_change."""
+    if not isinstance(result, dict):
+        return False
+    if not result.get("payTo_changed"):
+        return True
+    cons = constraints if isinstance(constraints, dict) else {}
+    return bool(cons.get("accept_payTo_change"))
+
+
 def enough_evidence(results: list[dict], objective: str, constraints: dict | None = None) -> bool:
     """True when a completed tranche has a selectable winner; do not start another.
 
     Call only after already-running candidates have finished. Does not cancel
-    in-flight work. best keeps looking when every viable hit is payTo_changed.
-    Fail-closed: no viable → False.
+    in-flight work. First unexpected payTo change is not enough evidence
+    unless accept_payTo_change. Fail-closed: no viable → False.
     """
     if not isinstance(results, list) or not results:
         return False
     obj = parse_objective(objective)
     cons = constraints if isinstance(constraints, dict) else {}
-    viable = [r for r in results if isinstance(r, dict) and passes_constraints(r, cons)]
+    viable = [
+        r
+        for r in results
+        if isinstance(r, dict) and passes_constraints(r, cons) and _payto_selectable(r, cons)
+    ]
     if not viable:
         return False
-    stable = [r for r in viable if not r.get("payTo_changed")]
-    if obj == "best":
-        return bool(stable)
     if obj == "cheapest":
-        pool = stable or viable
-        return bool(_cheapest_comparable_subset(pool, cons))
+        return bool(_cheapest_comparable_subset(viable, cons))
     if obj == "lowest_total_cost":
-        pool = stable or viable
-        return any(_total_cost(r) is not None for r in pool)
+        return any(_total_cost(r) is not None for r in viable)
     if obj == "fastest_settlement":
-        pool = stable or viable
-        return any(_settlement_ms(r) is not None for r in pool)
-    return bool(stable or viable)
+        return any(_settlement_ms(r) is not None for r in viable)
+    return True
 
 
 def pick_winner(results: list[dict], objective: str, constraints: dict | None = None) -> dict | None:
-    """Filter fail-closed, then pick. None means caller keeps the current miss."""
+    """Filter fail-closed, then pick. None means caller keeps the current miss.
+
+    First unexpected payTo change is dropped unless accept_payTo_change.
+    All-changed windows do not silently pick a flipped dest.
+    """
     if not isinstance(results, list) or not results:
         return None
     obj = parse_objective(objective)
     cons = constraints if isinstance(constraints, dict) else {}
-    remaining = [r for r in results if isinstance(r, dict) and passes_constraints(r, cons)]
+    remaining = [
+        r
+        for r in results
+        if isinstance(r, dict) and passes_constraints(r, cons) and _payto_selectable(r, cons)
+    ]
     if not remaining:
         return None
     if obj == "cheapest":

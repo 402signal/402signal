@@ -63,8 +63,19 @@ def _direct_url_result(body: dict, url: str, need: str, deadline: float) -> tupl
         }
         policy_mod.attach_policy(result, body)
         return 503, result
-    result = probe.probe_url(url, catalog_item=item, deadline=deadline)
+    result = probe.probe_url(url, catalog_item=item, deadline=deadline, record=False)
     result = probe.attach_catalog_fields(result, item)
+    try:
+        from live402 import history as history_mod
+
+        bid = result.get("batch_id")
+        metas = history_mod.persist_route_batch(bid, [result]) if bid else {}
+        meta = metas.get(url) if isinstance(metas, dict) else None
+        if meta and meta.get("payTo_flipped"):
+            result["payTo_changed"] = True
+            result.setdefault("risk", ["payTo_changed"])
+    except Exception:
+        pass
     try:
         from live402 import history as history_mod
         result = history_mod.attach_to_result(result)
@@ -87,7 +98,11 @@ def _direct_url_result(body: dict, url: str, need: str, deadline: float) -> tupl
     policy_mod.attach_policy(result, body)
 
     selected = None
-    if result.get("live") and select.passes_constraints(result, constraints):
+    if (
+        result.get("live")
+        and select.passes_constraints(result, constraints)
+        and select._payto_selectable(result, constraints)
+    ):
         selected = select.pick_selected_payment(result, objective, constraints)
     if selected:
         result["selected_payment"] = selected
@@ -202,8 +217,26 @@ def _log_settle(ok: bool, rail: str) -> None:
     )
 
 
+def _require_transparency(body: dict | None) -> bool:
+    if not isinstance(body, dict):
+        return False
+    raw = body.get("require_transparency")
+    return raw is True or (isinstance(raw, str) and raw.strip().lower() in {"1", "true", "yes"})
+
+
+def _transparency_ok(result: dict) -> bool:
+    tr = ((result.get("pq_trust") or {}).get("transparency") or {}) if isinstance(result, dict) else {}
+    status = str(tr.get("status") or "")
+    state = str(tr.get("state") or "")
+    if status == "pending" or state == "checkpoint_signed":
+        return bool(tr.get("receipt") and (tr.get("receipt") or {}).get("checkpoint"))
+    return False
+
+
 def _attach_pq_trust(code: int, result: dict, body: dict) -> dict:
-    """Optional transparency receipt. Paid /route still succeeds if the log is down."""
+    """Optional transparency receipt. Paid /route still succeeds if the log is down
+    unless require_transparency is set.
+    """
     if not isinstance(result, dict):
         return result
     if code not in (200, 503):
@@ -219,6 +252,7 @@ def _attach_pq_trust(code: int, result: dict, body: dict) -> dict:
         result["pq_trust"] = {
             "transparency": {
                 "status": "unavailable",
+                "state": "unavailable",
                 "log_origin": "402signal.com/pq/log",
             }
         }
@@ -271,7 +305,22 @@ def _paid_execute(
         _log_settle(False, rail)
         return 402, required, extra
     _log_settle(True, rail)
-    return code, _attach_pq_trust(code, result, body if isinstance(body, dict) else {}), extra or None
+    try:
+        from live402 import history as history_mod
+
+        history_mod.mark_batch_settled(result.get("batch_id") if isinstance(result, dict) else None)
+    except Exception:
+        pass
+    attached = _attach_pq_trust(code, result, body if isinstance(body, dict) else {})
+    if _require_transparency(body) and not _transparency_ok(attached):
+        return 503, {
+            "error": "transparency receipt unavailable",
+            "live": False,
+            "invocable": False,
+            "miss_reason": attached.get("miss_reason") if isinstance(attached, dict) else None,
+            "pq_trust": attached.get("pq_trust") if isinstance(attached, dict) else None,
+        }, extra or None
+    return code, attached, extra or None
 
 
 def handle_route(body: dict, headers, resource_url: str, bazaar: dict | None = None) -> tuple[int, dict, dict | None]:
@@ -283,7 +332,22 @@ def handle_route(body: dict, headers, resource_url: str, bazaar: dict | None = N
     """
     if fixtures.local_free():
         code, result = run_probe(body if isinstance(body, dict) else {})
-        return code, _attach_pq_trust(code, result, body if isinstance(body, dict) else {}), None
+        try:
+            from live402 import history as history_mod
+
+            history_mod.mark_batch_settled(result.get("batch_id") if isinstance(result, dict) else None)
+        except Exception:
+            pass
+        attached = _attach_pq_trust(code, result, body if isinstance(body, dict) else {})
+        if _require_transparency(body) and not _transparency_ok(attached):
+            return 503, {
+                "error": "transparency receipt unavailable",
+                "live": False,
+                "invocable": False,
+                "miss_reason": attached.get("miss_reason") if isinstance(attached, dict) else None,
+                "pq_trust": attached.get("pq_trust") if isinstance(attached, dict) else None,
+            }, None
+        return code, attached, None
 
     parsed = payment.extract_payment_payload(headers)
     sender = _algorand_sender(headers)

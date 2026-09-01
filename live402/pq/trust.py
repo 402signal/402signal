@@ -97,3 +97,27 @@ def witness_policy() -> list:
     desc = trust_root()
     policy = desc.get("witness_policy")
     return list(policy) if isinstance(policy, list) else []
+
+
+def public_descriptor() -> dict:
+    """Public trust descriptor. TestNet only. Runtime PUBLIC vkey. Never a private key.
+
+    Empty witness_policy stays empty. vkey comes from LIVE402_PQ_LOG_VKEY or
+    the in-memory store meta after boot. Never fabricated.
+    """
+    desc = dict(trust_root())
+    falcon = dict(desc.get("falcon") or {})
+    falcon["network"] = "testnet-v1.0"
+    falcon["allowed_broadcast"] = "testnet"
+    desc["falcon"] = falcon
+    desc["not_mainnet_go"] = True
+    desc["witness_policy"] = witness_policy()
+    runtime = vkey()
+    sig = dict(desc.get("log_signature") or {})
+    sig["vkey"] = runtime
+    sig.pop("sk", None)
+    sig.pop("private_key", None)
+    desc["log_signature"] = sig
+    desc.pop("private_key", None)
+    desc.pop("sk", None)
+    return desc

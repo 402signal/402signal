@@ -113,6 +113,34 @@ class EventPrivacyTests(unittest.TestCase):
             os.environ.pop("LIVE402_PQ_LOG_DB", None)
             tmp.cleanup()
 
+    def test_v2_salt_commitment_and_customer_reveal(self):
+        leaf, reveal = events.route_decision_event_v2(
+            need="secret weather in austin",
+            url="https://example.com/x402",
+            prompt="ignore previous",
+            extra={"wallet": "should-not-appear-on-leaf"},
+            live=True,
+            ts=1756627200,
+        )
+        self.assertEqual(leaf["type"], events.TYPE_ROUTE_DECISION_V2)
+        self.assertEqual(set(leaf) - {"live", "miss_reason"}, {"type", "ts", "nonce", "commitment"})
+        blob = json.dumps(leaf)
+        self.assertNotIn("salt", leaf)
+        self.assertNotIn("evidence", leaf)
+        self.assertNotIn("need", leaf)
+        self.assertNotIn("secret weather", blob)
+        self.assertNotIn("austin", blob)
+        self.assertNotIn("ignore previous", blob)
+        self.assertEqual(len(reveal["salt"]), 64)
+        self.assertEqual(len(bytes.fromhex(reveal["salt"])), events.SALT_BYTES)
+        self.assertTrue(events.verify_reveal(leaf["commitment"], reveal))
+        self.assertEqual(events.commitment_hash_v2(reveal["evidence"], bytes.fromhex(reveal["salt"])), leaf["commitment"])
+        tampered = dict(reveal)
+        tampered["evidence"] = dict(reveal["evidence"], need="other")
+        self.assertFalse(events.verify_reveal(leaf["commitment"], tampered))
+        with self.assertRaises(events.PrivacyError):
+            events.assert_public(dict(leaf, salt=reveal["salt"]))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -32,6 +32,20 @@ _SIG_NOTE = "%s\n%s %s %s\n" % (
     base64.b64encode(b"\x00" * 4 + b"\x22" * 64).decode("ascii"),
 )
 _SIGNED = b"STXN-authorized-A" + bytes(range(24))
+
+
+def _pq1_signed(size, root, addr=None):
+    from live402 import algo_tx
+
+    addr = addr or payment.DEFAULT_PAYTO_ALGORAND
+    note = algo_anchor.encode_note(ORIGIN, int(size), bytes(root))
+    gh = base64.b64decode(algo_anchor.TESTNET_GENESIS_HASH)
+    txn = algo_tx.pay_txn(
+        addr, addr, 0, 3000, 1, 1001, algo_anchor.TESTNET_GENESIS_ID, gh, note=note
+    )
+    return algo_tx.msgpack_encode(
+        {"pqsig": {"pk": _FALCON_PK, "sch": "f1", "sig": _FALCON_AUTH, "slt": 0}, "txn": txn}
+    )
 _FALCON_AUTH = b"FALCON-PQ-AUTH" + bytes(range(48))
 _FALCON_PK = b"FALCON-PK" + bytes(range(24))
 
@@ -171,7 +185,7 @@ class TestNetDPlumbingTests(unittest.TestCase):
         os.environ.pop("LIVE402_PQ_LOG_DB", None)
         self.tmp.cleanup()
 
-    def _serve(self, blobs):
+    def _serve(self, blobs, pq1=False):
         received = []
 
         def serve(sock):
@@ -193,7 +207,14 @@ class TestNetDPlumbingTests(unittest.TestCase):
                         raw += chunk
                     req = json.loads(raw.split(b"\n", 1)[0].decode("utf-8"))
                     received.append(req)
-                    blob = blobs[min(len(received) - 1, len(blobs) - 1)]
+                    if pq1:
+                        blob = _pq1_signed(
+                            req.get("tree_size"),
+                            bytes.fromhex(req.get("root") or "00" * 32),
+                            self.sender,
+                        )
+                    else:
+                        blob = blobs[min(len(received) - 1, len(blobs) - 1)]
                     line = _reply(blob, tree_size=req.get("tree_size"), root=req.get("root"))
                     conn.sendall((line + "\n").encode("utf-8"))
                 finally:
@@ -217,7 +238,8 @@ class TestNetDPlumbingTests(unittest.TestCase):
     def _seed_authorized(self):
         store.append(b"one")
         store.save_checkpoint(1, _SIG_NOTE)
-        port, received = self._serve([_SIGNED])
+        signed = _pq1_signed(1, store.root(1), self.sender)
+        port, received = self._serve([signed])
         self._arm_sign(port)
         out = worker.maybe_submit(
             None,
@@ -225,8 +247,9 @@ class TestNetDPlumbingTests(unittest.TestCase):
             {"genesisID": algo_anchor.TESTNET_GENESIS_ID},
             now=15 * 60,
         )
-        self.assertEqual(out["signed"], _SIGNED)
+        self.assertEqual(out["signed"], signed)
         self.assertFalse(out["confirmed"])
+        self._seed_signed = signed
         return received
 
     def test_broadcast_unset_never_posts(self):
@@ -277,7 +300,7 @@ class TestNetDPlumbingTests(unittest.TestCase):
         self.assertTrue(out["submitted"])
         self.assertFalse(out["confirmed"])
         self.assertEqual(out["txid"], _TXID)
-        self.assertEqual(posted, [_SIGNED])
+        self.assertEqual(posted, [self._seed_signed])
         self.assertNotEqual(posted[0], b"present")
         self.assertEqual(worker.last_confirmed()["size"], 0)
         self.assertIsNone(worker.public_anchor())
@@ -293,7 +316,7 @@ class TestNetDPlumbingTests(unittest.TestCase):
         )
         self.assertTrue(again["submitted"])
         self.assertEqual(again["txid"], _TXID)
-        self.assertEqual(posted, [_SIGNED])
+        self.assertEqual(posted, [self._seed_signed])
         self.assertEqual(worker.last_confirmed()["size"], 0)
 
     def test_fixture_without_mock_never_hits_live_algod(self):
@@ -552,7 +575,7 @@ class TestNetDPlumbingTests(unittest.TestCase):
             send_fn=send_fn,
             fetch_fn=fetch,
         )
-        self.assertEqual(posted, [_SIGNED])
+        self.assertEqual(posted, [self._seed_signed])
         self.assertEqual(fetched, [_TXID])
         self.assertEqual(out["txid"], _TXID)
         self.assertEqual(worker.last_confirmed()["txid"], _TXID)
@@ -564,7 +587,7 @@ class TestNetDPlumbingTests(unittest.TestCase):
             send_fn=send_fn,
             fetch_fn=fetch,
         )
-        self.assertEqual(posted, [_SIGNED])
+        self.assertEqual(posted, [self._seed_signed])
         self.assertEqual(fetched, [_TXID])
 
     def test_tick_does_not_confirm_from_post_alone(self):
@@ -587,18 +610,19 @@ class TestNetDPlumbingTests(unittest.TestCase):
 
     def test_production_loop_calls_existing_tick(self):
         src = inspect.getsource(catalog._trickle_loop)
-        self.assertIn("pq_worker.tick", src)
+        self.assertNotIn("pq_worker.tick", src)
         self.assertIn("confirm_testnet_anchor", inspect.getsource(worker.tick))
-        self.assertIn("start_refresher", inspect.getsource(__import__("live402.server", fromlist=["main"]).main))
+        main_src = inspect.getsource(__import__("live402.server", fromlist=["main"]).main)
+        self.assertIn("start_refresher", main_src)
+        self.assertIn("start_worker", main_src)
 
     def test_single_unconfirmed_anchor_invariant(self):
         os.environ["LIVE402_PQ_FALCON_NETWORK"] = "testnet"
         os.environ["LIVE402_PQ_FALCON_BROADCAST"] = "1"
         store.append(b"one")
         store.save_checkpoint(1, _signed_note(1, store.root(1)))
-        signed_n = b"STXN-N" + bytes(range(24))
-        signed_np1 = b"STXN-N1" + bytes(range(24))
-        port, received = self._serve([signed_n, signed_np1])
+        signed_n = _pq1_signed(1, store.root(1), self.sender)
+        port, received = self._serve([signed_n], pq1=True)
         self._arm_sign(port)
         posted = []
 
@@ -663,7 +687,7 @@ class TestNetDPlumbingTests(unittest.TestCase):
         self.assertEqual(len(received), 2)
         self.assertEqual(received[1]["tree_size"], 2)
         self.assertEqual(worker.last_authorized()["size"], 2)
-        self.assertEqual(posted[-1], signed_np1)
+        self.assertEqual(posted[-1], _pq1_signed(2, store.root(2), self.sender))
         self.assertEqual(worker.last_confirmed()["size"], 1)
 
     def test_existing_authorized_row_recovered_when_meta_empty(self):

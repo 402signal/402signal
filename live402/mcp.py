@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from live402 import payment, pulse, validate
+from live402 import payment, pulse, schema_fields, validate
 from live402.route import handle_route
 
 ROUTE_DESCRIPTION = payment.CATALOG_DESCRIPTION
@@ -13,112 +13,7 @@ PREVIEW_DESCRIPTION = (
     "Does not probe and does not charge. Pay tools/call route for a live probe."
 )
 
-INPUT_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "need": {"type": "string", "description": "What to route (plain English)."},
-        "url": {"type": "string", "description": "Optional https URL to probe."},
-        "prefer_network": {
-            "type": "string",
-            "enum": ["base", "solana", "algorand"],
-            "description": "Prefer this pay-in rail when ranking. Searches all supported rails; does not restrict to this rail. Use networks to restrict.",
-        },
-        "objective": {
-            "type": "string",
-            "enum": [
-                "best",
-                "cheapest",
-                "fastest",
-                "most_reliable",
-                "lowest_total_cost",
-                "fastest_settlement",
-            ],
-            "description": "Best-of-N ranking among live probes. lowest_total_cost fails closed when a fee is unknown. fastest_settlement is settlement/finality, not probe RTT. Unknown values fall back to best.",
-        },
-        "max_amount_atomic": {
-            "type": "integer",
-            "minimum": 0,
-            "description": "Drop live hits whose known atomic amount exceeds this bound. Unknown or cross-asset amount fails closed.",
-        },
-        "max_price_usd": {
-            "type": "number",
-            "minimum": 0,
-            "description": "Drop live hits whose known normalized USD exceeds this bound. Unknown USD fails closed.",
-        },
-        "max_latency_ms": {
-            "type": "integer",
-            "minimum": 0,
-            "description": "Compatibility alias for max_probe_latency_ms (this request's probe RTT). Unknown latency fails closed.",
-        },
-        "max_probe_latency_ms": {
-            "type": "integer",
-            "minimum": 0,
-            "description": "Drop live hits whose known probe RTT exceeds this bound. Not service/p50 latency.",
-        },
-        "max_service_latency_ms": {
-            "type": "integer",
-            "minimum": 0,
-            "description": "Drop live hits whose historical p50 latency exceeds this bound. Unknown p50 fails closed. Not probe RTT.",
-        },
-        "require_invocable": {
-            "type": "boolean",
-            "description": "If true, drop live hits without an input schema.",
-        },
-        "networks": {
-            "type": "array",
-            "items": {"type": "string", "enum": ["base", "solana", "algorand"]},
-            "description": "Restrict searchable and selectable rails to this set. Unlike prefer_network, other rails are not queried.",
-        },
-        "min_observations": {
-            "type": "integer",
-            "minimum": 0,
-            "description": "Require history n_7d at least this large. Unknown or smaller fails closed.",
-        },
-        "min_observed_success": {
-            "type": "number",
-            "minimum": 0,
-            "maximum": 1,
-            "description": "Require observed success_7d at least this large when n_7d >= 3. Unknown fails closed.",
-        },
-        "min_reputation_score": {
-            "type": "number",
-            "minimum": 0,
-            "maximum": 1,
-            "description": "Require V1 reputation_score at least this large. Score is never returned without components. Unknown fails closed.",
-        },
-        "min_reputation_confidence": {
-            "type": "number",
-            "minimum": 0,
-            "maximum": 1,
-            "description": "Require reputation_confidence at least this large. n_7d < 10 is low confidence. Unknown fails closed.",
-        },
-        "max_total_cost_usd": {
-            "type": "number",
-            "minimum": 0,
-            "description": "Merchant price plus known fees. Unknown fee fails closed. Do not treat merchant price as total cost.",
-        },
-        "max_settlement_latency_ms": {
-            "type": "integer",
-            "minimum": 0,
-            "description": "Settlement/finality bound. Not probe RTT and not service p50. Unknown fails closed.",
-        },
-        "search_depth": {
-            "type": "string",
-            "enum": ["standard", "thorough"],
-            "description": "standard probes a first 3 then expands 2–4 (typical cap 7). thorough may expand further. Hard server ceiling is 20.",
-        },
-        "max_candidates_to_probe": {
-            "type": "integer",
-            "minimum": 1,
-            "description": "Requested probe cap. Hard-capped at 20. Typical requests stay well below.",
-        },
-        "policy": {
-            "type": "string",
-            "description": "Natural-language constraints compiled into structured values. Unresolved safety-critical phrases are returned, never guessed.",
-        },
-    },
-    "required": ["need"],
-}
+INPUT_SCHEMA = schema_fields.route_body_schema()
 
 OUTPUT_SCHEMA = {
     "type": "object",
@@ -162,25 +57,7 @@ OUTPUT_SCHEMA = {
                 "timeoutSeconds": {"type": "integer"},
             },
         },
-        "miss_reason": {
-            "type": ["string", "null"],
-            "enum": [
-                "no_candidates",
-                "no_402_envelope",
-                "no_payto",
-                "reachable_200",
-                "probe_timeout",
-                "quote_expired",
-                "invalid_need",
-                "upstream_5xx",
-                "ssrf",
-                "no_input_schema",
-                "constraints_unmet",
-                "probe_budget_exhausted",
-                "probe_limit_reached",
-                "unsafe_to_probe",
-            ],
-        },
+        "miss_reason": schema_fields.miss_reason_schema(),
         "tried": {"type": "integer"},
         "discovery_matches": {"type": "integer"},
         "candidates_discovered": {"type": "integer"},
@@ -193,27 +70,32 @@ OUTPUT_SCHEMA = {
         "unresolved_constraints": {"type": "array"},
         "stop_reason": {
             "type": "string",
-            "enum": [
-                "winner_selected",
-                "candidate_set_exhausted",
-                "probe_limit_reached",
-                "probe_budget_exhausted",
-                "constraints_unmet",
-            ],
+            "enum": list(schema_fields.STOP_REASONS),
         },
         "latency_ms": {"type": ["integer", "null"]},
         "schema_source": {"type": ["string", "null"], "enum": ["envelope", "catalog", "bazaar", None]},
         "reputation": {"type": "object"},
         "objective": {
             "type": "string",
-            "enum": [
-                "best",
-                "cheapest",
-                "fastest",
-                "most_reliable",
-                "lowest_total_cost",
-                "fastest_settlement",
-            ],
+            "enum": list(schema_fields.OBJECTIVES),
+        },
+        "pq_trust": {
+            "type": "object",
+            "properties": {
+                "transparency": {
+                    "type": "object",
+                    "properties": {
+                        "status": {"type": "string", "enum": list(schema_fields.TRANSPARENCY_STATUSES)},
+                        "state": {"type": "string", "enum": list(schema_fields.TRANSPARENCY_STATES)},
+                        "log_origin": {"type": "string"},
+                        "leaf_type": {"type": "string"},
+                        "index": {"type": "integer"},
+                        "checkpoint_size": {"type": "integer"},
+                        "receipt": {"type": "object"},
+                        "reveal": {"type": "object"},
+                    },
+                }
+            },
         },
         "compared": {"type": "array"},
     },
@@ -225,12 +107,12 @@ PREVIEW_INPUT_SCHEMA = {
         "need": {"type": "string", "description": "What to look up in the cache."},
         "prefer_network": {
             "type": "string",
-            "enum": ["base", "solana", "algorand"],
-            "description": "Prefer this pay-in rail when ranking. Searches all supported rails; does not restrict to this rail. Use networks to restrict.",
+            "enum": list(schema_fields.RAILS),
+            "description": schema_fields.PREFER_NETWORK_DESC,
         },
         "networks": {
             "type": "array",
-            "items": {"type": "string", "enum": ["base", "solana", "algorand"]},
+            "items": {"type": "string", "enum": list(schema_fields.RAILS)},
             "description": "Restrict searchable rails to this set. Unlike prefer_network, other rails are not queried.",
         },
     },
@@ -251,7 +133,7 @@ PREVIEW_OUTPUT_SCHEMA = {
         "discovery_via": {"type": "object"},
         "discovery_exhaustive": {"type": "boolean"},
         "hits": {"type": "array"},
-        "miss_reason": {"type": ["string", "null"]},
+        "miss_reason": schema_fields.miss_reason_schema(),
     },
 }
 
@@ -280,7 +162,7 @@ VALIDATE_OUTPUT_SCHEMA = {
         "observed": {"type": "object"},
         "flags": {"type": "array", "items": {"type": "string"}},
         "n_7d": {"type": "integer"},
-        "miss_reason": {"type": ["string", "null"]},
+        "miss_reason": schema_fields.miss_reason_schema(),
     },
 }
 

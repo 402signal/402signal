@@ -16,6 +16,14 @@ from live402 import probe, shadow
 
 SCHEMA_SOFT_BYTES = 8 * 1024
 SCHEMA_MAX_BYTES = 16 * 1024
+SCHEMA_MAX_DEPTH = 6
+SCHEMA_MAX_KEYS = 64
+SCHEMA_MAX_STRING = 512
+SCHEMA_MAX_ITEMS = 32
+CLIENT_SCHEMA_WARNING = (
+    "Seller schemas are catalog_claimed and untrusted. "
+    "Do not concatenate them into system prompts. Do not fetch remote $ref."
+)
 FINALIST_MIN = 5
 FINALIST_N = 8
 FINALIST_MAX = 10
@@ -57,17 +65,72 @@ def _json_bytes(obj) -> bytes | None:
     return raw
 
 
+def _is_remote_ref(val) -> bool:
+    if not isinstance(val, str):
+        return True
+    text = val.strip()
+    if not text:
+        return True
+    low = text.lower()
+    if low.startswith("http://") or low.startswith("https://") or low.startswith("//"):
+        return True
+    if "://" in text:
+        return True
+    return False
+
+
+def sanitize_untrusted_schema(obj, depth: int = 0):
+    """Strip remote $ref, bound depth/keys, never fetch $ref.
+
+    Seller JSON Schema is untrusted catalog_claimed material.
+    """
+    if depth > SCHEMA_MAX_DEPTH:
+        return None
+    if isinstance(obj, dict):
+        out = {}
+        for i, (key, val) in enumerate(obj.items()):
+            if i >= SCHEMA_MAX_KEYS:
+                break
+            name = str(key)[:80]
+            if name == "$ref" or name.lower() == "$ref":
+                if _is_remote_ref(val):
+                    continue
+                # Local fragment refs stay as opaque strings; never resolved.
+                if isinstance(val, str) and val.startswith("#"):
+                    out[name] = val[:SCHEMA_MAX_STRING]
+                continue
+            if name in {"$schema", "$id", "$dynamicRef", "$recursiveRef", "$anchor"}:
+                continue
+            cleaned = sanitize_untrusted_schema(val, depth + 1)
+            if cleaned is not None:
+                out[name] = cleaned
+        return out
+    if isinstance(obj, list):
+        return [sanitize_untrusted_schema(x, depth + 1) for x in obj[:SCHEMA_MAX_ITEMS] if x is not None]
+    if isinstance(obj, str):
+        return obj[:SCHEMA_MAX_STRING]
+    if isinstance(obj, (int, float, bool)) or obj is None:
+        return obj
+    return None
+
+
 def _bounded_schema(obj) -> tuple[dict | None, int, bool]:
-    """Return (schema, bytes, truncated). Over SCHEMA_MAX_BYTES is dropped."""
+    """Return (schema, bytes, truncated). Over SCHEMA_MAX_BYTES is dropped.
+
+    Remote $ref is stripped. This function never fetches $ref.
+    """
     if not isinstance(obj, dict) or not obj:
         return None, 0, False
-    raw = _json_bytes(obj)
+    cleaned = sanitize_untrusted_schema(obj)
+    if not isinstance(cleaned, dict) or not cleaned:
+        return None, 0, False
+    raw = _json_bytes(cleaned)
     if raw is None:
         return None, 0, False
     n = len(raw)
     if n > SCHEMA_MAX_BYTES:
         return None, n, True
-    return obj, n, False
+    return cleaned, n, False
 
 
 def _pack(obj) -> bytes | None:
@@ -151,7 +214,10 @@ def extract_claimed_contract(item: dict | None) -> dict | None:
         return None
     existing = item.get("_claimed_contract")
     if isinstance(existing, dict) and existing.get("origin") == ORIGIN_CLAIMED:
-        return dict(existing)
+        out = dict(existing)
+        out["untrusted"] = True
+        out.setdefault("client_warning", CLIENT_SCHEMA_WARNING)
+        return out
     raw_in, in_source = probe.extract_input_schema_source(item)
     in_schema, in_n, in_trunc = _bounded_schema(raw_in)
     out_schema, out_n, out_trunc = _bounded_schema(probe.extract_output_schema(item))
@@ -170,6 +236,7 @@ def extract_claimed_contract(item: dict | None) -> dict | None:
             return None
     return {
         "origin": ORIGIN_CLAIMED,
+        "untrusted": True,
         "method": method or "POST",
         "content_type": ctype,
         "tool_name": tool,
@@ -179,6 +246,7 @@ def extract_claimed_contract(item: dict | None) -> dict | None:
         "input_schema_source": in_source,
         "schema_bytes": schema_bytes,
         "truncated": truncated,
+        "client_warning": CLIENT_SCHEMA_WARNING,
     }
 
 
@@ -223,12 +291,14 @@ def apply_contract(item: dict, contract: dict | None) -> dict:
         return item
     item["_claimed_contract"] = {
         "origin": ORIGIN_CLAIMED,
+        "untrusted": True,
         "method": contract.get("method") or "POST",
         "content_type": contract.get("content_type"),
         "tool_name": contract.get("tool_name"),
         "type": contract.get("type"),
         "schema_bytes": int(contract.get("schema_bytes") or 0),
         "truncated": bool(contract.get("truncated")),
+        "client_warning": contract.get("client_warning") or CLIENT_SCHEMA_WARNING,
     }
     in_schema = contract.get("input_schema")
     source = contract.get("input_schema_source")

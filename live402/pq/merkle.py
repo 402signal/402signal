@@ -162,6 +162,115 @@ def consistency_path(old_size: int, leaf_hashes: Sequence[bytes]) -> list[bytes]
     return subproof(old_size, 0, n, True)
 
 
+def mth_range(
+    start: int,
+    end: int,
+    get_range: Callable[[int, int], bytes | None],
+    store_range: Callable[[int, int, bytes], None] | None = None,
+    leaf_at: Callable[[int], bytes] | None = None,
+) -> bytes:
+    """RFC 9162 MTH of D[start:end] using cached complete ranges.
+
+    Historical roots stay identical to a full rebuild. Missing cache
+    entries are filled from children (O(log n) when the frontier is warm).
+    """
+    if end < start:
+        raise ValueError("invalid range")
+    if end == start:
+        return empty_tree_hash()
+    cached = get_range(start, end)
+    if cached is not None:
+        return bytes(cached)
+    width = end - start
+    if width == 1:
+        if leaf_at is None:
+            raise ValueError("missing leaf hash")
+        h = bytes(leaf_at(start))
+    else:
+        k = largest_power_of_two_less_than(width)
+        h = node_hash(
+            mth_range(start, start + k, get_range, store_range, leaf_at),
+            mth_range(start + k, end, get_range, store_range, leaf_at),
+        )
+    if store_range is not None:
+        store_range(start, end, h)
+    return h
+
+
+def incremental_root(
+    new_size: int,
+    new_leaf_hash: bytes,
+    get_range: Callable[[int, int], bytes | None],
+    store_range: Callable[[int, int, bytes], None],
+) -> bytes:
+    """Append one leaf into an incremental RFC 9162 frontier. O(log n)."""
+    if new_size < 1:
+        raise ValueError("new_size must be >= 1")
+    if len(new_leaf_hash) != HASH_SIZE:
+        raise ValueError("leaf hash must be 32 bytes")
+    idx = new_size - 1
+    store_range(idx, idx + 1, bytes(new_leaf_hash))
+    return mth_range(0, new_size, get_range, store_range)
+
+
+def inclusion_path_cached(
+    index: int,
+    tree_size: int,
+    get_range: Callable[[int, int], bytes | None],
+    leaf_at: Callable[[int], bytes] | None = None,
+    store_range: Callable[[int, int, bytes], None] | None = None,
+) -> list[bytes]:
+    """RFC 6962 PATH using cached subtree hashes. Same nodes as inclusion_path."""
+    if index < 0 or index >= tree_size:
+        raise ValueError("index out of range")
+
+    def _path(m: int, start: int, end: int) -> list[bytes]:
+        width = end - start
+        if width == 1:
+            return []
+        k = largest_power_of_two_less_than(width)
+        if m < start + k:
+            sib = mth_range(start + k, end, get_range, store_range, leaf_at)
+            return _path(m, start, start + k) + [sib]
+        sib = mth_range(start, start + k, get_range, store_range, leaf_at)
+        return _path(m, start + k, end) + [sib]
+
+    return _path(index, 0, tree_size)
+
+
+def consistency_path_cached(
+    old_size: int,
+    new_size: int,
+    get_range: Callable[[int, int], bytes | None],
+    leaf_at: Callable[[int], bytes] | None = None,
+    store_range: Callable[[int, int, bytes], None] | None = None,
+) -> list[bytes]:
+    """RFC 6962 PROOF(m, D[n]) using cached ranges. Empty when old_size == new_size."""
+    if old_size < 0 or old_size > new_size:
+        raise ValueError("old_size out of range")
+    if old_size == 0 or old_size == new_size:
+        return []
+    if new_size < 1:
+        raise ValueError("inconsistent sizes")
+
+    def subproof(m: int, start: int, end: int, first: bool) -> list[bytes]:
+        width = end - start
+        if m == width:
+            if first:
+                return []
+            return [mth_range(start, end, get_range, store_range, leaf_at)]
+        k = largest_power_of_two_less_than(width)
+        if m <= k:
+            return subproof(m, start, start + k, first) + [
+                mth_range(start + k, end, get_range, store_range, leaf_at)
+            ]
+        return subproof(m - k, start + k, end, False) + [
+            mth_range(start, start + k, get_range, store_range, leaf_at)
+        ]
+
+    return subproof(old_size, 0, new_size, True)
+
+
 def verify_consistency(old_size: int, new_size: int, old_root: bytes, new_root: bytes, path: Sequence[bytes]) -> bool:
     """RFC 6962 consistency. Fail closed on corrupt input."""
     try:

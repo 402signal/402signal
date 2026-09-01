@@ -1026,7 +1026,9 @@ def _main(model: dict) -> str:
         "shows 402Signal infrastructure commitments: log size, signed checkpoints, and "
         "confirmed TestNet anchors. It does not directly publish your wallet, raw request, "
         "or payment credentials. It does not publish agent needs, wallets, payment "
-        "signatures, or seller response bodies. It is not a claim of anonymous, unlinkable, "
+        "signatures, or seller response bodies. A v2 public leaf reveals type, timestamp, "
+        "nonce, commitment hash, and optional live/miss_reason. It does not include salt, "
+        "raw evidence, need, wallet, or payment. It is not a claim of anonymous, unlinkable, "
         "or fully private traffic.</p>\n"
         "      </section>\n"
         '      <section class="block">\n'

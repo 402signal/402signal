@@ -25,7 +25,7 @@
     "address_env": "LIVE402_PQ_FALCON_ADDRESS",
     "network_env": "LIVE402_PQ_FALCON_NETWORK",
     "broadcast_env": "LIVE402_PQ_FALCON_BROADCAST",
-    "network": "mainnet-v1.0",
+    "network": "testnet-v1.0",
     "allowed_broadcast": "testnet",
     "note_format": "402sg/pq1:b",
     "note_version": 1,
