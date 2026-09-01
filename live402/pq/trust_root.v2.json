@@ -1,0 +1,65 @@
+{
+  "version": 2,
+  "epoch": "mainnet-v1",
+  "origin": "402signal.com/pq/log/mainnet-v1",
+  "jcs": {
+    "profile": "RFC8785",
+    "i_json": true,
+    "amounts": "decimal-string",
+    "timestamp": "rfc3339-utc-seconds-z"
+  },
+  "merkle": {
+    "algorithm": "SHA-256",
+    "profile": "RFC9162-2.1"
+  },
+  "log_signature": {
+    "algorithm": "ed25519",
+    "signed_note_type": "0x01",
+    "key_name": "402signal.com/pq/log/mainnet-v1",
+    "vkey": "",
+    "vkey_env": "LIVE402_PQ_LOG_VKEY_MAINNET",
+    "generation": "documented-not-executed",
+    "reuse_testnet_sk": false
+  },
+  "mmd_seconds": 15,
+  "witness_policy": [],
+  "witness_signed_note_type": "0x04",
+  "falcon": {
+    "address": "",
+    "address_env": "LIVE402_PQ_FALCON_MAINNET_ADDRESS",
+    "network_env": "LIVE402_PQ_FALCON_NETWORK",
+    "broadcast_env": "LIVE402_PQ_FALCON_MAINNET_BROADCAST",
+    "network": "mainnet-v1.0",
+    "genesis_id": "mainnet-v1.0",
+    "genesis_hash": "wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=",
+    "scheme": "f1",
+    "pq1": true,
+    "note_format": "402sg/pq1:b",
+    "note_version": 1,
+    "allowed_broadcast": "none",
+    "ceremony": "empty-until-ross"
+  },
+  "broadcast_policy": {
+    "default": "off",
+    "automatic": "off",
+    "mainnet_flag": "LIVE402_PQ_FALCON_MAINNET_BROADCAST",
+    "testnet_flag_never_sends_mainnet": true
+  },
+  "confirmation_policy": {
+    "require": "fetch_and_decode_actual_txn",
+    "http_200_or_txid_not_sufficient": true,
+    "public_status_from": "confirmed_only",
+    "independent_provider": false,
+    "same_trust_domain_not_sufficient": true,
+    "default_submit_and_confirm": "algonode_same_trust_domain",
+    "before_mainnet_go": "independent provider or 402Signal-operated node"
+  },
+  "unknown_algorithm": "fail-closed",
+  "rotation": "new-shard",
+  "specs": {
+    "tiles": "C2SP tlog-tiles@v0.1.0",
+    "checkpoint": "C2SP tlog-checkpoint@v1.0.0",
+    "signed_note": "C2SP signed-note@v1.0.0"
+  },
+  "not_mainnet_go": true
+}

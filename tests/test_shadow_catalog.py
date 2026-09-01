@@ -617,13 +617,17 @@ class CatalogNotHttpExposedTests(unittest.TestCase):
         self.assertEqual(shadow.VOLUME_DB, "/data/catalog.sqlite")
         self.assertEqual(history.VOLUME_DB, "/data/live402-history.sqlite")
         from live402.pq import VOLUME_DB as PQ_LOG_DB
+        from live402.pq import VOLUME_DB_MAINNET as PQ_LOG_DB_MAINNET
 
         self.assertEqual(PQ_LOG_DB, "/data/pq-log.sqlite")
+        self.assertEqual(PQ_LOG_DB_MAINNET, "/data/pq-log-mainnet.sqlite")
+        self.assertNotEqual(PQ_LOG_DB, PQ_LOG_DB_MAINNET)
         self.assertNotEqual(shadow.VOLUME_DB, history.VOLUME_DB)
         self.assertNotEqual(PQ_LOG_DB, shadow.VOLUME_DB)
         self.assertNotEqual(PQ_LOG_DB, history.VOLUME_DB)
         self.assertTrue(is_private_store_path("/data/catalog.sqlite"))
         self.assertTrue(is_private_store_path("/data/pq-log.sqlite"))
+        self.assertTrue(is_private_store_path("/data/pq-log-mainnet.sqlite"))
         self.assertTrue(is_private_store_path("/catalog.sqlite"))
         self.assertFalse(is_private_store_path("/catalog"))
         self.assertFalse(is_private_store_path("/preview"))

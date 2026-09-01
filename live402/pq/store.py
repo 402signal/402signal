@@ -27,7 +27,8 @@ import sqlite3
 import threading
 from collections.abc import Callable
 
-from live402.pq import DEFAULT_DB, ORIGIN, VOLUME_DB
+from live402.pq import ORIGIN
+from live402.pq import log_identity
 from live402.pq import merkle
 from live402.pq import tiles as tilemod
 
@@ -100,15 +101,7 @@ CREATE TABLE IF NOT EXISTS confirmed_anchors (
 
 
 def db_path() -> str:
-    raw = (os.environ.get("LIVE402_PQ_LOG_DB") or "").strip()
-    if raw:
-        return raw
-    try:
-        if os.path.isdir("/data") and os.access("/data", os.W_OK):
-            return VOLUME_DB
-    except Exception:
-        pass
-    return DEFAULT_DB
+    return log_identity.resolve_db_path()
 
 
 def _chmod_db_files(path: str) -> None:
@@ -162,7 +155,7 @@ def _ensure_meta(conn: sqlite3.Connection) -> None:
     cur.execute("SELECT v FROM meta WHERE k = 'origin'")
     row = cur.fetchone()
     if not row:
-        conn.execute("INSERT INTO meta(k, v) VALUES ('origin', ?)", (ORIGIN,))
+        conn.execute("INSERT INTO meta(k, v) VALUES ('origin', ?)", (log_identity.configured_origin(),))
         conn.execute("INSERT INTO meta(k, v) VALUES ('size', '0')")
         conn.execute("INSERT INTO meta(k, v) VALUES ('vkey', '')")
         conn.execute("INSERT INTO meta(k, v) VALUES ('checkpoint', '')")

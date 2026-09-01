@@ -81,8 +81,8 @@ class AlgorandConstructionTests(unittest.TestCase):
         with patch.object(algo_anchor, "send_forbidden", fake_send):
             txn = algo_anchor.build_payment_txn(self.sender, note, params)
         self.assertEqual(txn["type"], "pay")
-        self.assertEqual(txn["fee"], 3000)
-        self.assertGreaterEqual(txn["fee"], 3000)
+        self.assertEqual(txn["fee"], algo_anchor.required_fee(params))
+        self.assertLessEqual(txn["fee"], algo_anchor.MAX_FEE)
         self.assertTrue(txn.get("flatFee"))
         self.assertEqual(txn["snd"], txn["rcv"])
         self.assertNotIn("amt", txn)
@@ -427,6 +427,12 @@ class TestNetSubmitTests(unittest.TestCase):
         self.assertEqual(desc["falcon"]["allowed_broadcast"], "testnet")
         self.assertEqual(desc["falcon"]["network"], "testnet-v1.0")
         self.assertEqual(trust.falcon_allowed_broadcast(), "testnet")
+        v2 = trust.trust_root_v2()
+        self.assertTrue(v2["not_mainnet_go"])
+        self.assertEqual(v2["epoch"], "mainnet-v1")
+        self.assertEqual(v2["broadcast_policy"]["default"], "off")
+        self.assertEqual(v2["falcon"]["address"], "")
+        self.assertEqual(v2["falcon"]["scheme"], "f1")
 
 
 if __name__ == "__main__":

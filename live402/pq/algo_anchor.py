@@ -3,7 +3,8 @@
 Note 84 bytes = ASCII "402sg/pq1:b" || 0x01 || SHA-256(UTF-8 origin) ||
 uint64 BE tree_size || 32-byte RFC 6962 root.
 
-Txn = PaymentTxn amount=0, receiver=sender, flat fee >= 3000 µALGO.
+Txn = PaymentTxn amount=0, receiver=sender, fee = current required,
+hard ceiling MAX_FEE=30000 µALGO (fail closed if required > cap).
 Falcon signing goes through the 6PN client (pq-anchor/1). This module
 does not load a Falcon SK. send_forbidden() always raises.
 
@@ -12,8 +13,12 @@ LIVE402_PQ_FALCON_BROADCAST=1. That env lives on this 402signal
 router (default unset). 402security must GO before anyone sets it
 to 1. The isolated signer never reads BROADCAST and never POSTs.
 Falcon SK must never live here. Fixture mode and CI never hit live
-algod unless a send/fetch hook is injected. MainNet genesis has no
-submit path.
+algod unless a send/fetch hook is injected.
+
+MainNet submit is a separate flag LIVE402_PQ_FALCON_MAINNET_BROADCAST.
+TestNet BROADCAST=1 plus NETWORK=mainnet with the MainNet flag unset
+never sends. Automatic MainNet broadcast stays off. send_if_allowed
+never POSTs MainNet. A later human canary uses submit_mainnet_canary.
 """
 
 from __future__ import annotations
@@ -31,31 +36,44 @@ from urllib.parse import urlparse
 from live402 import algo_tx
 from live402.pq import NOTE_FORMAT, NOTE_VERSION
 from live402.pq import checkpoint as ckpt
+from live402.pq import network as netcfg
 from live402.pq.merkle import HASH_SIZE
 
 NOTE_PREFIX = NOTE_FORMAT.encode("ascii")  # 11 bytes
 NOTE_LEN = 84
-MIN_FEE = 3000
-MAX_FEE = 30000
+MIN_FEE = netcfg.MIN_FEE
+MAX_FEE = netcfg.MAX_FEE
 ANCHOR_STATUSES = frozenset({"pending", "unavailable"})
 
-# TestNet only for any submit path. Do not set MainNet.
-TESTNET_NAME = "testnet"
-TESTNET_GENESIS_ID = "testnet-v1.0"
-MAINNET_GENESIS_ID = "mainnet-v1.0"
-TESTNET_GENESIS_HASH = "SGO1GKSzyE7IEPItTxCByw9x8FmnrCDexi9/cOUJOiI="
-TESTNET_ALGOD_HOST = "testnet-api.algonode.cloud"
-TESTNET_ALGOD_SEND_URL = "https://testnet-api.algonode.cloud/v2/transactions"
-TESTNET_ALGOD_PENDING_URL = "https://testnet-api.algonode.cloud/v2/transactions/pending/"
-TESTNET_INDEXER_HOST = "testnet-idx.algonode.cloud"
-TESTNET_INDEXER_TXN_URL = "https://testnet-idx.algonode.cloud/v2/transactions/"
-TESTNET_EXPLORER_TX_URL = "https://testnet.explorer.perawallet.app/tx/"
+TESTNET_NAME = netcfg.TESTNET_NAME
+MAINNET_NAME = netcfg.MAINNET_NAME
+TESTNET_GENESIS_ID = netcfg.TESTNET_GENESIS_ID
+MAINNET_GENESIS_ID = netcfg.MAINNET_GENESIS_ID
+TESTNET_GENESIS_HASH = netcfg.TESTNET_GENESIS_HASH
+MAINNET_GENESIS_HASH = netcfg.MAINNET_GENESIS_HASH
+TESTNET_ALGOD_HOST = netcfg.TESTNET.submit_host
+TESTNET_ALGOD_SEND_URL = netcfg.TESTNET.submit_url
+TESTNET_ALGOD_PENDING_URL = netcfg.TESTNET.pending_url
+TESTNET_INDEXER_HOST = netcfg.TESTNET.confirm_host
+TESTNET_INDEXER_TXN_URL = netcfg.TESTNET.confirm_txn_url
+TESTNET_EXPLORER_TX_URL = netcfg.TESTNET.explorer_tx_url
+MAINNET_ALGOD_HOST = netcfg.MAINNET.submit_host
+MAINNET_ALGOD_SEND_URL = netcfg.MAINNET.submit_url
+MAINNET_ALGOD_PENDING_URL = netcfg.MAINNET.pending_url
+MAINNET_INDEXER_HOST = netcfg.MAINNET.confirm_host
+MAINNET_INDEXER_TXN_URL = netcfg.MAINNET.confirm_txn_url
+MAINNET_EXPLORER_TX_URL = netcfg.MAINNET.explorer_tx_url
 TESTNET_SEND_TIMEOUT = 8.0
 TESTNET_FETCH_TIMEOUT = 8.0
 USER_AGENT = "402Signal/0.1 (pq falcon testnet; no keys in logs)"
-NETWORK_ENV = "LIVE402_PQ_FALCON_NETWORK"
-BROADCAST_ENV = "LIVE402_PQ_FALCON_BROADCAST"
-ADDRESS_ENV = "LIVE402_PQ_FALCON_ADDRESS"
+NETWORK_ENV = netcfg.NETWORK_ENV
+BROADCAST_ENV = netcfg.BROADCAST_ENV
+ADDRESS_ENV = netcfg.ADDRESS_ENV
+MAINNET_BROADCAST_ENV = netcfg.MAINNET_BROADCAST_ENV
+MAINNET_ADDRESS_ENV = netcfg.MAINNET_ADDRESS_ENV
+MAINNET_SIGNER_TOKEN_ENV = netcfg.MAINNET_SIGNER_TOKEN_ENV
+MAINNET_SIGNER_HOST_ENV = netcfg.MAINNET_SIGNER_HOST_ENV
+MAINNET_SIGNER_PORT_ENV = netcfg.MAINNET_SIGNER_PORT_ENV
 PQSIG_MARKER = "present"
 PQSIG_SCHEME_F1 = "f1"
 _EXCLUSIVE_SIG_KEYS = frozenset({"sig", "multisig", "logicsig", "msig", "lsig"})
@@ -135,11 +153,47 @@ _ALLOWED_INBOUND_KEYS = frozenset({"type", "fee", "fv", "gen", "gh", "lv", "note
 _FORBIDDEN_INBOUND_KEYS = frozenset({"close", "rekey", "lx", "grp"})
 
 
-def validate_unsigned_anchor(txn: dict) -> None:
+def _expected_network_name(expected_network: str | None = None) -> str:
+    raw = (expected_network or "").strip().lower()
+    if raw:
+        if raw not in netcfg.NETWORKS:
+            raise AnchorError("unknown network")
+        return raw
+    from live402.pq import log_identity
+
+    return log_identity.live_network_name()
+
+
+def _network_cfg(expected_network: str | None = None) -> netcfg.NetworkConfig:
+    return netcfg.get_network(_expected_network_name(expected_network))
+
+
+def required_fee(params: dict | None = None) -> int:
+    """Current required fee. Hard ceiling MAX_FEE. Do not raise the cap."""
+    p = params if isinstance(params, dict) else {}
+    raw = p.get("minFee")
+    if raw is None:
+        raw = p.get("fee")
+    if raw is None:
+        fee = MIN_FEE
+    else:
+        try:
+            fee = int(raw)
+        except (TypeError, ValueError) as exc:
+            raise AnchorError("fee out of range") from exc
+    if fee < 1:
+        raise AnchorError("fee out of range")
+    if fee > MAX_FEE:
+        raise AnchorError("fee exceeds cap")
+    return fee
+
+
+def validate_unsigned_anchor(txn: dict, expected_network: str | None = None) -> None:
     """Fail closed unless txn matches PQ1 construction. Does not sign.
 
     PaymentTxn amount=0, receiver==sender==configured public address,
-    genesis testnet-v1.0 (MainNet rejected), note from encode_note.
+    genesis must exactly match expected_network (default TestNet live path).
+    MainNet genesis is rejected unless expected_network is mainnet.
     Rejects close, rekey, lx, grp, and any unknown key.
     """
     if not isinstance(txn, dict):
@@ -152,10 +206,11 @@ def validate_unsigned_anchor(txn: dict) -> None:
     amt = txn.get("amt")
     if amt not in (None, 0):
         raise AnchorError("not pq1 construction")
+    cfg = _network_cfg(expected_network)
     gen = str(txn.get("gen") or "")
-    if gen == MAINNET_GENESIS_ID or gen != TESTNET_GENESIS_ID:
+    if gen != cfg.genesis_id:
         raise AnchorError("not pq1 construction")
-    addr = falcon_address()
+    addr = falcon_address_for(cfg.name)
     if not addr:
         raise AnchorError("not pq1 construction")
     try:
@@ -175,16 +230,17 @@ def validate_unsigned_anchor(txn: dict) -> None:
         raise AnchorError("not pq1 construction") from exc
 
 
-def rebuild_unsigned_anchor(txn: dict) -> dict:
+def rebuild_unsigned_anchor(txn: dict, expected_network: str | None = None) -> dict:
     """Canonical PaymentTxn from allowed fields only. Never copies extra keys."""
-    addr = falcon_address()
+    cfg = _network_cfg(expected_network)
+    addr = falcon_address_for(cfg.name)
     if not addr:
         raise AnchorError("not pq1 construction")
     note = txn.get("note")
     if isinstance(note, str):
         note = bytes.fromhex(note)
     note = bytes(note)
-    fee = max(int(txn.get("fee") or MIN_FEE), MIN_FEE)
+    fee = required_fee({"fee": txn.get("fee"), "minFee": txn.get("fee")})
     first = int(txn.get("fv") or 1)
     last = int(txn.get("lv") or (first + 1000))
     gh = txn.get("gh")
@@ -196,18 +252,20 @@ def rebuild_unsigned_anchor(txn: dict) -> dict:
     elif isinstance(gh, (bytes, bytearray)) and gh:
         gh = bytes(gh)
     else:
-        gh = base64.b64decode(TESTNET_GENESIS_HASH)
-    rebuilt = algo_tx.pay_txn(addr, addr, 0, fee, first, last, TESTNET_GENESIS_ID, gh, note=note)
+        gh = base64.b64decode(cfg.genesis_hash)
+    if base64.b64encode(bytes(gh)).decode("ascii") != cfg.genesis_hash:
+        raise AnchorError("genesis hash mismatch")
+    rebuilt = algo_tx.pay_txn(addr, addr, 0, fee, first, last, cfg.genesis_id, gh, note=note)
     extra = set(rebuilt) - {"type", "fee", "fv", "gen", "gh", "lv", "note", "rcv", "snd"}
     for key in extra:
         rebuilt.pop(key, None)
     return rebuilt
 
 
-def canonical_unsigned_anchor(txn: dict) -> dict:
+def canonical_unsigned_anchor(txn: dict, expected_network: str | None = None) -> dict:
     """Validate inbound, then return a rebuilt pay_txn dict. Does not sign."""
-    validate_unsigned_anchor(txn)
-    return rebuild_unsigned_anchor(txn)
+    validate_unsigned_anchor(txn, expected_network=expected_network)
+    return rebuild_unsigned_anchor(txn, expected_network=expected_network)
 
 
 def _genesis_hash_bytes(gen: str, gh):
@@ -215,6 +273,9 @@ def _genesis_hash_bytes(gen: str, gh):
         return bytes(gh)
     if isinstance(gh, str) and gh.strip():
         return base64.b64decode(gh)
+    cfg = netcfg.network_for_genesis_id(gen)
+    if cfg is not None:
+        return base64.b64decode(cfg.genesis_hash)
     if gen == TESTNET_GENESIS_ID:
         return base64.b64decode(TESTNET_GENESIS_HASH)
     from live402 import algod as algod_mod
@@ -223,7 +284,11 @@ def _genesis_hash_bytes(gen: str, gh):
 
 
 def build_payment_txn(sender: str, note: bytes, params: dict | None = None) -> dict:
-    """Unsigned PaymentTxn. amount=0, receiver=sender, fee >= 3000. Not submitted."""
+    """Unsigned PaymentTxn. amount=0, receiver=sender. Not submitted.
+
+    Fee is the current required value from params (minFee, else fee,
+    else MIN_FEE). If required > MAX_FEE the call fails closed.
+    """
     if not sender:
         raise AnchorError("falcon address required")
     p = params if isinstance(params, dict) else {}
@@ -231,8 +296,35 @@ def build_payment_txn(sender: str, note: bytes, params: dict | None = None) -> d
     last = int(p.get("lastValid") or p.get("lastRound") or (first + 1000))
     gen = str(p.get("genesisID") or p.get("genesis_id") or TESTNET_GENESIS_ID)
     gh = _genesis_hash_bytes(gen, p.get("genesisHash") or p.get("genesis_hash"))
-    fee = max(int(p.get("fee") or p.get("minFee") or MIN_FEE), MIN_FEE)
+    fee = required_fee(p)
     txn = algo_tx.pay_txn(sender, sender, 0, fee, first, last, gen, gh, note=note)
+    txn["flatFee"] = True
+    return txn
+
+
+def build_mainnet_payment_txn(note: bytes, params: dict | None = None, *, address: str | None = None) -> dict:
+    """MainNet PaymentTxn from trusted semantic fields only. Never submitted here.
+
+    amount 0, sender=receiver=configured MainNet Falcon f1. Genesis is the
+    exact MainNet ID+hash. Extra inbound keys are not copied.
+    """
+    addr = (address or falcon_address_for(MAINNET_NAME) or "").strip()
+    if not addr:
+        raise AnchorError("mainnet falcon address required")
+    p = dict(params) if isinstance(params, dict) else {}
+    gen = str(p.get("genesisID") or p.get("genesis_id") or MAINNET_GENESIS_ID)
+    if gen != MAINNET_GENESIS_ID:
+        raise AnchorError("not mainnet genesis")
+    gh = _genesis_hash_bytes(gen, p.get("genesisHash") or p.get("genesis_hash"))
+    if base64.b64encode(bytes(gh)).decode("ascii") != MAINNET_GENESIS_HASH:
+        raise AnchorError("genesis hash mismatch")
+    fee = required_fee(p)
+    first = int(p.get("firstValid") or p.get("firstRound") or 1)
+    last = int(p.get("lastValid") or p.get("lastRound") or (first + 1000))
+    txn = algo_tx.pay_txn(addr, addr, 0, fee, first, last, MAINNET_GENESIS_ID, gh, note=bytes(note))
+    extra = set(txn) - {"type", "fee", "fv", "gen", "gh", "lv", "note", "rcv", "snd"}
+    for key in extra:
+        txn.pop(key, None)
     txn["flatFee"] = True
     return txn
 
@@ -297,11 +389,22 @@ def never_state_proof_covered(status: str) -> str:
 
 
 def configured_network() -> str:
-    return (os.environ.get(NETWORK_ENV) or "").strip().lower()
+    from live402.pq import log_identity
+
+    return log_identity.configured_network()
 
 
 def broadcast_requested() -> bool:
     return (os.environ.get(BROADCAST_ENV) or "").strip() == "1"
+
+
+def mainnet_broadcast_requested() -> bool:
+    return (os.environ.get(MAINNET_BROADCAST_ENV) or "").strip() == "1"
+
+
+def automatic_mainnet_enabled() -> bool:
+    """Later GO. Hard-off in this PR. Worker and tick never MainNet-submit."""
+    return False
 
 
 def falcon_address(sender: str | None = None) -> str:
@@ -314,6 +417,21 @@ def falcon_address(sender: str | None = None) -> str:
     from live402.pq import trust
 
     return trust.falcon_address()
+
+
+def falcon_address_for(network: str, sender: str | None = None) -> str:
+    raw = (sender or "").strip()
+    if raw:
+        return raw
+    name = (network or "").strip().lower()
+    if name == MAINNET_NAME:
+        return (os.environ.get(MAINNET_ADDRESS_ENV) or "").strip()
+    return falcon_address()
+
+
+def mainnet_signer_configured() -> bool:
+    """Explicit MainNet signer HMAC token. Named, never valued here."""
+    return bool((os.environ.get(MAINNET_SIGNER_TOKEN_ENV) or "").strip())
 
 
 def signer_material_present(signer_callback=None) -> bool:
@@ -332,6 +450,30 @@ def txn_genesis_id(txn: dict | None = None, params: dict | None = None) -> str:
     return str(p.get("genesisID") or p.get("genesis_id") or TESTNET_GENESIS_ID)
 
 
+def _params_genesis_hash(params: dict | None, txn: dict | None = None) -> str:
+    raw = None
+    if isinstance(txn, dict):
+        raw = txn.get("gh")
+    if raw in (None, "") and isinstance(params, dict):
+        raw = params.get("genesisHash") or params.get("genesis_hash")
+    if raw in (None, ""):
+        gen = txn_genesis_id(txn, params)
+        cfg = netcfg.network_for_genesis_id(gen)
+        return cfg.genesis_hash if cfg is not None else ""
+    if isinstance(raw, (bytes, bytearray)):
+        return base64.b64encode(bytes(raw)).decode("ascii")
+    text = str(raw).strip()
+    if not text:
+        return ""
+    try:
+        return base64.b64encode(base64.b64decode(text)).decode("ascii")
+    except Exception:
+        try:
+            return base64.b64encode(bytes.fromhex(text)).decode("ascii")
+        except ValueError:
+            return ""
+
+
 def submit_allowed(
     *,
     signer_callback=None,
@@ -343,18 +485,91 @@ def submit_allowed(
 
     Requires LIVE402_PQ_FALCON_NETWORK=testnet, router BROADCAST=1, a
     public address, and testnet-v1.0 genesis (MainNet genesis is
-    rejected). A recovered SignedTxn does not need a live signer
-    callback. Signer never reads BROADCAST.
+    rejected on this path). NETWORK=mainnet never returns True here.
+    LIVE402_PQ_FALCON_BROADCAST=1 plus NETWORK=mainnet plus an unset
+    MainNet flag never sends. Signer never reads BROADCAST.
     """
-    gen = txn_genesis_id(txn, params)
-    if gen == MAINNET_GENESIS_ID or gen != TESTNET_GENESIS_ID:
-        return False
     if configured_network() != TESTNET_NAME:
+        return False
+    gen = txn_genesis_id(txn, params)
+    if gen != TESTNET_GENESIS_ID:
+        return False
+    gh = _params_genesis_hash(params, txn)
+    if gh and gh != TESTNET_GENESIS_HASH:
         return False
     if not broadcast_requested():
         return False
     if not falcon_address(sender):
         return False
+    return True
+
+
+def mainnet_submit_allowed(
+    *,
+    sender: str | None = None,
+    params: dict | None = None,
+    txn: dict | None = None,
+    signed: bytes | None = None,
+    expected_origin: str = "",
+    expected_size: int = 0,
+    expected_root=None,
+) -> bool:
+    """True only when every MainNet submit gate is set. Fail closed.
+
+    Requires ALL of: NETWORK=mainnet, exact MainNet genesis ID+hash,
+    configured MainNet Falcon address, explicit MainNet signer token,
+    valid checkpoint fields when a SignedTxn is supplied, semantic
+    SignedTxn OK, fee within cap, allowlisted MainNet submit host,
+    LIVE402_PQ_FALCON_MAINNET_BROADCAST=1, and not fixture/CI.
+    TestNet BROADCAST=1 does not satisfy the MainNet flag.
+    """
+    from live402 import fixtures
+
+    if configured_network() != MAINNET_NAME:
+        return False
+    if not mainnet_broadcast_requested():
+        return False
+    if fixtures.fixture_mode():
+        return False
+    from live402.pq import log_identity
+    from live402.pq import store as pq_store
+
+    try:
+        log_identity.require_mainnet_identity(
+            db_path=pq_store.db_path(),
+            origin=log_identity.configured_origin(),
+        )
+    except log_identity.ConfigError:
+        return False
+    gen = txn_genesis_id(txn, params)
+    if gen != MAINNET_GENESIS_ID:
+        return False
+    gh = _params_genesis_hash(params, txn)
+    if gh != MAINNET_GENESIS_HASH:
+        return False
+    addr = falcon_address_for(MAINNET_NAME, sender)
+    if not addr:
+        return False
+    if not mainnet_signer_configured():
+        return False
+    if not netcfg.submit_host_allowlisted(MAINNET_NAME, MAINNET_ALGOD_HOST):
+        return False
+    if not _pinned_https(MAINNET_ALGOD_SEND_URL, MAINNET_ALGOD_HOST):
+        return False
+    if signed is not None:
+        if not expected_origin or int(expected_size or 0) < 1 or expected_root in (None, "", b""):
+            return False
+        try:
+            validate_signed_txn(
+                bytes(signed),
+                expected_origin=expected_origin,
+                expected_size=int(expected_size),
+                expected_root=expected_root,
+                expected_address=addr,
+                expected_network=MAINNET_NAME,
+            )
+        except AnchorError:
+            return False
     return True
 
 
@@ -370,6 +585,13 @@ def testnet_explorer_url(txid: str) -> str:
     if not _looks_like_txid(txid):
         raise AnchorError("invalid confirmed fields")
     return TESTNET_EXPLORER_TX_URL + txid.strip()
+
+
+def explorer_url(txid: str, network: str | None = None) -> str:
+    if not _looks_like_txid(txid):
+        raise AnchorError("invalid confirmed fields")
+    cfg = _network_cfg(network)
+    return cfg.explorer_tx_url + txid.strip()
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -399,11 +621,13 @@ def validate_signed_txn(
     expected_size: int,
     expected_root,
     expected_address: str | None = None,
+    expected_network: str | None = None,
 ) -> dict:
     """Semantic verify of a SignedTxn before any broadcast.
 
-    TestNet pay-0 self-Falcon, expected note/origin/size/root, fee cap,
-    no AuthAddr/rekey/close/group/lease/axfer/appcall. Does not parse a
+    Pay-0 self-Falcon, expected note/origin/size/root, fee cap, exact
+    genesis for expected_network, no AuthAddr/rekey/close/group/lease/
+    axfer/appcall/LogicSig/multisig/ordinary sig. Does not parse a
     Falcon secret key. Does not POST.
     """
     if not isinstance(signed, (bytes, bytearray)) or not signed:
@@ -435,13 +659,22 @@ def validate_signed_txn(
     amt = txn.get("amt")
     if amt not in (None, 0):
         raise AnchorError("amount must be 0")
+    cfg = _network_cfg(expected_network)
     gen = str(txn.get("gen") or "")
-    if gen == MAINNET_GENESIS_ID or gen != TESTNET_GENESIS_ID:
-        raise AnchorError("not testnet genesis")
+    if gen != cfg.genesis_id:
+        raise AnchorError("genesis mismatch")
+    gh_raw = txn.get("gh")
+    if gh_raw not in (None, "", b""):
+        if isinstance(gh_raw, (bytes, bytearray)):
+            have_gh = base64.b64encode(bytes(gh_raw)).decode("ascii")
+        else:
+            have_gh = _params_genesis_hash(None, txn)
+        if have_gh and have_gh != cfg.genesis_hash:
+            raise AnchorError("genesis hash mismatch")
     fee = int(txn.get("fee") or 0)
     if fee < 1 or fee > MAX_FEE:
         raise AnchorError("fee out of range")
-    addr = (expected_address or falcon_address() or "").strip()
+    addr = (expected_address or falcon_address_for(cfg.name) or "").strip()
     if not addr:
         raise AnchorError("falcon address required")
     try:
@@ -481,12 +714,15 @@ def validate_signed_txn(
         "root": parsed["root"],
         "address": addr,
         "fee": fee,
+        "network": cfg.name,
+        "genesis_id": cfg.genesis_id,
     }
 
 
 def send_if_allowed(signed: bytes, *, send_fn=None, sender: str | None = None, params: dict | None = None) -> str | None:
-    """POST signer-approved SignedTxn bytes only when submit_allowed.
+    """POST signer-approved SignedTxn bytes only when TestNet submit_allowed.
 
+    Never posts MainNet. MainNet uses submit_mainnet_canary only.
     send_fn is injected by tests. Fixture mode without send_fn never
     dials live algod. The pqsig marker is never treated as txn bytes.
     """
@@ -494,6 +730,8 @@ def send_if_allowed(signed: bytes, *, send_fn=None, sender: str | None = None, p
         return None
     blob = bytes(signed)
     if blob == PQSIG_MARKER.encode("utf-8") or blob == PQSIG_MARKER.encode("ascii"):
+        return None
+    if configured_network() == MAINNET_NAME:
         return None
     if not submit_allowed(sender=sender, params=params):
         return None
@@ -510,6 +748,87 @@ def send_if_allowed(signed: bytes, *, send_fn=None, sender: str | None = None, p
     if fixtures.fixture_mode():
         return None
     return _post_testnet(blob)
+
+
+def submit_provider(network: str) -> dict:
+    """Allowlisted algod submit target. Separate from confirm_provider."""
+    cfg = netcfg.get_network(network)
+    return {
+        "network": cfg.name,
+        "kind": "submit",
+        "host": cfg.submit_host,
+        "url": cfg.submit_url,
+        "allowlisted": netcfg.submit_host_allowlisted(cfg.name, cfg.submit_host),
+    }
+
+
+def confirm_provider(network: str) -> dict:
+    """Allowlisted fetch+decode target. Separate from submit_provider.
+
+    Separable endpoints are not the same as independent confirmation.
+    Default MainNet URLs are both AlgoNode (same trust domain). That
+    does not satisfy the production independent-confirmation requirement.
+    """
+    cfg = netcfg.get_network(network)
+    return {
+        "network": cfg.name,
+        "kind": "confirm",
+        "host": cfg.confirm_host,
+        "url": cfg.confirm_txn_url,
+        "pending_url": cfg.pending_url,
+        "allowlisted": netcfg.confirm_host_allowlisted(cfg.name, cfg.confirm_host),
+        "independent_of_submit": netcfg.CONFIRM_INDEPENDENT_OF_SUBMIT,
+        "independence_status": netcfg.CONFIRM_INDEPENDENCE_STATUS,
+        "independence_requirement": netcfg.CONFIRM_INDEPENDENCE_REQUIREMENT,
+    }
+
+
+def submit_mainnet_canary(
+    signed: bytes,
+    *,
+    authorize_human_canary: bool,
+    sender: str | None = None,
+    params: dict | None = None,
+    expected_origin: str = "",
+    expected_size: int = 0,
+    expected_root=None,
+    send_fn=None,
+) -> str | None:
+    """Exactly one later human-authorized MainNet submit. Not executed here.
+
+    Worker, tick, and send_if_allowed never call this. Automatic MainNet
+    stays off. Destroying the Falcon key is not the kill switch: unset
+    LIVE402_PQ_FALCON_MAINNET_BROADCAST (or do not deploy).
+    """
+    if authorize_human_canary is not True:
+        raise AnchorError("canary not authorized")
+    if automatic_mainnet_enabled():
+        raise AnchorError("automatic mainnet is a later GO")
+    blob = bytes(signed) if isinstance(signed, (bytes, bytearray)) else b""
+    if not blob or blob == PQSIG_MARKER.encode("utf-8"):
+        raise AnchorError("not a signed pq1 txn")
+    if not mainnet_submit_allowed(
+        sender=sender,
+        params=params,
+        signed=blob,
+        expected_origin=expected_origin,
+        expected_size=expected_size,
+        expected_root=expected_root,
+    ):
+        raise AnchorError("mainnet submit gates failed")
+    if send_fn is not None:
+        if not callable(send_fn):
+            raise AnchorError("invalid send hook")
+        out = send_fn(blob)
+        text = str(out or "").strip()
+        if not _looks_like_txid(text):
+            raise AnchorError("invalid confirmed fields")
+        return text
+    from live402 import fixtures
+
+    if fixtures.fixture_mode():
+        raise AnchorError("fixture mode never sends mainnet")
+    raise AnchorError("mainnet canary is not executed in this PR")
 
 
 def _post_testnet(blob: bytes) -> str | None:
@@ -568,11 +887,54 @@ def _get_pinned(url: str, host: str, timeout: float) -> bytes | None:
         return None
 
 
+def fetch_confirmed_txn(txid: str, network: str | None = None, fetch_fn=None):
+    """Independently GET a confirmed txn and return the JSON object.
+
+    Confirmation is fetch+decode, not HTTP 200 or a txid string.
+    fetch_fn is injected by tests. Fixture mode without fetch_fn never
+    dials live indexer/algod. Host must be the allowlisted confirm provider.
+    """
+    if not _looks_like_txid(txid):
+        return None
+    if fetch_fn is not None:
+        if not callable(fetch_fn):
+            return None
+        return fetch_fn(txid)
+    from live402 import fixtures
+
+    if fixtures.fixture_mode():
+        return None
+    cfg = _network_cfg(network)
+    if not netcfg.confirm_host_allowlisted(cfg.name, cfg.confirm_host):
+        return None
+    idx_url = cfg.confirm_txn_url + txid
+    raw = _get_pinned(idx_url, cfg.confirm_host, TESTNET_FETCH_TIMEOUT)
+    if raw:
+        try:
+            data = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError, TypeError):
+            data = None
+        if isinstance(data, dict):
+            return data
+    pending_url = cfg.pending_url + txid
+    pending_host = urlparse(cfg.pending_url).hostname or cfg.submit_host
+    if not netcfg.confirm_host_allowlisted(cfg.name, pending_host):
+        return None
+    raw = _get_pinned(pending_url, pending_host, TESTNET_FETCH_TIMEOUT)
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError, TypeError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
 def fetch_testnet_txn(txid: str, fetch_fn=None):
     """Independently GET a confirmed TestNet txn. Never trusts caller fields.
 
     fetch_fn is injected by tests. Fixture mode without fetch_fn never
-    dials live indexer/algod. MainNet hosts are not contacted.
+    dials live indexer/algod. Default confirm provider is TestNet.
     """
     if not _looks_like_txid(txid):
         return None
@@ -910,12 +1272,14 @@ def verify_fetched_anchor(
     expected_root,
     expected_address: str,
     expected_txid: str | None = None,
+    expected_network: str | None = None,
 ) -> dict:
-    """Fail closed unless the fetched txn matches PQ1 TestNet construction.
+    """Fail closed unless the fetched txn matches PQ1 construction.
 
     Expected Falcon checkpoint is self-authorized: configured Falcon
     address == sender == receiver == authorizing account. Any nonempty
     AuthAddr (codec sgnr, REST auth-addr / authAddr) fails confirmation.
+    Genesis must exactly match expected_network.
     """
     if not isinstance(decoded, dict):
         raise AnchorError("invalid chain object")
@@ -924,9 +1288,10 @@ def verify_fetched_anchor(
         raise AnchorError("falcon authorization missing")
     if bytes(pq_auth) == PQSIG_MARKER.encode("utf-8"):
         raise AnchorError("pqsig marker is not authorization")
+    cfg = _network_cfg(expected_network)
     gen = str(decoded.get("genesis_id") or "")
-    if gen == MAINNET_GENESIS_ID or gen != TESTNET_GENESIS_ID:
-        raise AnchorError("not testnet genesis")
+    if gen != cfg.genesis_id:
+        raise AnchorError("genesis mismatch")
     addr = (expected_address or "").strip()
     if not addr:
         raise AnchorError("falcon address required")
@@ -987,4 +1352,6 @@ def verify_fetched_anchor(
         "origin": expected_origin,
         "root": parsed["root"],
         "pq_auth": bytes(pq_auth),
+        "network": cfg.name,
+        "genesis_id": cfg.genesis_id,
     }

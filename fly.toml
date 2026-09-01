@@ -43,7 +43,9 @@ primary_region = "iad"
 
 # 1GB persistent volume for probe history + catalog.sqlite + pq-log.sqlite (Ross approved ~$0.15/mo).
 # Process-local only. Do not HTTP-serve /data or sqlite files.
-# pq-log.sqlite is a separate file.
+# pq-log.sqlite is the live TestNet log. Do not delete it.
+# Prepared MainNet file (unused until cutover): /data/pq-log-mainnet.sqlite
+# Do not enable TestNet or MainNet Falcon broadcast from this file.
 # No extra machines in this PR. Falcon private material is not on this app.
 # Scheduled snapshots off.
 [[mounts]]

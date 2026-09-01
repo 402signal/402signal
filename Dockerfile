@@ -1,8 +1,13 @@
 # Pin the official multi-arch index digest from:
-#   docker buildx imagetools inspect python:3.12.11-slim
-# Digest: sha256:47ae396f09c1303b8653019811a8498470603d7ffefc29cb07c88f1f8cb3d19f
-# Tag python:3.12.11-slim kept as a comment for humans.
-FROM python:3.12.11-slim@sha256:47ae396f09c1303b8653019811a8498470603d7ffefc29cb07c88f1f8cb3d19f
+#   docker buildx imagetools inspect python:3.12.14-slim
+# (This environment had no docker CLI. Digest confirmed from Docker Hub
+#  tag API + registry-1.docker.io Docker-Content-Digest. Same value.)
+# Digest: sha256:e5c9fa26ffb76e11e0f054f30dc2523a2f9693f0c36c0cf1e39b27e152d899fc
+# Tag python:3.12.14-slim includes gh-150743 (outbound http.client
+# interim-1xx / chunked-trailer DoS limit). 3.12.11 does not.
+# linux/amd64 platform manifest under that index:
+#   sha256:2fe5997d249a808b8eeea52c58a1dbffbba28754dc11699ef5c029f2d818ce79
+FROM python:3.12.14-slim@sha256:e5c9fa26ffb76e11e0f054f30dc2523a2f9693f0c36c0cf1e39b27e152d899fc
 
 WORKDIR /app
 

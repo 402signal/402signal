@@ -10,9 +10,14 @@ read page. Homepage PQ card is injected only when last_confirmed.size > 0.
 from __future__ import annotations
 
 ORIGIN = "402signal.com/pq/log"
+ORIGIN_MAINNET = "402signal.com/pq/log/mainnet-v1"
 HTTP_PREFIX = "/pq/log"
 VOLUME_DB = "/data/pq-log.sqlite"
+VOLUME_DB_MAINNET = "/data/pq-log-mainnet.sqlite"
 DEFAULT_DB = "/tmp/pq-log.sqlite"
+DEFAULT_DB_MAINNET = "/tmp/pq-log-mainnet.sqlite"
+EPOCH_TESTNET = "testnet-v1"
+EPOCH_MAINNET = "mainnet-v1"
 NOTE_FORMAT = "402sg/pq1:b"
 NOTE_VERSION = 1
 TILE_HEIGHT = 8

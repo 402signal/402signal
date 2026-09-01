@@ -152,10 +152,14 @@ Base CDP calls need `CDP_API_KEY_ID` + `CDP_API_KEY_SECRET` (or `CDP_ACCESS_TOKE
 | `LIVE402_PQ_LOG_DB` | `/data/pq-log.sqlite` on Fly (`/tmp` fallback) | Experimental C2SP log. Separate file from catalog and history. **Not HTTP-exposed** as a sqlite dump; read API is `/pq/log/*` only. |
 | `LIVE402_PQ_LOG_VKEY` | unset | Ed25519 log verifier key (public). Set on boot from the public half of `LIVE402_PQ_LOG_SK` when that secret loads. Never a private key. |
 | `LIVE402_PQ_LOG_SK` | unset | Optional Ed25519 log signing seed: raw 32-byte seed as hex, or PKCS8 PEM. Fly secret only. Never commit, never paste into chat, never send this value to an assistant. If unset (or `LIVE402_PQ_LOG=0`), append may still produce `logged_uncheckpointed`; signed receipts stay unavailable. Malformed value fails closed (no random key; `/route` still serves unless `require_transparency`). Boot never generates a key. An admin sets `fly secrets set LIVE402_PQ_LOG_SK=…`; 402dev never holds it. 402security must GO before this secret is set. |
+| `LIVE402_PQ_LOG_SK_MAINNET` | unset | Fresh MainNet-epoch Ed25519 seed only. Code rejects silent fallback to `LIVE402_PQ_LOG_SK`. Never set from this PR. |
 | `LIVE402_PQ_FALCON_ADDRESS` | fly.toml (public TestNet address) | Public Algorand address for Falcon anchors. Never a private key. |
-| `LIVE402_PQ_FALCON_NETWORK` | `testnet` in fly.toml | Must be `testnet` for any leftover construction path. MainNet is rejected. |
-| `LIVE402_PQ_FALCON_BROADCAST` | unset | 402signal (router) env. `1` allows POST of a signer-approved SignedTxn to pinned TestNet algod. Default unset: never POST. 402security must GO before anyone sets it to `1`. Signer never reads BROADCAST and never POSTs. Falcon SK must never live on 402signal. No MainNet path. |
-| `LIVE402_PQ_SIGNER_TOKEN` | unset | Shared HMAC for the 6PN signer client. Unset/empty: never dial, never sign. |
+| `LIVE402_PQ_FALCON_NETWORK` | `testnet` in fly.toml | Live path is `testnet`. `mainnet` never uses the TestNet broadcast flag. |
+| `LIVE402_PQ_FALCON_BROADCAST` | unset | 402signal (router) env. `1` allows POST of a signer-approved SignedTxn to pinned TestNet algod. Default unset: never POST. 402security must GO before anyone sets it to `1`. Signer never reads BROADCAST and never POSTs. Falcon SK must never live on 402signal. This flag never sends MainNet. |
+| `LIVE402_PQ_FALCON_MAINNET_BROADCAST` | unset | Distinct MainNet flag. Default off. Automatic MainNet stays off. A later human canary requires this `=1` plus every other MainNet gate. |
+| `LIVE402_PQ_FALCON_MAINNET_ADDRESS` | unset | Public MainNet Falcon f1 address after the Ross ceremony. Empty until then. |
+| `LIVE402_PQ_SIGNER_TOKEN` | unset | Shared HMAC for the TestNet 6PN signer client. Unset/empty: never dial, never sign. |
+| `LIVE402_PQ_SIGNER_MAINNET_TOKEN` | unset | HMAC token name for `402signal-pq-signer-mainnet`. Named, never valued in git. |
 | `LIVE402_PQ_LOG` | unset | `0` forces transparency `unavailable` even if a signer is configured. |
 | `LIVE402_HOT_REFRESH_S` | `600` (clamped 300–900) | Stale-claim threshold for the information-value refresh queue |
 | `LIVE402_WARM_REFRESH_S` | `7200` (clamped 3600–10800) | WARM refresh interval (legacy due_warm helper) |
@@ -210,7 +214,7 @@ live402/static/     GET / homepage (app.js, styles, dashboard.js)
 live402/algod.py    pinned algod suggestedParams for the unpaid Algorand 402 extra
 live402/data/       fixture catalog
 tests/              unittest
-Dockerfile          Python 3.12.11-slim, 0.0.0.0:$PORT (root; see docs/docker.md)
+Dockerfile          Python 3.12.14-slim (gh-150743), 0.0.0.0:$PORT (root; see docs/docker.md)
 fly.toml            app 402signal, internal_port 8080, one machine
 docs/backup.md      sqlite backup tooling + Fly human checklist (backups not claimed active)
 docs/github-protection.md  branch protection human checklist (not enabled by this PR)

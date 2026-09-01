@@ -311,6 +311,7 @@ def _maybe_broadcast(out: dict, *, send_fn, sender: str | None, params: dict) ->
             expected_size=size,
             expected_root=root,
             expected_address=addr,
+            expected_network=algo_anchor.TESTNET_NAME,
         )
     except algo_anchor.AnchorError:
         return out
@@ -333,13 +334,18 @@ def maybe_submit(
     A signer reply persists AUTHORIZED (request_id + SignedTxn). Does not
     advance CONFIRMED. Exact size+origin+root+signed-note recovers the blob
     (no re-dial). Mismatch fail-closes. MainNet genesis is rejected.
-    Router BROADCAST=1 may POST the recovered SignedTxn unless the
+    Automatic MainNet is off. NETWORK=mainnet never submits here.
+    Router BROADCAST=1 may POST the recovered TestNet SignedTxn unless the
     authorized record already has submitted=True and a real txid.
     POST success is not confirmation.
     """
     from live402.pq import signer_client
 
     if not signer_client.token_configured():
+        return None
+    if algo_anchor.configured_network() == algo_anchor.MAINNET_NAME:
+        return None
+    if algo_anchor.automatic_mainnet_enabled():
         return None
     p = dict(params) if isinstance(params, dict) else {}
     gen = str(p.get("genesisID") or p.get("genesis_id") or algo_anchor.TESTNET_GENESIS_ID)

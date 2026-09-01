@@ -36,8 +36,12 @@ class LogSkEnvTests(unittest.TestCase):
         store.reset()
         receipt.configure_signer(None)
         os.environ.pop("LIVE402_PQ_LOG_SK", None)
+        os.environ.pop("LIVE402_PQ_LOG_SK_MAINNET", None)
         os.environ.pop("LIVE402_PQ_LOG", None)
         os.environ.pop("LIVE402_PQ_LOG_VKEY", None)
+        os.environ.pop("LIVE402_PQ_LOG_VKEY_MAINNET", None)
+        os.environ.pop("LIVE402_PQ_LOG_EPOCH", None)
+        os.environ.pop("LIVE402_PQ_FALCON_NETWORK", None)
         # Ephemeral test seed only. Never committed, never printed.
         self.seed = os.urandom(32)
         self.hex_sk = self.seed.hex()
@@ -45,10 +49,14 @@ class LogSkEnvTests(unittest.TestCase):
 
     def _cleanup(self):
         receipt.configure_signer(None)
+        os.environ.pop("LIVE402_PQ_LOG_EPOCH", None)
+        os.environ.pop("LIVE402_PQ_FALCON_NETWORK", None)
         store.reset()
         os.environ.pop("LIVE402_PQ_LOG_SK", None)
+        os.environ.pop("LIVE402_PQ_LOG_SK_MAINNET", None)
         os.environ.pop("LIVE402_PQ_LOG", None)
         os.environ.pop("LIVE402_PQ_LOG_VKEY", None)
+        os.environ.pop("LIVE402_PQ_LOG_VKEY_MAINNET", None)
         os.environ.pop("LIVE402_PQ_LOG_DB", None)
         os.environ.pop("LOCAL_FREE", None)
         self.tmp.cleanup()
@@ -223,6 +231,52 @@ class LogSkEnvTests(unittest.TestCase):
         self.assertIn("boot_optional_log_signer", boot)
         self.assertNotIn("boot_optional_falcon_sk", boot)
         self.assertNotIn("load_falcon_sk_from_env", boot)
+
+    def test_mainnet_epoch_rejects_testnet_sk_fallback(self):
+        os.environ["LIVE402_PQ_LOG_EPOCH"] = "mainnet-v1"
+        os.environ["LIVE402_PQ_LOG_DB"] = os.path.join(self.tmp.name, "pq-log-mainnet.sqlite")
+        store.reset()
+        os.environ["LIVE402_PQ_LOG_SK"] = self.hex_sk
+        os.environ.pop("LIVE402_PQ_LOG_SK_MAINNET", None)
+        with self.assertRaises(receipt.SignerConfigError) as ctx:
+            receipt.load_signer_from_env()
+        self.assertIn("reuse_testnet_sk", str(ctx.exception))
+        self.assertIsNone(receipt.current_signer())
+
+    def test_network_mainnet_rejects_testnet_sk_fallback(self):
+        """NETWORK=mainnet must not silently load LIVE402_PQ_LOG_SK."""
+        os.environ["LIVE402_PQ_FALCON_NETWORK"] = "mainnet"
+        os.environ["LIVE402_PQ_LOG_SK"] = self.hex_sk
+        os.environ.pop("LIVE402_PQ_LOG_SK_MAINNET", None)
+        with self.assertRaises(receipt.SignerConfigError) as ctx:
+            receipt.load_signer_from_env()
+        self.assertIn("reuse_testnet_sk", str(ctx.exception))
+        self.assertIsNone(receipt.current_signer())
+
+    def test_mainnet_epoch_rejects_same_secret_in_both_envs(self):
+        os.environ["LIVE402_PQ_LOG_EPOCH"] = "mainnet-v1"
+        os.environ["LIVE402_PQ_LOG_DB"] = os.path.join(self.tmp.name, "pq-log-mainnet.sqlite")
+        store.reset()
+        os.environ["LIVE402_PQ_LOG_SK"] = self.hex_sk
+        os.environ["LIVE402_PQ_LOG_SK_MAINNET"] = self.hex_sk
+        with self.assertRaises(receipt.SignerConfigError) as ctx:
+            receipt.load_signer_from_env()
+        self.assertIn("reuse_testnet_sk", str(ctx.exception))
+        self.assertIsNone(receipt.current_signer())
+
+    def test_mainnet_epoch_loads_distinct_mainnet_sk(self):
+        other = os.urandom(32).hex()
+        os.environ["LIVE402_PQ_LOG_EPOCH"] = "mainnet-v1"
+        os.environ["LIVE402_PQ_LOG_DB"] = os.path.join(self.tmp.name, "pq-log-mainnet.sqlite")
+        store.reset()
+        os.environ["LIVE402_PQ_LOG_SK"] = self.hex_sk
+        os.environ["LIVE402_PQ_LOG_SK_MAINNET"] = other
+        vkey = receipt.load_signer_from_env()
+        self.assertTrue(vkey)
+        self.assertIn("402signal.com/pq/log/mainnet-v1", vkey)
+        self.assertNotIn(self.hex_sk, vkey)
+        self.assertNotIn(other, vkey)
+        self._assert_secret_absent(vkey)
 
 
 if __name__ == "__main__":
