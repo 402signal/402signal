@@ -4,16 +4,16 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>How 402Signal Works</title>
-  <meta name="description" content="402Signal keeps the listing and the runtime observation separate, then returns a route or a miss." />
+  <meta name="description" content="402Signal sits between discovery and spend: find candidates, check now, apply policy, then return a route or an honest miss." />
   <link rel="canonical" href="https://402signal.com/how" />
   <meta property="og:title" content="How 402Signal Works" />
-  <meta property="og:description" content="402Signal keeps the listing and the runtime observation separate, then returns a route or a miss." />
+  <meta property="og:description" content="402Signal sits between discovery and spend: find candidates, check now, apply policy, then return a route or an honest miss." />
   <meta property="og:url" content="https://402signal.com/how" />
   <meta property="og:type" content="website" />
   <meta property="og:site_name" content="402Signal" />
   <meta name="twitter:card" content="summary" />
   <meta name="twitter:title" content="How 402Signal Works" />
-  <meta name="twitter:description" content="402Signal keeps the listing and the runtime observation separate, then returns a route or a miss." />
+  <meta name="twitter:description" content="402Signal sits between discovery and spend: find candidates, check now, apply policy, then return a route or an honest miss." />
   <meta name="twitter:site" content="@402Signal" />
   <link rel="stylesheet" href="/styles.css" />
 </head>
@@ -25,7 +25,6 @@
         <span class="brand-name">402Signal</span>
       </a>
       <nav class="nav" aria-label="Primary">
-        <a href="/catalog">Catalog</a>
         <a href="/how" aria-current="page">How it works</a>
         <a href="/developers">Developers</a>
       </nav>
@@ -34,41 +33,46 @@
     <main>
       <section class="hero compact">
         <h1>Why check an API that's already listed?</h1>
-        <p class="lede">Directory data can outlive the service it describes. An endpoint can disappear, stop returning a valid 402, change its payment destination or price, or lack enough information for an agent to construct the call.</p>
+        <p class="lede">Catalogs supply candidates. 402Signal sits between discovery and spend. Directory data can outlive the service it describes. An endpoint can disappear, stop returning a valid 402, change its payment destination or price, or lack enough information for an agent to construct the call.</p>
         <p class="lede">402Signal keeps the listing and the runtime observation separate.</p>
       </section>
 
-      <figure class="signal-flow" aria-labelledby="signal-flow-caption">
-        <div class="signal-row">
-          <div class="flow-box">
-            <p class="flow-kicker">DISCOVERY</p>
-            <p class="flow-title">What catalogs claim</p>
-            <p class="flow-detail">Listings and seller metadata. A claim can outlive the endpoint.</p>
+      <section class="block">
+        <h2>What happens on a check</h2>
+        <p>Find candidates → check now → apply policy → route or honest miss.</p>
+        <dl class="checks compact">
+          <div>
+            <dt>Find candidates</dt>
+            <dd>Search current discovery listings for the need. A listing is an input, not an observation.</dd>
           </div>
-          <div class="flow-conn gold" aria-hidden="true"></div>
-          <div class="flow-box flow-emphasis">
-            <p class="flow-kicker">402SIGNAL</p>
-            <p class="flow-title">Check it now</p>
-            <p class="flow-detail">Valid x402? Payment terms? Invocation info? Fresh observation?</p>
+          <div>
+            <dt>Check now</dt>
+            <dd>Probe the live 402 envelope: payment terms, invocation info, and freshness on this request.</dd>
           </div>
-          <div class="flow-conn gold" aria-hidden="true"></div>
-          <div class="flow-box">
-            <p class="flow-kicker">YOUR AGENT</p>
-            <p class="flow-title">Decide whether to spend</p>
-            <p class="flow-detail">Own wallet. Sign. Pay the seller. Call the API.</p>
+          <div>
+            <dt>Apply policy</dt>
+            <dd>Network locks and price bounds use this check. Catalog claims do not satisfy a lock.</dd>
           </div>
-        </div>
-        <div class="trust-rail">
-          <p class="trust-rail-label">EVIDENCE · asynchronous</p>
-          <ol class="trust-steps">
-            <li><span class="trust-step-kicker">COMMIT</span> Routing evidence enters an append-only Merkle log.</li>
-            <li><span class="trust-step-kicker">SIGN</span> 402Signal signs a checkpoint with its Ed25519 log identity.</li>
-            <li><span class="trust-step-kicker">ANCHOR</span> Algorand TestNet · Falcon-1024</li>
-          </ol>
-          <p class="trust-rail-note">The route is gold and synchronous. Evidence is teal and does not delay routing.</p>
-        </div>
-        <figcaption class="sr-only" id="signal-flow-caption">Discovery to 402Signal to your agent, with an asynchronous teal evidence path</figcaption>
-      </figure>
+          <div>
+            <dt>Route or honest miss</dt>
+            <dd>Return a live route with evidence, or a typed miss. 402Signal does not substitute an unverified service.</dd>
+          </div>
+        </dl>
+      </section>
+
+      <section class="block">
+        <h2>402Signal vs your agent</h2>
+        <dl class="checks compact">
+          <div>
+            <dt>402Signal</dt>
+            <dd>Finds candidates, checks them live, applies policy, returns a route or miss, and commits evidence. It does not hold keys or pay the seller.</dd>
+          </div>
+          <div>
+            <dt>Your agent</dt>
+            <dd>Keeps the wallet, signs, pays the seller, and calls the API.</dd>
+          </div>
+        </dl>
+      </section>
 
       <section class="block">
         <h2>What a live check can establish</h2>
@@ -132,8 +136,10 @@
         <a href="https://github.com/402signal/402signal" rel="noopener noreferrer">GitHub</a>
         <a href="https://x.com/402Signal" rel="noopener noreferrer">@402Signal</a>
         <a href="/openapi.json">OpenAPI</a>
+        <a href="/mcp.json">MCP</a>
         <a href="/transparency">Transparency</a>
-        <a href="mailto:402signal@gmail.com">Contact</a>
+        <a href="/catalog" class="muted">Catalog</a>
+        <a href="mailto:ross@402signal.com">ross@402signal.com</a>
       </p>
     </footer>
   </div>

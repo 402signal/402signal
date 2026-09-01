@@ -1166,7 +1166,6 @@ def dashboard_html(payload: dict | None = None) -> str:
         <span class="brand-name">402Signal</span>
       </a>
       <nav class="nav" aria-label="Primary">
-        <a href="/catalog">Catalog</a>
         <a href="/how">How it works</a>
         <a href="/developers">Developers</a>
       </nav>
@@ -1187,8 +1186,10 @@ def dashboard_html(payload: dict | None = None) -> str:
         <a href="https://github.com/402signal/402signal" rel="noopener noreferrer">GitHub</a>
         <a href="https://x.com/402Signal" rel="noopener noreferrer">@402Signal</a>
         <a href="/openapi.json">OpenAPI</a>
+        <a href="/mcp.json">MCP</a>
         <a href="/transparency">Transparency</a>
-        <a href="mailto:402signal@gmail.com">Contact</a>
+        <a href="/catalog" class="muted">Catalog</a>
+        <a href="mailto:ross@402signal.com">ross@402signal.com</a>
       </p>
     </footer>
   </div>

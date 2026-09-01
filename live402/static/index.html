@@ -25,7 +25,6 @@
         <span class="brand-name">402Signal</span>
       </a>
       <nav class="nav" aria-label="Primary">
-        <a href="/catalog">Catalog</a>
         <a href="/how">How it works</a>
         <a href="/developers">Developers</a>
       </nav>
@@ -34,10 +33,10 @@
     <main>
       <section class="hero">
         <h1>Find a paid API that works right now.</h1>
-        <p class="lede">402Signal is the independent check an AI agent makes right before spending. It finds the strongest x402 route across Base, Solana, and Algorand, verifies it live, and shows the evidence behind the choice. Your agent keeps the wallet. The decision history is committed to an append-only log with Falcon PQ anchoring on Algorand (currently TestNet).</p>
+        <p class="lede">Independent check before spend. Catalogs are candidates, not truth. Your agent keeps the wallet. History is Falcon-anchored on Algorand TestNet.</p>
         <p class="rails-line">Base · Solana · Algorand</p>
         <div class="hero-actions">
-          <a class="btn" href="/catalog">Browse catalog</a>
+          <a class="btn" href="/catalog">Try 402Signal</a>
           <a class="btn secondary" href="/developers">Developer docs</a>
         </div>
         <p class="note">$0.01 USDC per live routing check · your agent keeps the wallet.</p>
@@ -81,27 +80,42 @@
         <figcaption class="sr-only" id="signal-flow-caption">Discovery to 402Signal to your agent, with an asynchronous teal evidence path</figcaption>
       </figure>
 
-      <section class="block" id="decision">
-        <h2>A decision, with evidence</h2>
+      <section class="block" id="why">
+        <h2>Why check first</h2>
         <div class="decision-grid">
-          <article class="decision-card route">
-            <h3>ROUTE</h3>
-            <p>A live URL plus the observed payment option from this check.</p>
+          <article class="decision-card">
+            <h3>Fresh, not just listed</h3>
+            <p>A catalog row is a candidate. 402Signal checks the current 402 envelope before anyone spends.</p>
           </article>
-          <article class="decision-card evidence">
-            <h3>EVIDENCE</h3>
-            <p>What the check established: 402 envelope, terms, invocation info, freshness.</p>
+          <article class="decision-card">
+            <h3>Policy actually matters</h3>
+            <p>Network locks and price bounds apply to this live check, not to what a listing still claims.</p>
           </article>
-          <article class="decision-card miss">
-            <h3>MISS</h3>
-            <p>A typed miss instead of substituting an unverified service.</p>
+          <article class="decision-card">
+            <h3>A miss is a valid answer</h3>
+            <p>If nothing observed matches, 402Signal returns a typed miss instead of an unverified substitute.</p>
           </article>
-          <article class="decision-card history">
-            <h3>HISTORY</h3>
-            <p>Commitments that can be verified later. Routing does not wait for chain.</p>
+          <article class="decision-card">
+            <h3>Your wallet stays yours</h3>
+            <p>402Signal does not hold keys and does not pay the seller. Your agent signs and spends.</p>
           </article>
         </div>
+        <p class="note">Example: weather on Base, at most $0.05. 402Signal finds candidates, checks them live, applies that lock, and returns a route or a typed miss. A catalog Solana claim does not satisfy a Base lock.</p>
       </section>
+
+      <details class="ecosystem">
+        <summary>Discoverable via</summary>
+        <p class="listed-on">
+          <a href="https://glama.ai/mcp/servers/402signal/402signal" rel="noopener noreferrer">Glama</a>
+          <a href="https://registry.modelcontextprotocol.io/?q=402signal" rel="noopener noreferrer">MCP Registry</a>
+          <a href="https://github.com/Haustorium12/gold-402/blob/main/directory/aggregators.md" rel="noopener noreferrer">Gold-402</a>
+          <a href="https://smithery.ai/servers/live402/signal" rel="noopener noreferrer">Smithery</a>
+          <a href="https://agentic.market/services/402signal-com" rel="noopener noreferrer">Agentic Market</a>
+          <a href="https://github.com/michielpost/x402-dev/blob/master/Projects.md" rel="noopener noreferrer">x402-dev</a>
+          <a href="https://facilitator.goplausible.xyz/dashboard/bazaar?q=402signal" rel="noopener noreferrer">GoPlausible</a>
+        </p>
+        <p class="note">Discovery listings, not endorsements.</p>
+      </details>
     </main>
 
     <footer class="foot">
@@ -109,8 +123,10 @@
         <a href="https://github.com/402signal/402signal" rel="noopener noreferrer">GitHub</a>
         <a href="https://x.com/402Signal" rel="noopener noreferrer">@402Signal</a>
         <a href="/openapi.json">OpenAPI</a>
+        <a href="/mcp.json">MCP</a>
         <a href="/transparency">Transparency</a>
-        <a href="mailto:402signal@gmail.com">Contact</a>
+        <a href="/catalog" class="muted">Catalog</a>
+        <a href="mailto:ross@402signal.com">ross@402signal.com</a>
       </p>
     </footer>
   </div>

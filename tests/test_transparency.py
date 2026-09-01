@@ -90,6 +90,11 @@ class TransparencyPageTests(unittest.TestCase):
         self.assertIn("script-src 'self'", csp)
         self.assertIn("connect-src 'self'", csp)
         self.assertIn("Verify 402Signal", html)
+        self.assertNotIn("See the check-first flow on the", html)
+        self.assertNotIn('class="signal-flow"', html)
+        self.assertIn("It is not a merchant payment.", html)
+        self.assertIn("Falcon does not make Base or Solana payments PQ-safe", html)
+        self.assertIn("Later rewriting inconsistent with published checkpoints becomes detectable.", html)
         self.assertIn("TestNet anchoring has not yet produced a confirmed checkpoint.", html)
         self.assertNotIn("id=\"pq-testnet\"", html)
         self.assertNotIn(_LIVE_TX, html)
@@ -154,6 +159,11 @@ class TransparencyPageTests(unittest.TestCase):
             html,
         )
         self.assertIn("Latest anchor · Tree 1 · Block 66860001 · Confirmed", html)
+        self.assertIn(
+            "Later rewriting inconsistent with published checkpoints becomes detectable.",
+            html,
+        )
+        self.assertIn("This history proves 402Signal's log, not seller truth.", html)
         self.assertIn("View transparency", html)
         self.assertNotIn("Latest checkpoint · Tree", html)
         self.assertIn('href="/transparency"', html)

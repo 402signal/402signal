@@ -418,8 +418,9 @@ def homepage_pq_html() -> str:
         "its routing evidence and periodically anchors that history to Algorand "
         "TestNet using Falcon-1024 authorization.</p>\n"
         f"{evidence}"
-        "        <p>So if an agent pays for an API, research, or service, the evidence "
-        "behind that routing decision can’t simply be rewritten later.</p>\n"
+        "        <p>Later rewriting inconsistent with published checkpoints becomes "
+        "detectable.</p>\n"
+        "        <p>This history proves 402Signal's log, not seller truth.</p>\n"
         '        <p><a class="btn secondary" href="/transparency">View transparency</a></p>\n'
         "      </section>\n"
     )
@@ -502,9 +503,6 @@ def _status_strip(model: dict) -> str:
     )
 
 
-def _four_stage(model: dict | None = None) -> str:
-    del model
-    return site_chrome.signal_flow_html(variant="proof")
 
 
 def _pera_views(model: dict) -> str:
@@ -1032,33 +1030,24 @@ def _main(model: dict) -> str:
         "or fully private traffic.</p>\n"
         "      </section>\n"
         '      <section class="block">\n'
-        "        <h2>Why this matters</h2>\n"
-        "        <p>If an agent spends money on your behalf, you should be able to verify that "
-        "the routing record behind that decision was not quietly rewritten later.</p>\n"
-        "        <p>402Signal commits its evidence history to an append-only log and periodically "
-        "anchors signed checkpoints.</p>\n"
-        "        <p class=\"note\">This proves a committed history. It does not prove an endpoint "
-        "was truthful.</p>\n"
+        "        <h2>What this proves</h2>\n"
+        "        <p>This page is the proof surface for 402Signal's append-only routing-evidence "
+        "log. Signed checkpoints are periodically anchored to Algorand TestNet using "
+        "Falcon-1024 authorization. Routing never waits for blockchain confirmation.</p>\n"
+        "        <p>Later rewriting inconsistent with published checkpoints becomes detectable. "
+        "Anyone can compare the signed checkpoint, Merkle root, and confirmed TestNet "
+        "transaction.</p>\n"
+        "        <p class=\"note\">This proves 402Signal's committed history. It does not prove "
+        "an endpoint was truthful. It is not a merchant payment. Falcon does not make Base "
+        "or Solana payments PQ-safe. The agent keeps the wallet, signing, and seller "
+        "payment.</p>\n"
         "      </section>\n"
         + _integrity_banner(model)
         + _status_strip(model)
-        + _four_stage(model)
         + _confirmed_card(model)
         + _current_vs_anchored(model)
         + _history(model)
         + _verification_details(model)
-        + '      <section class="block">\n'
-        "        <h2>What this proves</h2>\n"
-        "        <p>This anchor commits a specific log state to TestNet. Anyone can compare the "
-        "signed checkpoint, Merkle root, and confirmed txn to detect later rewriting.</p>\n"
-        "        <h2>What this does not prove</h2>\n"
-        "        <p>It does not prove an endpoint claim was true. It is not a merchant payment.</p>\n"
-        "        <p>402Signal recommends the route. The agent retains the wallet, signing, and "
-        "seller payment.</p>\n"
-        "        <p>It does not: let the blockchain prove endpoint correctness; make Base or Solana "
-        "payments PQ-safe via Falcon; identify or authenticate a seller; or guarantee future "
-        "endpoint behavior.</p>\n"
-        "      </section>\n"
     )
 
 
