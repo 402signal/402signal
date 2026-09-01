@@ -193,8 +193,11 @@ class ProbeLifecycleTests(unittest.TestCase):
         result = self._route([_item(url)], fake_probe)
         self.assertTrue(result.get("live"))
         after = history.summary(url)
-        self.assertEqual(int(after.get("n_7d") or 0), 2)
+        # Route persist is tentative until settlement. Summary stays trusted-only.
+        self.assertEqual(int(after.get("n_7d") or 0), 1)
         self.assertEqual(_probe_count(url), 2)
+        history.mark_batch_settled(result.get("batch_id"))
+        self.assertEqual(int(history.summary(url).get("n_7d") or 0), 2)
 
     def test_attestation_hash_stable_after_straggler_record(self):
         items = [

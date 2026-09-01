@@ -27,6 +27,18 @@ SOURCE_OBSERVED = "402signal_observed"
 SOURCE_CLAIMED = "catalog_claimed"
 SOURCE_LEGACY = "legacy_mixed"
 
+# Observation trust classes. Tentative route rows are diagnostics only.
+TRUST_INDEPENDENT = "INDEPENDENT"
+TRUST_SCHEDULED = "SCHEDULED"
+TRUST_ROUTE_TENTATIVE = "ROUTE_TENTATIVE"
+TRUST_ROUTE_SETTLED = "ROUTE_SETTLED"
+TRUSTED_CLASSES = frozenset({TRUST_INDEPENDENT, TRUST_SCHEDULED, TRUST_ROUTE_SETTLED})
+_TRUSTED_SQL = "('%s','%s','%s')" % (
+    TRUST_INDEPENDENT,
+    TRUST_SCHEDULED,
+    TRUST_ROUTE_SETTLED,
+)
+
 OBSERVED_FIELDS = (
     "live",
     "payable",
@@ -59,7 +71,8 @@ CREATE TABLE IF NOT EXISTS probes (
     miss_reason TEXT,
     rail TEXT,
     schema_present INTEGER,
-    settled_route_observation INTEGER NOT NULL DEFAULT 1
+    settled_route_observation INTEGER NOT NULL DEFAULT 1,
+    trust_class TEXT NOT NULL DEFAULT 'INDEPENDENT'
 );
 CREATE INDEX IF NOT EXISTS probes_url_ts ON probes(url, ts);
 CREATE INDEX IF NOT EXISTS probes_ts ON probes(ts);
@@ -86,7 +99,8 @@ CREATE TABLE IF NOT EXISTS observations (
     field TEXT NOT NULL,
     value TEXT,
     status TEXT,
-    ts INTEGER NOT NULL
+    ts INTEGER NOT NULL,
+    trust_class TEXT
 );
 CREATE INDEX IF NOT EXISTS observations_url_field_ts ON observations(url, field, ts);
 CREATE INDEX IF NOT EXISTS observations_probe_id ON observations(probe_id);
@@ -169,9 +183,39 @@ def _migrate_columns(conn: sqlite3.Connection) -> None:
         conn.execute(
             "ALTER TABLE probes ADD COLUMN settled_route_observation INTEGER NOT NULL DEFAULT 1"
         )
+        cols.add("settled_route_observation")
+    if "trust_class" not in cols:
+        conn.execute("ALTER TABLE probes ADD COLUMN trust_class TEXT")
+        # Conservative: old settled=0 rows are tentative; old settled=1 stay trusted.
+        conn.execute(
+            """
+            UPDATE probes SET trust_class = CASE
+                WHEN settled_route_observation = 0 THEN ?
+                ELSE ?
+            END
+            WHERE trust_class IS NULL OR trust_class = ''
+            """,
+            (TRUST_ROUTE_TENTATIVE, TRUST_INDEPENDENT),
+        )
     state_cols = {row[1] for row in conn.execute("PRAGMA table_info(url_state)").fetchall()}
     if "pending_payTo" not in state_cols:
         conn.execute("ALTER TABLE url_state ADD COLUMN pending_payTo TEXT")
+    obs_cols = {row[1] for row in conn.execute("PRAGMA table_info(observations)").fetchall()}
+    if "trust_class" not in obs_cols:
+        conn.execute("ALTER TABLE observations ADD COLUMN trust_class TEXT")
+        conn.execute(
+            """
+            UPDATE observations SET trust_class = (
+                SELECT CASE
+                    WHEN p.settled_route_observation = 0 THEN ?
+                    ELSE COALESCE(p.trust_class, ?)
+                END
+                FROM probes p WHERE p.id = observations.probe_id
+            )
+            WHERE probe_id IS NOT NULL AND (trust_class IS NULL OR trust_class = '')
+            """,
+            (TRUST_ROUTE_TENTATIVE, TRUST_INDEPENDENT),
+        )
     conn.commit()
 
 
@@ -399,6 +443,7 @@ def _insert_observation(
     value,
     status: str,
     ts: int,
+    trust_class: str | None = None,
 ) -> None:
     if value is None:
         return
@@ -407,14 +452,14 @@ def _insert_observation(
         return
     cur.execute(
         """
-        INSERT INTO observations (probe_id, batch_id, source_type, source, rail, url, field, value, status, ts)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO observations (probe_id, batch_id, source_type, source, rail, url, field, value, status, ts, trust_class)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (probe_id, batch_id, source_type, source, rail, url, field, text, status, ts),
+        (probe_id, batch_id, source_type, source, rail, url, field, text, status, ts, trust_class),
     )
 
 
-def _write_observed(cur, *, probe_id, batch_id, source, rail, url, ts, fields: dict) -> None:
+def _write_observed(cur, *, probe_id, batch_id, source, rail, url, ts, fields: dict, trust_class=None) -> None:
     for field in OBSERVED_FIELDS:
         if field not in fields:
             continue
@@ -433,10 +478,11 @@ def _write_observed(cur, *, probe_id, batch_id, source, rail, url, ts, fields: d
             value=val,
             status="observed",
             ts=ts,
+            trust_class=trust_class,
         )
 
 
-def _write_claimed(cur, *, probe_id, batch_id, source, rail, url, ts, fields: dict) -> None:
+def _write_claimed(cur, *, probe_id, batch_id, source, rail, url, ts, fields: dict, trust_class=None) -> None:
     blob = fields if isinstance(fields, dict) else {}
     src = _text(blob.get("source")) or _text(source)
     r = _text(blob.get("rail")) or _text(rail)
@@ -458,6 +504,7 @@ def _write_claimed(cur, *, probe_id, batch_id, source, rail, url, ts, fields: di
             value=raw,
             status="claimed",
             ts=ts,
+            trust_class=trust_class,
         )
 
 
@@ -527,11 +574,174 @@ def seal_batch(batch_id: str | None) -> None:
         return
 
 
-def _write_probe_row(dest: str, snap: dict, meta: dict) -> None:
-    """Insert one probe + observations. Caller holds _lock. Does not commit."""
+def classify_trust_class(snap: dict | None) -> str:
+    """Classify a write. Old settled=0 rows migrate to ROUTE_TENTATIVE."""
+    blob = snap if isinstance(snap, dict) else {}
+    explicit = _text(blob.get("trust_class"))
+    if explicit in {
+        TRUST_INDEPENDENT,
+        TRUST_SCHEDULED,
+        TRUST_ROUTE_TENTATIVE,
+        TRUST_ROUTE_SETTLED,
+    }:
+        return explicit
+    if blob.get("scheduled") is True:
+        return TRUST_SCHEDULED
+    settled = blob.get("settled_route_observation")
+    if settled == 0 or settled is False:
+        return TRUST_ROUTE_TENTATIVE
+    return TRUST_INDEPENDENT
+
+
+def is_trusted_class(trust_class: str | None) -> bool:
+    return trust_class in TRUSTED_CLASSES
+
+
+def _load_url_state(cur, dest: str):
+    cur.execute(
+        "SELECT last_payTo, last_amount, schema_present, payTo_changed_at, price_changed_at, "
+        "schema_changed_at, last_checked, last_success_402, pending_payTo FROM url_state WHERE url = ?",
+        (dest,),
+    )
+    row = cur.fetchone()
+    if not row:
+        return {
+            "last_payTo": None,
+            "last_amount": None,
+            "schema_present": None,
+            "payTo_changed_at": None,
+            "price_changed_at": None,
+            "schema_changed_at": None,
+            "last_checked": None,
+            "last_success_402": None,
+            "pending_payTo": None,
+        }
+    return {
+        "last_payTo": _text(row[0]),
+        "last_amount": _text(row[1]),
+        "schema_present": row[2],
+        "payTo_changed_at": row[3],
+        "price_changed_at": row[4],
+        "schema_changed_at": row[5],
+        "last_checked": row[6],
+        "last_success_402": row[7],
+        "pending_payTo": _text(row[8]) if len(row) > 8 else None,
+    }
+
+
+def _payto_risk_against_trusted(state: dict, pay_to, rail, claimed, meta: dict) -> None:
+    """Read-only payTo risk vs trusted url_state. Does not mutate state."""
+    prev_pay = _text(state.get("last_payTo"))
+    pending_pay = _text(state.get("pending_payTo"))
+    if prev_pay and pay_to and not payment.payto_equal(prev_pay, pay_to, rail):
+        if pending_pay and payment.payto_equal(pending_pay, pay_to, rail):
+            # Second observation of pending dest. Tentative never establishes.
+            meta["payTo_flipped"] = False
+            meta["payTo_pending"] = True
+            meta["payTo_established"] = False
+        else:
+            meta["payTo_flipped"] = True
+            meta["payTo_pending"] = True
+    claimed_pay = _text(claimed.get("payTo")) if claimed else None
+    claimed_rail = _text(claimed.get("rail")) if claimed else None
+    if claimed_pay and pay_to and not payment.payto_equal(
+        claimed_pay, pay_to, claimed_rail or rail
+    ):
+        meta["claimed_payTo_mismatch"] = True
+
+
+def _apply_trusted_url_state(cur, dest: str, snap: dict, meta: dict, *, force: bool = False) -> bool:
+    """Apply one trusted observation to url_state. Skip if a newer trusted row exists.
+
+    Returns True when url_state was written. Late settlement of an older
+    observation must not overwrite newer trusted state.
+    """
     ts = _as_int(snap.get("ts"), None)
     if ts is None:
         ts = int(time.time())
+    live = 1 if snap.get("live") else 0
+    pay_to = _payto(snap)
+    amount = _observed_amount(snap)
+    schema_present = _observed_schema_present(snap)
+    rail = _text(snap.get("rail"))
+    claimed = _claimed_blob(snap)
+    state = _load_url_state(cur, dest)
+    last_checked = _as_int(state.get("last_checked"), None)
+    if not force and last_checked is not None and ts < int(last_checked):
+        _payto_risk_against_trusted(state, pay_to, rail, claimed, meta)
+        return False
+    prev_pay = _text(state.get("last_payTo"))
+    prev_amt = _text(state.get("last_amount"))
+    prev_schema = state.get("schema_present")
+    pay_changed_at = state.get("payTo_changed_at")
+    price_changed_at = state.get("price_changed_at")
+    schema_changed_at = state.get("schema_changed_at")
+    last_ok = state.get("last_success_402")
+    pending_pay = _text(state.get("pending_payTo"))
+    if prev_pay and pay_to and not payment.payto_equal(prev_pay, pay_to, rail):
+        if pending_pay and payment.payto_equal(pending_pay, pay_to, rail):
+            meta["payTo_flipped"] = False
+            meta["payTo_established"] = True
+            pending_pay = None
+            prev_pay = pay_to
+        else:
+            pay_changed_at = ts
+            meta["payTo_flipped"] = True
+            meta["payTo_pending"] = True
+            pending_pay = pay_to
+    elif pay_to:
+        pending_pay = None
+    claimed_pay = _text(claimed.get("payTo")) if claimed else None
+    claimed_rail = _text(claimed.get("rail")) if claimed else None
+    if claimed_pay and pay_to and not payment.payto_equal(
+        claimed_pay, pay_to, claimed_rail or rail
+    ):
+        meta["claimed_payTo_mismatch"] = True
+    if prev_amt is not None and amount is not None and _price_flipped(prev_amt, amount, snap, rail):
+        price_changed_at = ts
+        meta["price_flipped"] = True
+    if prev_schema is not None and schema_present is not None and int(prev_schema) != int(schema_present):
+        schema_changed_at = ts
+        meta["schema_flipped"] = True
+    if meta.get("payTo_pending"):
+        last_pay = prev_pay
+    else:
+        last_pay = pay_to if pay_to else prev_pay
+    last_amt = amount if amount is not None else prev_amt
+    last_schema = int(schema_present) if schema_present is not None else prev_schema
+    if live:
+        last_ok = ts
+    cur.execute(
+        """
+        INSERT INTO url_state (url, last_payTo, last_amount, schema_present, payTo_changed_at, price_changed_at, schema_changed_at, last_checked, last_success_402, pending_payTo)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(url) DO UPDATE SET
+            last_payTo = excluded.last_payTo,
+            last_amount = excluded.last_amount,
+            schema_present = excluded.schema_present,
+            payTo_changed_at = excluded.payTo_changed_at,
+            price_changed_at = excluded.price_changed_at,
+            schema_changed_at = excluded.schema_changed_at,
+            last_checked = excluded.last_checked,
+            last_success_402 = excluded.last_success_402,
+            pending_payTo = excluded.pending_payTo
+        """,
+        (dest, last_pay, last_amt, last_schema, pay_changed_at, price_changed_at, schema_changed_at, ts, last_ok, pending_pay),
+    )
+    return True
+
+
+def _write_probe_row(dest: str, snap: dict, meta: dict) -> None:
+    """Insert one probe + observations. Caller holds _lock. Does not commit.
+
+    Tentative route rows are diagnostics only: they never write url_state.
+    PayTo risk on those rows is read-only against trusted state.
+    """
+    ts = _as_int(snap.get("ts"), None)
+    if ts is None:
+        ts = int(time.time())
+        snap = dict(snap)
+        snap["ts"] = ts
     live = 1 if snap.get("live") else 0
     pay_to = _payto(snap)
     amount = _observed_amount(snap)
@@ -553,65 +763,26 @@ def _write_probe_row(dest: str, snap: dict, meta: dict) -> None:
     batch_id = _text(snap.get("batch_id"))
     obs_source = _text(snap.get("source")) or "402signal"
     claimed = _claimed_blob(snap)
+    trust_class = classify_trust_class(snap)
+    trusted = is_trusted_class(trust_class)
+    settled = 1 if trusted else 0
+    if trust_class == TRUST_ROUTE_SETTLED:
+        settled = 1
+    elif trust_class == TRUST_ROUTE_TENTATIVE:
+        settled = 0
     conn = _connect()
     cur = conn.cursor()
+    state = _load_url_state(cur, dest)
+    _payto_risk_against_trusted(state, pay_to, rail, claimed, meta)
+    if trusted:
+        # Recompute flags from the apply path so establish/pending match writes.
+        meta["payTo_flipped"] = False
+        meta["payTo_pending"] = False
+        meta["payTo_established"] = False
+        _apply_trusted_url_state(cur, dest, snap, meta)
     cur.execute(
-        "SELECT last_payTo, last_amount, schema_present, payTo_changed_at, price_changed_at, "
-        "schema_changed_at, last_success_402, pending_payTo FROM url_state WHERE url = ?",
-        (dest,),
-    )
-    row = cur.fetchone()
-    prev_pay = _text(row[0]) if row else None
-    prev_amt = _text(row[1]) if row else None
-    prev_schema = row[2] if row else None
-    pay_changed_at = row[3] if row else None
-    price_changed_at = row[4] if row else None
-    schema_changed_at = row[5] if row else None
-    last_ok = row[6] if row else None
-    pending_pay = _text(row[7]) if row and len(row) > 7 else None
-    if prev_pay and pay_to and not payment.payto_equal(prev_pay, pay_to, rail):
-        if pending_pay and payment.payto_equal(pending_pay, pay_to, rail):
-            # Second independent observation of the same new dest: establish.
-            meta["payTo_flipped"] = False
-            meta["payTo_established"] = True
-            pending_pay = None
-            prev_pay = pay_to
-        else:
-            pay_changed_at = ts
-            meta["payTo_flipped"] = True
-            meta["payTo_pending"] = True
-            pending_pay = pay_to
-    elif pay_to:
-        pending_pay = None
-    claimed_pay = _text(claimed.get("payTo")) if claimed else None
-    claimed_rail = _text(claimed.get("rail")) if claimed else None
-    if claimed_pay and pay_to and not payment.payto_equal(
-        claimed_pay, pay_to, claimed_rail or rail
-    ):
-        # Claimed vs observed mismatch is a risk flag, not a last_payTo rotation.
-        meta["claimed_payTo_mismatch"] = True
-    if prev_amt is not None and amount is not None and _price_flipped(prev_amt, amount, snap, rail):
-        price_changed_at = ts
-        meta["price_flipped"] = True
-    if prev_schema is not None and schema_present is not None and int(prev_schema) != int(schema_present):
-        schema_changed_at = ts
-        meta["schema_flipped"] = True
-    if meta.get("payTo_pending"):
-        last_pay = prev_pay
-    else:
-        last_pay = pay_to if pay_to else prev_pay
-    last_amt = amount if amount is not None else prev_amt
-    last_schema = int(schema_present) if schema_present is not None else prev_schema
-    if live:
-        last_ok = ts
-    settled = snap.get("settled_route_observation")
-    if settled is None:
-        settled = 1
-    else:
-        settled = 1 if settled else 0
-    cur.execute(
-        "INSERT INTO probes (url, ts, live, payable, invocable, latency_ms, payTo, amount, miss_reason, rail, schema_present, settled_route_observation) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (dest, ts, live, payable, invocable, latency, pay_to, amount, miss, rail, schema_present, settled),
+        "INSERT INTO probes (url, ts, live, payable, invocable, latency_ms, payTo, amount, miss_reason, rail, schema_present, settled_route_observation, trust_class) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (dest, ts, live, payable, invocable, latency, pay_to, amount, miss, rail, schema_present, settled, trust_class),
     )
     probe_id = cur.lastrowid
     obs_fields = {
@@ -634,6 +805,7 @@ def _write_probe_row(dest: str, snap: dict, meta: dict) -> None:
         url=dest,
         ts=ts,
         fields=obs_fields,
+        trust_class=trust_class,
     )
     if claimed:
         _write_claimed(
@@ -645,24 +817,8 @@ def _write_probe_row(dest: str, snap: dict, meta: dict) -> None:
             url=dest,
             ts=ts,
             fields=claimed,
+            trust_class=trust_class,
         )
-    cur.execute(
-        """
-        INSERT INTO url_state (url, last_payTo, last_amount, schema_present, payTo_changed_at, price_changed_at, schema_changed_at, last_checked, last_success_402, pending_payTo)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(url) DO UPDATE SET
-            last_payTo = excluded.last_payTo,
-            last_amount = excluded.last_amount,
-            schema_present = excluded.schema_present,
-            payTo_changed_at = excluded.payTo_changed_at,
-            price_changed_at = excluded.price_changed_at,
-            schema_changed_at = excluded.schema_changed_at,
-            last_checked = excluded.last_checked,
-            last_success_402 = excluded.last_success_402,
-            pending_payTo = excluded.pending_payTo
-        """,
-        (dest, last_pay, last_amt, last_schema, pay_changed_at, price_changed_at, schema_changed_at, ts, last_ok, pending_pay),
-    )
     cur.execute(
         "SELECT id FROM probes WHERE url = ? ORDER BY ts DESC, id DESC",
         (dest,),
@@ -716,7 +872,8 @@ def record_probe(url: str, snap: dict | None = None) -> dict:
             conn = _connect()
             conn.commit()
             _chmod_db_files(_conn_path or db_path())
-        _touch_shadow_verified(dest, snap)
+        if is_trusted_class(classify_trust_class(snap)):
+            _touch_shadow_verified(dest, snap)
         return meta
     except Exception:
         return meta
@@ -749,6 +906,8 @@ def persist_route_batch(batch_id: str | None, results: list | None) -> dict:
                 snap["batch_id"] = bid
                 if "settled_route_observation" not in snap:
                     snap["settled_route_observation"] = 0
+                if "trust_class" not in snap:
+                    snap["trust_class"] = TRUST_ROUTE_TENTATIVE
                 dest = _text(snap.get("url"))
                 meta = {"payTo_flipped": False, "price_flipped": False, "schema_flipped": False}
                 _write_probe_row(dest, snap, meta)
@@ -762,31 +921,91 @@ def persist_route_batch(batch_id: str | None, results: list | None) -> dict:
             conn = _connect()
             conn.commit()
             _chmod_db_files(_conn_path or db_path())
-        for raw in rows:
-            _touch_shadow_verified(_text(raw.get("url")), raw)
+        # Tentative route observations do not advance shadow freshness.
         return metas
     except Exception:
         return metas
 
 
 def mark_batch_settled(batch_id: str | None) -> None:
-    """Promote a paid route batch to settled_route_observation. Never raises.
+    """Promote a paid route batch to ROUTE_SETTLED. Transactional. Never raises.
 
-    Settlement-failed routes stay unsettled and are excluded from reputation.
+    Marks probes trusted, recomputes per-URL trusted url_state, then updates
+    shadow freshness. Late settlement of an older observation does not
+    overwrite newer trusted state. Failed settlement never calls this, so
+    url_state stays on the last trusted write.
     """
     try:
         bid = _ok_batch_id(batch_id) or _text(batch_id)
         if not bid:
             return
+        shadow_rows: list[tuple[str, dict]] = []
         with _lock:
             conn = _connect()
-            conn.execute(
-                "UPDATE probes SET settled_route_observation = 1 "
-                "WHERE id IN (SELECT probe_id FROM observations WHERE batch_id = ? AND probe_id IS NOT NULL)",
-                (bid,),
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT DISTINCT p.id, p.url, p.ts, p.live, p.payable, p.invocable, p.latency_ms,
+                       p.payTo, p.amount, p.miss_reason, p.rail, p.schema_present, p.trust_class
+                FROM probes p
+                JOIN observations o ON o.probe_id = p.id
+                WHERE o.batch_id = ? AND p.trust_class = ?
+                ORDER BY p.ts ASC, p.id ASC
+                """,
+                (bid, TRUST_ROUTE_TENTATIVE),
             )
+            rows = cur.fetchall()
+            if not rows:
+                conn.execute(
+                    "UPDATE probes SET settled_route_observation = 1, trust_class = ? "
+                    "WHERE id IN (SELECT probe_id FROM observations WHERE batch_id = ? AND probe_id IS NOT NULL) "
+                    "AND (trust_class IS NULL OR trust_class = '' OR trust_class = ?)",
+                    (TRUST_ROUTE_SETTLED, bid, TRUST_ROUTE_TENTATIVE),
+                )
+                conn.execute(
+                    "UPDATE observations SET trust_class = ? WHERE batch_id = ? AND "
+                    "(trust_class IS NULL OR trust_class = '' OR trust_class = ?)",
+                    (TRUST_ROUTE_SETTLED, bid, TRUST_ROUTE_TENTATIVE),
+                )
+                conn.commit()
+                _chmod_db_files(_conn_path or db_path())
+                return
+            ids = [int(r[0]) for r in rows]
+            qmarks = ",".join("?" * len(ids))
+            cur.execute(
+                "UPDATE probes SET settled_route_observation = 1, trust_class = ? "
+                "WHERE id IN (%s)" % qmarks,
+                (TRUST_ROUTE_SETTLED, *ids),
+            )
+            cur.execute(
+                "UPDATE observations SET trust_class = ? WHERE probe_id IN (%s)" % qmarks,
+                (TRUST_ROUTE_SETTLED, *ids),
+            )
+            for row in rows:
+                dest = _text(row[1])
+                if not dest:
+                    continue
+                snap = {
+                    "ts": row[2],
+                    "live": row[3],
+                    "payable": row[4],
+                    "invocable": row[5],
+                    "latency_ms": row[6],
+                    "payTo": row[7],
+                    "amount": row[8],
+                    "miss_reason": row[9],
+                    "rail": row[10],
+                    "schema_present": row[11],
+                    "trust_class": TRUST_ROUTE_SETTLED,
+                    "settled_route_observation": 1,
+                }
+                applied = _apply_trusted_url_state(cur, dest, snap, {})
+                if applied:
+                    shadow_rows.append((dest, snap))
             conn.commit()
             _chmod_db_files(_conn_path or db_path())
+        for dest, snap in shadow_rows:
+            _touch_shadow_verified(dest, snap)
     except Exception:
         return
 
@@ -853,7 +1072,8 @@ def rank_hints(urls: list[str]) -> dict[str, dict]:
                     "ok_7d": 0,
                 }
             cur.execute(
-                f"SELECT url, COUNT(*), SUM(live) FROM probes WHERE url IN ({qmarks}) AND ts >= ? GROUP BY url",
+                f"SELECT url, COUNT(*), SUM(live) FROM probes WHERE url IN ({qmarks}) AND ts >= ? "
+                f"AND trust_class IN {_TRUSTED_SQL} GROUP BY url",
                 (*dests, cutoff),
             )
             for url, n, ok in cur.fetchall():
@@ -899,6 +1119,7 @@ def preview_observations(urls: list[str]) -> dict[str, dict]:
                 SELECT url, field, value, ts
                 FROM observations
                 WHERE url IN ({qmarks}) AND source_type = ?
+                  AND (trust_class IN {_TRUSTED_SQL} OR (trust_class IS NULL AND probe_id IS NULL))
                 ORDER BY ts DESC, id DESC
                 """,
                 (*dests, SOURCE_OBSERVED),
@@ -958,9 +1179,15 @@ def latest_observations(url: str) -> dict:
                 SELECT source_type, field, value, source, rail, ts
                 FROM observations
                 WHERE url = ? AND source_type IN (?, ?)
+                  AND (
+                    trust_class IN %s
+                    OR (trust_class IS NULL AND probe_id IS NULL)
+                    OR (source_type = ? AND probe_id IS NULL)
+                  )
                 ORDER BY ts DESC, id DESC
-                """,
-                (dest, SOURCE_OBSERVED, SOURCE_CLAIMED),
+                """
+                % _TRUSTED_SQL,
+                (dest, SOURCE_OBSERVED, SOURCE_CLAIMED, SOURCE_CLAIMED),
             )
             rows = cur.fetchall()
         seen: set[tuple[str, str]] = set()
@@ -1013,7 +1240,8 @@ def summary(url: str) -> dict:
                 out["last_checked"] = state[4]
                 out["last_success_402"] = state[5]
             cur.execute(
-                "SELECT ts, live, latency_ms FROM probes WHERE url = ? AND ts >= ?",
+                "SELECT ts, live, latency_ms FROM probes WHERE url = ? AND ts >= ? "
+                "AND trust_class IN %s" % _TRUSTED_SQL,
                 (dest, now - WEEK),
             )
             rows = cur.fetchall()
@@ -1290,7 +1518,7 @@ def reputation_evidence(url: str) -> dict:
                 if state[4] is not None:
                     out["age_s"] = max(0, now - int(state[4]))
             cur.execute(
-                "SELECT ts, live, rail, payTo, amount, schema_present, settled_route_observation "
+                "SELECT ts, live, rail, payTo, amount, schema_present, settled_route_observation, trust_class "
                 "FROM probes WHERE url = ? ORDER BY ts ASC, id ASC",
                 (dest,),
             )
@@ -1317,7 +1545,11 @@ def reputation_evidence(url: str) -> dict:
         for row in rows:
             ts, live, rail, pay_to, amount, schema_present = row[:6]
             settled = int(row[6]) if len(row) > 6 and row[6] is not None else 1
-            if settled == 0:
+            trust_class = row[7] if len(row) > 7 else None
+            if trust_class:
+                if not is_trusted_class(trust_class):
+                    continue
+            elif settled == 0:
                 continue
             rname = _text(rail)
             if rname and rname not in rails:
@@ -1457,8 +1689,10 @@ def pulse_observed() -> dict:
                 SELECT field, value, COUNT(*)
                 FROM observations
                 WHERE source_type = ? AND ts >= ? AND field IN ('live', 'payable', 'invocable')
+                  AND (trust_class IN %s OR (trust_class IS NULL AND probe_id IS NULL))
                 GROUP BY field, value
-                """,
+                """
+                % _TRUSTED_SQL,
                 (SOURCE_OBSERVED, cutoff),
             )
             rows = cur.fetchall()

@@ -1,7 +1,8 @@
-# Pin a current 3.12 patch. Digest omitted here because Docker Hub
-# tags move; pin the patch so Fly/Linux rebuilds stay reproducible enough
-# without a lockfile. See docs/docker.md.
-FROM python:3.12.11-slim
+# Pin the official multi-arch index digest from:
+#   docker buildx imagetools inspect python:3.12.11-slim
+# Digest: sha256:47ae396f09c1303b8653019811a8498470603d7ffefc29cb07c88f1f8cb3d19f
+# Tag python:3.12.11-slim kept as a comment for humans.
+FROM python:3.12.11-slim@sha256:47ae396f09c1303b8653019811a8498470603d7ffefc29cb07c88f1f8cb3d19f
 
 WORKDIR /app
 

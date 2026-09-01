@@ -184,6 +184,43 @@ def issue(event: dict) -> dict:
     }
 
 
+def verify_route_receipt(receipt: dict, reveal: dict, vkey: str | None = None) -> dict:
+    """Fail-closed v3 receipt check: event version, reveal, commitment, leaf, inclusion, Ed25519."""
+    if not isinstance(receipt, dict) or not isinstance(reveal, dict):
+        raise ReceiptError("invalid receipt")
+    version = reveal.get("event_version") or reveal.get("type")
+    if version != events.TYPE_ROUTE_DECISION_V3:
+        raise ReceiptError("unsupported event version")
+    commitment = reveal.get("commitment")
+    if not isinstance(commitment, str) or len(commitment) != 64:
+        raise ReceiptError("missing commitment")
+    evidence = reveal.get("evidence")
+    salt = reveal.get("salt")
+    nonce = reveal.get("nonce")
+    ts = reveal.get("ts")
+    if not isinstance(evidence, dict) or not salt or not nonce or not ts:
+        raise ReceiptError("missing reveal fields")
+    if not events.verify_reveal_v3(commitment, reveal):
+        raise ReceiptError("reveal mismatch")
+    leaf_hex = receipt.get("leaf_hash")
+    if not isinstance(leaf_hex, str) or not leaf_hex:
+        raise ReceiptError("missing leaf hash")
+    public_leaf = {
+        "commitment": commitment.lower(),
+        "nonce": nonce,
+        "ts": ts,
+        "type": events.TYPE_ROUTE_DECISION_V3,
+    }
+    try:
+        body = events.leaf_bytes(public_leaf)
+    except (events.PrivacyError, ValueError, TypeError) as exc:
+        raise ReceiptError("invalid public leaf") from exc
+    expected_leaf = merkle.leaf_hash(body).hex()
+    if expected_leaf != leaf_hex.lower():
+        raise ReceiptError("leaf hash mismatch")
+    return verify_receipt(receipt, vkey)
+
+
 def verify_receipt(receipt: dict, vkey: str | None = None) -> dict:
     if not isinstance(receipt, dict):
         raise ReceiptError("invalid receipt")
@@ -239,16 +276,11 @@ def attach_to_route(result: dict, request_body: dict | None = None) -> dict:
         return _unavailable(result, origin)
     try:
         req = request_body if isinstance(request_body, dict) else {}
-        ev, reveal = events.route_decision_event_v2(
-            need=req.get("need") if isinstance(req.get("need"), str) else "",
-            url=(req.get("url") if isinstance(req.get("url"), str) else "")
-            or (result.get("url") if isinstance(result.get("url"), str) else ""),
-            live=result.get("live"),
-            miss_reason=result.get("miss_reason") if isinstance(result.get("miss_reason"), str) else None,
-        )
+        evidence = events.private_evidence_v3_from_route(result, req)
+        ev, reveal = events.route_decision_event_v3(evidence=evidence)
         transparency = {
             "log_origin": origin,
-            "leaf_type": events.TYPE_ROUTE_DECISION_V2,
+            "leaf_type": events.TYPE_ROUTE_DECISION_V3,
             "reveal": reveal,
         }
         if available():

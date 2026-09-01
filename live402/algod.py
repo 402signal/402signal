@@ -36,6 +36,7 @@ _cache: dict = {
     "payload": None,
     "fail_at": 0.0,
     "inflight": False,
+    "epoch": 0,
 }
 
 
@@ -50,6 +51,7 @@ def reset_cache() -> None:
         _cache["payload"] = None
         _cache["fail_at"] = 0.0
         _cache["inflight"] = False
+        _cache["epoch"] = int(_cache.get("epoch") or 0) + 1
         _cv.notify_all()
 
 
@@ -136,10 +138,16 @@ def _fetch() -> dict | None:
     }
 
 
-def _refresh() -> dict | None:
+def _refresh(epoch: int | None = None) -> dict | None:
+    if epoch is None:
+        epoch = int(_cache.get("epoch") or 0)
     fetched = _fetch()
     now = clock.monotonic()
     with _lock:
+        if int(_cache.get("epoch") or 0) != epoch:
+            _cache["inflight"] = False
+            _cv.notify_all()
+            return dict(fetched) if isinstance(fetched, dict) else None
         if fetched is not None:
             _cache["at"] = now
             _cache["payload"] = dict(fetched)
@@ -152,9 +160,9 @@ def _refresh() -> dict | None:
         return dict(payload) if isinstance(payload, dict) else None
 
 
-def _background_refresh() -> None:
+def _background_refresh(epoch: int | None = None) -> None:
     try:
-        _refresh()
+        _refresh(epoch)
     except Exception:
         with _lock:
             _cache["inflight"] = False
@@ -189,16 +197,18 @@ def suggested_params() -> dict:
                 return dict(cached)
             return _constants()
         stale_ok = payload is not None and (now - at) < STALE_TTL
+        epoch = int(_cache.get("epoch") or 0)
         _cache["inflight"] = True
         if stale_ok:
             threading.Thread(
                 target=_background_refresh,
+                args=(epoch,),
                 name="algod-refresh",
                 daemon=True,
             ).start()
             return dict(payload)
 
-    fetched = _refresh()
+    fetched = _refresh(epoch)
     if fetched is not None:
         return fetched
     return _constants()

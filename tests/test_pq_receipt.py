@@ -144,7 +144,8 @@ class ReceiptTests(unittest.TestCase):
         self.assertNotIn("state_proof_covered", str(out))
         receipt.verify_receipt(tr["receipt"], self.vkey)
         self.assertTrue(tr["receipt"].get("leaf_hash"))
-        self.assertTrue(events.verify_reveal(tr["reveal"]["commitment"], tr["reveal"]))
+        self.assertTrue(events.verify_reveal_v3(tr["reveal"]["commitment"], tr["reveal"]))
+        self.assertEqual(tr["reveal"]["event_version"], events.TYPE_ROUTE_DECISION_V3)
         self.assertNotIn("salt", json.loads(leaf))
         self.assertNotIn("need", json.loads(leaf))
 
