@@ -195,17 +195,17 @@ class ConfirmOrgMappingTests(unittest.TestCase):
         self.assertTrue(status["confirm_credentials_configured"])
         self.assertNotIn("alias-not-logged", str(status) + str(monitor.snapshot()))
 
-    def test_blockdaemon_future_org_only_and_singular_defs(self):
+    def test_no_blockdaemon_confirm_surface_and_singular_defs(self):
         src = Path(netcfg.__file__).read_text(encoding="utf-8")
         self.assertNotIn("blockdaemon", netcfg.CONFIRM_PROVIDERS)
-        self.assertEqual(netcfg.provider_org("svc.blockdaemon.com"), "blockdaemon")
-        self.assertTrue(
+        self.assertFalse(hasattr(netcfg, "FUTURE_CONFIRM_HOSTS"))
+        self.assertEqual(netcfg.provider_org("svc.blockdaemon.com"), "")
+        self.assertFalse(
             netcfg.confirmation_independent(
                 "mainnet-api.algonode.cloud", "svc.blockdaemon.com"
             )
         )
-        self.assertTrue(netcfg.confirm_host_allowlisted("mainnet", "svc.blockdaemon.com"))
-        self.assertIn("svc.blockdaemon.com", netcfg.FUTURE_CONFIRM_HOSTS)
+        self.assertFalse(netcfg.confirm_host_allowlisted("mainnet", "svc.blockdaemon.com"))
         tree = ast.parse(src)
         names = [n.name for n in tree.body if isinstance(n, ast.FunctionDef)]
         for target in (

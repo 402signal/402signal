@@ -111,14 +111,10 @@ auth-header-name.
 |---|---|---|---|---|---|---|
 | PRIMARY | tatum | tatum | algorand-mainnet-indexer.gateway.tatum.io | /v2/transactions/{txid} | x-api-key | LIVE402_PQ_CONFIRM_TATUM_API_KEY (alias LIVE402_PQ_CONFIRM_INDEXER_TOKEN) |
 | FAILOVER | nownodes | nownodes | algo-index.nownodes.io | /v2/transactions/{txid} | api-key | LIVE402_PQ_CONFIRM_NOWNODES_API_KEY |
-| FUTURE | (not env-selectable) | blockdaemon | svc.blockdaemon.com | not wired | n/a | n/a |
 
 NowNodes host is the documented Algorand Indexer base
-(`https://docs.nownodes.io/algo/indexer.html`). Blockdaemon host is
-allowlisted for a later PR only. docs.blockdaemon.com documents
-`https://svc.blockdaemon.com/algorand/mainnet/native/indexer` plus
-`/v2/transactions/{txid}`; a host-root `/v2` path is not invented
-here, so Blockdaemon is not a production confirm enum.
+(`https://docs.nownodes.io/algo/indexer.html`). Do not add
+Blockdaemon. Confirm enum is tatum|nownodes only.
 
 Always HTTPS, no redirects, bounded response, credentials only in
 headers. Never in URL, query, logs, monitor snapshot, exception

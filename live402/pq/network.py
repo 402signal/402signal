@@ -20,10 +20,7 @@ A different Nodely hostname is not a different org.
 Production confirm path (option B):
   PRIMARY  tatum     algorand-mainnet-indexer.gateway.tatum.io
   FAILOVER nownodes  algo-index.nownodes.io
-  FUTURE   blockdaemon svc.blockdaemon.com (org map + host allowlist
-           only; not an env-selectable production provider. Documented
-           indexer base is /algorand/mainnet/native/indexer, so a
-           host-root /v2/transactions/{txid} URL is not wired.)
+Do not add Blockdaemon. Confirm enum is tatum|nownodes only.
 Fetch+decode+semantic verify stays required. HTTP 200 or a returned
 txid is never confirmation. Submit-host pending is never independent.
 """
@@ -70,7 +67,6 @@ ORG_NODELY = "nodely"
 ORG_SIGNAL = "402signal"
 ORG_TATUM = "tatum"
 ORG_NOWNODES = "nownodes"
-ORG_BLOCKDAEMON = "blockdaemon"
 # Exact hosts. Suffix rules in provider_org cover *.algonode.*,
 # *.4160.nodely.*, Allo, and Oanor so a new Nodely hostname stays
 # the same org.
@@ -92,7 +88,6 @@ PROVIDER_ORGS = {
     "api.oanor.com": ORG_NODELY,
     "algorand-mainnet-indexer.gateway.tatum.io": ORG_TATUM,
     "algo-index.nownodes.io": ORG_NOWNODES,
-    "svc.blockdaemon.com": ORG_BLOCKDAEMON,
 }
 
 # Second MainNet confirm hostname (Nodely current public indexer).
@@ -114,10 +109,7 @@ class ConfirmProvider:
 
 
 # Option B production confirm path. Env selects the name only.
-# PRIMARY tatum; OPTIONAL failover nownodes. Blockdaemon is not here:
-# docs.blockdaemon.com documents
-# https://svc.blockdaemon.com/algorand/mainnet/native/indexer
-# plus /v2/transactions/{txid}. A host-root /v2 path would be invented.
+# PRIMARY tatum; OPTIONAL failover nownodes. Do not add Blockdaemon.
 CONFIRM_PROVIDER_PRIMARY = "tatum"
 CONFIRM_PROVIDER_FAILOVER = "nownodes"
 CONFIRM_PROVIDERS = {
@@ -138,8 +130,6 @@ CONFIRM_PROVIDERS = {
         secret_env="LIVE402_PQ_CONFIRM_NOWNODES_API_KEY",
     ),
 }
-# Future host allowlist only. Not env-selectable. Not required.
-FUTURE_CONFIRM_HOSTS = frozenset({"svc.blockdaemon.com"})
 # Optional alias for the primary (Tatum) key. Fly secret later.
 PRIMARY_INDEXER_TOKEN_ENV = "LIVE402_PQ_CONFIRM_INDEXER_TOKEN"
 # Falcon pqsig on the production endpoint is not proven in this
@@ -291,8 +281,6 @@ def _org_from_suffix(host: str) -> str:
         return ORG_NODELY
     if key == "oanor.com" or key.endswith(".oanor.com"):
         return ORG_NODELY
-    if key == "svc.blockdaemon.com" or key.endswith(".svc.blockdaemon.com"):
-        return ORG_BLOCKDAEMON
     return ""
 
 
@@ -336,8 +324,6 @@ def confirm_host_allowlisted(network: str, host: str) -> bool:
     key = (host or "").strip().lower()
     allowed = CONFIRM_HOST_ALLOWLIST.get((network or "").strip().lower(), frozenset())
     if key in allowed:
-        return True
-    if key in FUTURE_CONFIRM_HOSTS:
         return True
     return any(p.host == key for p in CONFIRM_PROVIDERS.values())
 
