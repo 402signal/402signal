@@ -283,7 +283,7 @@ class RecoveryDrillsAFTests(unittest.TestCase):
         os.environ["LIVE402_PQ_LOG_EPOCH"] = "mainnet-v1"
         os.environ["LIVE402_PQ_LOG_DB"] = mainnet_db
         os.environ["LIVE402_PQ_LOG_ORIGIN"] = ORIGIN_MAINNET
-        store.reset()
+        store.close()
         self.assertEqual(store.size(), 0)
         self.assertEqual(store.origin(), ORIGIN_MAINNET)
         rec = store.append(b"first-mainnet")
@@ -292,7 +292,7 @@ class RecoveryDrillsAFTests(unittest.TestCase):
         os.environ["LIVE402_PQ_LOG_EPOCH"] = "testnet-v1"
         os.environ["LIVE402_PQ_LOG_DB"] = testnet_db
         os.environ.pop("LIVE402_PQ_LOG_ORIGIN", None)
-        store.reset()
+        store.close()
         self.assertEqual(store.size(), testnet_size)
         self.assertEqual(store.root(testnet_size), testnet_root)
         self.assertEqual(store.origin(), ORIGIN)

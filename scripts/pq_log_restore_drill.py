@@ -50,7 +50,7 @@ def _identity(db_path: Path) -> dict:
     from live402.pq import store
 
     os.environ["LIVE402_PQ_LOG_DB"] = str(db_path)
-    store.reset()
+    store.close()
     try:
         size = int(store.size() or 0)
         root = store.root(size).hex() if size >= 0 else ""
