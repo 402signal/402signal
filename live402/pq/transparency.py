@@ -420,6 +420,7 @@ def homepage_pq_html() -> str:
         f"{evidence}"
         "        <p>So if an agent pays for an API, research, or service, the evidence "
         "behind that routing decision can’t simply be rewritten later.</p>\n"
+        "        <p>This history proves 402Signal's log, not seller truth.</p>\n"
         '        <p><a class="btn secondary" href="/transparency">View transparency</a></p>\n'
         "      </section>\n"
     )
@@ -502,9 +503,10 @@ def _status_strip(model: dict) -> str:
     )
 
 
-def _four_stage(model: dict | None = None) -> str:
-    del model
-    return site_chrome.signal_flow_html(variant="proof")
+def _homepage_flow_pointer() -> str:
+    return (
+        '        <p class="note">See the check-first flow on the <a href="/">homepage</a>.</p>\n'
+    )
 
 
 def _pera_views(model: dict) -> str:
@@ -1039,10 +1041,10 @@ def _main(model: dict) -> str:
         "anchors signed checkpoints.</p>\n"
         "        <p class=\"note\">This proves a committed history. It does not prove an endpoint "
         "was truthful.</p>\n"
-        "      </section>\n"
+        + _homepage_flow_pointer()
+        + "      </section>\n"
         + _integrity_banner(model)
         + _status_strip(model)
-        + _four_stage(model)
         + _confirmed_card(model)
         + _current_vs_anchored(model)
         + _history(model)

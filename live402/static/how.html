@@ -25,7 +25,6 @@
         <span class="brand-name">402Signal</span>
       </a>
       <nav class="nav" aria-label="Primary">
-        <a href="/catalog">Catalog</a>
         <a href="/how" aria-current="page">How it works</a>
         <a href="/developers">Developers</a>
       </nav>
@@ -36,39 +35,8 @@
         <h1>Why check an API that's already listed?</h1>
         <p class="lede">Directory data can outlive the service it describes. An endpoint can disappear, stop returning a valid 402, change its payment destination or price, or lack enough information for an agent to construct the call.</p>
         <p class="lede">402Signal keeps the listing and the runtime observation separate.</p>
+        <p class="note">See the flow on the <a href="/">homepage</a>.</p>
       </section>
-
-      <figure class="signal-flow" aria-labelledby="signal-flow-caption">
-        <div class="signal-row">
-          <div class="flow-box">
-            <p class="flow-kicker">DISCOVERY</p>
-            <p class="flow-title">What catalogs claim</p>
-            <p class="flow-detail">Listings and seller metadata. A claim can outlive the endpoint.</p>
-          </div>
-          <div class="flow-conn gold" aria-hidden="true"></div>
-          <div class="flow-box flow-emphasis">
-            <p class="flow-kicker">402SIGNAL</p>
-            <p class="flow-title">Check it now</p>
-            <p class="flow-detail">Valid x402? Payment terms? Invocation info? Fresh observation?</p>
-          </div>
-          <div class="flow-conn gold" aria-hidden="true"></div>
-          <div class="flow-box">
-            <p class="flow-kicker">YOUR AGENT</p>
-            <p class="flow-title">Decide whether to spend</p>
-            <p class="flow-detail">Own wallet. Sign. Pay the seller. Call the API.</p>
-          </div>
-        </div>
-        <div class="trust-rail">
-          <p class="trust-rail-label">EVIDENCE · asynchronous</p>
-          <ol class="trust-steps">
-            <li><span class="trust-step-kicker">COMMIT</span> Routing evidence enters an append-only Merkle log.</li>
-            <li><span class="trust-step-kicker">SIGN</span> 402Signal signs a checkpoint with its Ed25519 log identity.</li>
-            <li><span class="trust-step-kicker">ANCHOR</span> Algorand TestNet · Falcon-1024</li>
-          </ol>
-          <p class="trust-rail-note">The route is gold and synchronous. Evidence is teal and does not delay routing.</p>
-        </div>
-        <figcaption class="sr-only" id="signal-flow-caption">Discovery to 402Signal to your agent, with an asynchronous teal evidence path</figcaption>
-      </figure>
 
       <section class="block">
         <h2>What a live check can establish</h2>
@@ -133,7 +101,8 @@
         <a href="https://x.com/402Signal" rel="noopener noreferrer">@402Signal</a>
         <a href="/openapi.json">OpenAPI</a>
         <a href="/transparency">Transparency</a>
-        <a href="mailto:402signal@gmail.com">Contact</a>
+        <a href="/catalog" class="muted">Catalog</a>
+        <a href="mailto:ross@402signal.com">Contact</a>
       </p>
     </footer>
   </div>

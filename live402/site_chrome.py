@@ -5,7 +5,6 @@ from __future__ import annotations
 import html as html_mod
 
 NAV = (
-    ("/catalog", "Catalog"),
     ("/how", "How it works"),
     ("/developers", "Developers"),
 )
@@ -15,7 +14,8 @@ FOOTER = (
     ("https://x.com/402Signal", "@402Signal", True),
     ("/openapi.json", "OpenAPI", False),
     ("/transparency", "Transparency", False),
-    ("mailto:402signal@gmail.com", "Contact", False),
+    ("/catalog", "Catalog", False),
+    ("mailto:ross@402signal.com", "Contact", False),
 )
 
 LISTED_ON = (
@@ -56,7 +56,10 @@ def footer_html(current: str = "") -> str:
     for href, label, external in FOOTER:
         rel = ' rel="noopener noreferrer"' if external else ""
         cur = ' aria-current="page"' if current == href else ""
-        links.append('        <a href="%s"%s%s>%s</a>' % (esc(href), rel, cur, esc(label)))
+        extra = ' class="muted"' if href == "/catalog" else ""
+        links.append(
+            '        <a href="%s"%s%s%s>%s</a>' % (esc(href), extra, rel, cur, esc(label))
+        )
     return (
         '    <footer class="foot">\n'
         "      <p>\n"
