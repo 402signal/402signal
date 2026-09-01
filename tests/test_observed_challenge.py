@@ -23,6 +23,17 @@ class RailOfNetworkTests(unittest.TestCase):
         self.assertEqual(payment.rail_of_network(payment.SOLANA_MAINNET), "solana")
         self.assertEqual(payment.rail_of_network(payment.ALGORAND_MAINNET), "algorand")
         self.assertEqual(payment.rail_of_network("base"), "base")
+        self.assertEqual(payment.rail_of_accept({"network": "base"}), "base")
+        self.assertEqual(payment.rail_of_accept({"network": payment.SOLANA_MAINNET}), "solana")
+        self.assertEqual(payment.rail_of_accept({"network": payment.ALGORAND_MAINNET}), "algorand")
+        self.assertIsNone(payment.rail_of_accept({"network": "eip155:84532"}))
+        self.assertIsNone(payment.rail_of_accept({"network": "sepolia"}))
+        self.assertIsNone(payment.rail_of_accept({}))
+        self.assertIsNone(payment.rail_of_accept(None))
+        with self.assertRaises(ValueError):
+            payment.official_requirements({"network": "sepolia"})
+        with self.assertRaises(ValueError):
+            payment.official_requirements({})
         self.assertIsNone(payment.rail_of_network("eip155:84532"))
         self.assertIsNone(payment.rail_of_network("eip155:8453:extra"))
         self.assertIsNone(payment.rail_of_network("not-solana-but-contains-solana"))

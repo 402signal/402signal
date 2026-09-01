@@ -470,8 +470,9 @@ def rail_of_observed_network(network, version: int) -> str | None:
     return None
 
 
-def rail_of_accept(accept: dict) -> str:
-    return rail_of_network((accept or {}).get("network")) or "base"
+def rail_of_accept(accept: dict) -> str | None:
+    """Known rail only. Unknown or missing network is None. Never defaults to base."""
+    return rail_of_network((accept or {}).get("network"))
 
 
 def _rail_name(rail) -> str | None:
@@ -1192,8 +1193,13 @@ def match_accept(payload: dict, required: dict) -> dict | None:
 
 
 def official_requirements(accept: dict) -> dict:
-    """Facilitator PaymentRequirements: CAIP-2 network + token address as asset."""
+    """Facilitator PaymentRequirements: CAIP-2 network + token address as asset.
+
+    Unknown network fails closed. Never invent a Base requirement.
+    """
     rail = rail_of_accept(accept)
+    if rail is None:
+        raise ValueError("unknown payment network")
     extra = dict((accept or {}).get("extra") or {})
     extra.setdefault("name", "USD Coin")
     if rail == "solana":
@@ -1226,6 +1232,8 @@ def official_requirements(accept: dict) -> dict:
             "maxTimeoutSeconds": int(accept.get("maxTimeoutSeconds") or 60),
             "extra": extra,
         }
+    if rail != "base":
+        raise ValueError("unknown payment network")
     extra.setdefault("version", "2")
     extra.setdefault("facilitator", CDP_FACILITATOR)
     extra["caip2"] = BASE_CAIP2

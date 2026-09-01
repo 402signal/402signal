@@ -145,9 +145,11 @@ class C2SPHttpTests(unittest.TestCase):
             "/data",
             "/data/",
             "/data/pq-log.sqlite",
+            "/data/pq-log-mainnet.sqlite",
             "/data/catalog.sqlite",
             "/data/live402-history.sqlite",
             "/pq-log.sqlite",
+            "/pq-log-mainnet.sqlite",
             "/catalog.sqlite",
         ):
             status, raw, hdrs = self._get(path)

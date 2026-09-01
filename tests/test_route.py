@@ -1616,6 +1616,41 @@ class RateLimitTests(unittest.TestCase):
         self.assertEqual(statuses[1], 402)
         self.assertEqual(statuses[2], 429)
 
+    def test_get_route_json_shares_post_limiter(self):
+        ip_headers = {"Fly-Client-IP": "203.0.113.80", "Accept": "application/json"}
+        statuses = []
+        for _ in range(3):
+            status, _raw, _hdrs = _get_full(
+                self.port, "/route", extra_headers=ip_headers
+            )
+            statuses.append(status)
+        self.assertEqual(statuses, [402, 402, 429])
+
+    def test_get_route_json_counts_against_post_quota(self):
+        ip = {"Fly-Client-IP": "203.0.113.81"}
+        status, _raw, _hdrs = _get_full(
+            self.port, "/route", extra_headers={**ip, "Accept": "application/json"}
+        )
+        self.assertEqual(status, 402)
+        status, _raw, _hdrs = _get_full(
+            self.port, "/route", extra_headers={**ip, "Accept": "application/json"}
+        )
+        self.assertEqual(status, 402)
+        status, _body = _json_post(
+            self.port, "/route", {"need": "weather"}, extra_headers=ip
+        )
+        self.assertEqual(status, 429)
+
+    def test_get_route_html_does_not_consume_json_quota(self):
+        ip = {"Fly-Client-IP": "203.0.113.82"}
+        for _ in range(3):
+            status, _raw, _hdrs = _get_full(
+                self.port, "/route", extra_headers={**ip, "Accept": "text/html"}
+            )
+            self.assertEqual(status, 200)
+        status, _body = _json_post(self.port, "/route", {}, extra_headers=ip)
+        self.assertEqual(status, 402)
+
     def test_coinbase_ua_gets_no_extra_quota(self):
         headers = {
             "Fly-Client-IP": "203.0.113.51",

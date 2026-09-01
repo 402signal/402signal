@@ -1,8 +1,8 @@
 """Explicit Algorand network configs for Falcon PQ checkpoint anchors.
 
-Both testnet and mainnet exist in code. This PR's production live path
-stays TestNet. MainNet broadcast defaults off. Automatic MainNet submit
-is a later GO and is not enabled here.
+Both testnet and mainnet exist in code. Production live identity is
+MainNet epoch mainnet-v1 (see fly.toml). MainNet broadcast defaults
+off. Automatic MainNet submit is a later GO and is not enabled here.
 
 Submit provider (algod POST) and confirm provider (indexer GET +
 decode + semantic verify) are separate allowlists. Confirmation is

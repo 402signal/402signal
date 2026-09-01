@@ -151,6 +151,9 @@ class OfficialRailsTests(unittest.TestCase):
         self.assertTrue(sol_v.startswith(payment.SOLANA_FACILITATOR))
         self.assertTrue(algo_v.startswith(payment.ALGORAND_FACILITATOR))
         self.assertTrue(all(facilitator.facilitator_url_allowed(u) for u in (base_v, base_s, sol_v, sol_s, algo_v, algo_s)))
+        self.assertEqual(facilitator.endpoints_for(""), ("", ""))
+        self.assertEqual(facilitator.endpoints_for("sepolia"), ("", ""))
+        self.assertEqual(facilitator.endpoints_for(None), ("", ""))
 
 
 if __name__ == "__main__":

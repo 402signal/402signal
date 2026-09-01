@@ -62,7 +62,11 @@ _VOLUME_DUMP_PATHS = frozenset(
         "/data/pq-log.sqlite",
         "/data/pq-log.sqlite-wal",
         "/data/pq-log.sqlite-shm",
+        "/data/pq-log-mainnet.sqlite",
+        "/data/pq-log-mainnet.sqlite-wal",
+        "/data/pq-log-mainnet.sqlite-shm",
         "/pq-log.sqlite",
+        "/pq-log-mainnet.sqlite",
         "/live402-history.sqlite",
         "/catalog/dump",
         "/catalog/export",
@@ -783,6 +787,8 @@ class Handler(SimpleHTTPRequestHandler):
             if self._wants_html():
                 html = (STATIC_DIR / "route.html").read_text(encoding="utf-8")
                 return self._html(200, html, extra_headers=allow)
+            if not self._route_allowed():
+                return self._json(429, {"error": "rate limit"}, extra_headers=allow)
             sender = self.headers.get("Algorand-Sender") or self.headers.get("X-Algorand-Sender")
             required = payment.payment_required(self._resource_url(), algorand_sender=sender)
             extra = dict(allow)

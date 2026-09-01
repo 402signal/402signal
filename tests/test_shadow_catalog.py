@@ -628,6 +628,11 @@ class CatalogNotHttpExposedTests(unittest.TestCase):
         self.assertTrue(is_private_store_path("/data/catalog.sqlite"))
         self.assertTrue(is_private_store_path("/data/pq-log.sqlite"))
         self.assertTrue(is_private_store_path("/data/pq-log-mainnet.sqlite"))
+        from live402.server import _VOLUME_DUMP_PATHS
+
+        self.assertIn("/data/pq-log-mainnet.sqlite", _VOLUME_DUMP_PATHS)
+        self.assertIn("/data/pq-log-mainnet.sqlite-wal", _VOLUME_DUMP_PATHS)
+        self.assertIn("/pq-log-mainnet.sqlite", _VOLUME_DUMP_PATHS)
         self.assertTrue(is_private_store_path("/catalog.sqlite"))
         self.assertFalse(is_private_store_path("/catalog"))
         self.assertFalse(is_private_store_path("/preview"))

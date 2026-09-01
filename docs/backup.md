@@ -6,10 +6,10 @@ Tooling is implemented. Scheduled Fly backups are **not** claimed active.
 
 - catalog (claims)
 - history (observed probes)
-- pq-log (live TestNet append-only transparency log)
-- pq-log-mainnet (prepared MainNet file; unused until cutover; do not copy TestNet leaves into it)
+- pq-log (historical TestNet archive; not the live production log)
+- pq-log-mainnet (live production MainNet epoch `mainnet-v1`; do not copy TestNet leaves into it)
 
-The live TestNet file `/data/pq-log.sqlite` stays in place. Do not delete it as part of MainNet prep. A later cutover uses `/data/pq-log-mainnet.sqlite` with a fresh tree.
+The live production file is `/data/pq-log-mainnet.sqlite`. The TestNet archive `/data/pq-log.sqlite` stays in place. Do not delete it. Do not copy TestNet leaves into the MainNet file.
 
 One machine. One writer. Do not attach a second process to the same files.
 

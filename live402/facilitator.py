@@ -73,7 +73,9 @@ def endpoints_for(rail: str) -> tuple[str, str]:
         return PAYAI_VERIFY_URL, PAYAI_SETTLE_URL
     if rail == "algorand":
         return GOPLAUSIBLE_VERIFY_URL, GOPLAUSIBLE_SETTLE_URL
-    return CDP_VERIFY_URL, CDP_SETTLE_URL
+    if rail == "base":
+        return CDP_VERIFY_URL, CDP_SETTLE_URL
+    return "", ""
 
 
 def facilitator_url_allowed(url: str) -> bool:
