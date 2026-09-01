@@ -174,16 +174,12 @@ def narrow_policy(policy: dict | None) -> dict:
         out["canonical_fee"] = int(out["canonical_fee"])
         out["snapshot_at"] = int(out["snapshot_at"])
         out["size_rule"] = str(out["size_rule"])
-        # Accept int or str on input; normalize to JSON string "1" for the wire.
-        sv = out["size_version"]
-        if isinstance(sv, bool):
-            raise ValueError("size_version bool")
-        if isinstance(sv, int):
-            out["size_version"] = str(sv)
-        else:
-            out["size_version"] = str(sv).strip()
     except (TypeError, ValueError) as exc:
         raise SignerClientError("policy field missing") from exc
+    # Reject int 1: Go json.Unmarshal into string SizeVersion fails on number.
+    # Do not coerce int→str. Emit/accept only JSON string "1".
+    if not isinstance(out["size_version"], str) or out["size_version"] != HMAC_SIZE_VERSION:
+        raise SignerClientError("policy field missing")
     if out["last_round"] < 1 or out["fv"] < 1 or out["lv"] < 1:
         raise SignerClientError("policy field missing")
     if out["min_fee"] < 1 or out["canonical_fee"] < 1:
@@ -191,8 +187,6 @@ def narrow_policy(policy: dict | None) -> dict:
     if out["fee_per_byte"] < 0 or out["snapshot_at"] < 1:
         raise SignerClientError("policy field missing")
     if out["size_rule"] != HMAC_SIZE_RULE:
-        raise SignerClientError("policy field missing")
-    if out["size_version"] != HMAC_SIZE_VERSION:
         raise SignerClientError("policy field missing")
     return {key: out[key] for key in POLICY_KEYS}
 

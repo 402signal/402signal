@@ -331,7 +331,7 @@ HMAC_POLICY_KEYS = (
     "snapshot_at",
 )
 HMAC_SIZE_RULE = "deterministic_falcon_envelope_estimate"
-HMAC_SIZE_VERSION = 1
+HMAC_SIZE_VERSION = "1"
 
 
 def snapshot_last_round(params: dict | None = None, *, require: bool = False) -> int:
@@ -406,10 +406,10 @@ def hmac_policy(policy: dict | None) -> dict:
     out["canonical_fee"] = int(out["canonical_fee"])
     out["snapshot_at"] = int(out["snapshot_at"])
     out["size_rule"] = str(out["size_rule"])
-    out["size_version"] = int(out["size_version"])
-    if out["size_rule"] != HMAC_SIZE_RULE:
+    # JSON wire must be string "1" (Go SizeVersion is string). Reject int.
+    if not isinstance(out["size_version"], str) or out["size_version"] != HMAC_SIZE_VERSION:
         raise AnchorError("policy field missing")
-    if out["size_version"] != HMAC_SIZE_VERSION:
+    if out["size_rule"] != HMAC_SIZE_RULE:
         raise AnchorError("policy field missing")
     if out["last_round"] < 1 or out["fv"] < 1 or out["canonical_fee"] < 1:
         raise AnchorError("policy field missing")

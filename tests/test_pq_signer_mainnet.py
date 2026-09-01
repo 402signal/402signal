@@ -38,7 +38,7 @@ def _policy(now=1_700_000_000, last_round=1, fee=3000):
         "canonical_fee": fee,
         "snapshot_at": now,
         "size_rule": "deterministic_falcon_envelope_estimate",
-        "size_version": 1,
+        "size_version": "1",
     }
 
 
@@ -246,6 +246,13 @@ class MainNetSignerIsolationTests(unittest.TestCase):
                 port=port,
                 params={"minFee": 1000, "fee": 0, "lastRound": 1},
             )
+
+    def test_narrow_policy_rejects_int_size_version(self):
+        bad = _policy()
+        bad["size_version"] = 1
+        with self.assertRaises(signer_mainnet.SignerClientError) as ctx:
+            signer_mainnet.narrow_policy(bad)
+        self.assertEqual(str(ctx.exception), "policy field missing")
 
     def test_build_request_encodes_size_version_as_json_string(self):
         os.environ["LIVE402_PQ_SIGNER_MAINNET_TOKEN"] = _TOKEN
