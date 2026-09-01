@@ -833,6 +833,14 @@ a.lookup:link, a.lookup:visited { color: var(--ink); text-decoration: none; }
   padding: 16px 0 4px 18px;
   margin-top: 0;
 }
+@media (min-width: 721px) {
+  .trust-rail {
+    width: calc((100% - 56px) / 3);
+    max-width: none;
+    margin-left: calc((100% - 56px) / 3 + 28px);
+    margin-right: auto;
+  }
+}
 .trust-rail-label {
   margin: 0 0 10px;
   font-size: 11px;
