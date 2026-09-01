@@ -7,6 +7,13 @@ from live402 import payment, probe
 ORIGIN = "https://402signal.com"
 ROUTE = f"{ORIGIN}/route"
 DESC = payment.CATALOG_DESCRIPTION
+# Catalog indexes copy DESC. OpenAPI info keeps the short operational remainder.
+OPENAPI_INFO_DESCRIPTION = (
+    DESC
+    + " Pay $0.01 USDC on Base, Solana, or Algorand for a URL that answers unpaid "
+    "HTTP 402 with a payment envelope, or an honest miss. Reachable 200s are misses. "
+    "MCP: GET /mcp.json."
+)
 GUIDANCE = (
     "POST /route with JSON {need, url?}. Unpaid calls return HTTP 402. "
     "Agents that intend to pay should POST, not GET. "
@@ -448,7 +455,7 @@ def openapi_spec(resource_url: str = ROUTE) -> dict:
         "info": {
             "title": "402Signal",
             "version": "0.5.0",
-            "description": DESC,
+            "description": OPENAPI_INFO_DESCRIPTION,
             "x-guidance": GUIDANCE,
             "contact": {"url": ORIGIN, "name": "402Signal", "email": "402signal@gmail.com"},
         },
