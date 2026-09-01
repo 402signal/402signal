@@ -118,7 +118,9 @@ CREATE TABLE IF NOT EXISTS confirmed_anchors (
     root TEXT NOT NULL,
     txid TEXT NOT NULL,
     confirmed_round INTEGER NOT NULL,
-    at INTEGER NOT NULL
+    at INTEGER NOT NULL,
+    network TEXT NOT NULL DEFAULT '',
+    genesis_id TEXT NOT NULL DEFAULT ''
 );
 """
 
@@ -165,6 +167,7 @@ def _connect() -> sqlite3.Connection:
     _migrate_authorized_confirmed(conn)
     _migrate_canary_state(conn)
     _migrate_authorized_submit(conn)
+    _migrate_confirmed_network(conn)
     try:
         have = _size_unlocked(conn)
         if have and not _ready_unlocked(conn, have):
@@ -289,6 +292,74 @@ def _migrate_canary_state(conn: sqlite3.Connection) -> None:
         "UPDATE authorized_anchors SET send_state = 'AUTHORIZED' "
         "WHERE length(signed) > 0 AND (send_state IS NULL OR send_state = '')"
     )
+    conn.commit()
+
+
+def _normalize_confirmed_network(network, genesis_id, origin: str) -> tuple[str, str]:
+    """Persist independently known network only. Never read env or secrets.
+
+    TestNet may be recovered from the historical TestNet origin.
+    MainNet is stored only when the caller supplies network or genesis_id.
+    """
+    from live402.pq import algo_anchor
+    from live402.pq import network as netcfg
+
+    net = str(network or "").strip().lower()
+    gen = str(genesis_id or "").strip()
+    if net and net not in {algo_anchor.TESTNET_NAME, algo_anchor.MAINNET_NAME}:
+        raise ConflictError("invalid confirmed network")
+    if gen:
+        mapped = netcfg.network_for_genesis_id(gen)
+        if mapped is None:
+            raise ConflictError("invalid confirmed genesis")
+        if net and net != mapped.name:
+            raise ConflictError("network genesis mismatch")
+        net = net or mapped.name
+    if not net and (origin or "") == ORIGIN:
+        net = algo_anchor.TESTNET_NAME
+        gen = gen or algo_anchor.TESTNET_GENESIS_ID
+    if net == algo_anchor.TESTNET_NAME and not gen:
+        gen = algo_anchor.TESTNET_GENESIS_ID
+    if net == algo_anchor.MAINNET_NAME and not gen:
+        gen = algo_anchor.MAINNET_GENESIS_ID
+    return net, gen
+
+
+def _migrate_confirmed_network(conn: sqlite3.Connection) -> None:
+    """Record independently confirmed network/genesis on confirmed_anchors."""
+    cols = {str(row[1]) for row in conn.execute("PRAGMA table_info(confirmed_anchors)")}
+    if "network" not in cols:
+        conn.execute("ALTER TABLE confirmed_anchors ADD COLUMN network TEXT NOT NULL DEFAULT ''")
+    if "genesis_id" not in cols:
+        conn.execute("ALTER TABLE confirmed_anchors ADD COLUMN genesis_id TEXT NOT NULL DEFAULT ''")
+    conn.execute(
+        "UPDATE confirmed_anchors SET network = 'testnet', genesis_id = 'testnet-v1.0' "
+        "WHERE (network IS NULL OR network = '') AND origin = ?",
+        (ORIGIN,),
+    )
+    raw = conn.execute("SELECT v FROM meta WHERE k = 'last_confirmed_checkpoint'").fetchone()
+    if raw and raw[0]:
+        try:
+            data = json.loads(raw[0])
+        except (TypeError, ValueError, json.JSONDecodeError):
+            data = {}
+        if isinstance(data, dict) and not str(data.get("network") or "").strip():
+            try:
+                net, gen = _normalize_confirmed_network(
+                    data.get("network"),
+                    data.get("genesis_id"),
+                    str(data.get("origin") or ""),
+                )
+            except ConflictError:
+                net, gen = "", ""
+            if net:
+                data["network"] = net
+                data["genesis_id"] = gen
+                conn.execute(
+                    "INSERT INTO meta(k, v) VALUES ('last_confirmed_checkpoint', ?) "
+                    "ON CONFLICT(k) DO UPDATE SET v = excluded.v",
+                    (json.dumps(data),),
+                )
     conn.commit()
 
 
@@ -976,15 +1047,25 @@ def discard_authorized_checkpoint(tree_size: int) -> None:
 
 
 def last_confirmed_checkpoint() -> dict:
+    empty = {
+        "size": 0,
+        "at": 0,
+        "txid": "",
+        "round": 0,
+        "root": "",
+        "origin": "",
+        "network": "",
+        "genesis_id": "",
+    }
     raw = meta_get("last_confirmed_checkpoint")
     if not raw:
-        return {"size": 0, "at": 0, "txid": "", "round": 0, "root": "", "origin": ""}
+        return dict(empty)
     try:
         data = json.loads(raw)
     except (TypeError, ValueError, json.JSONDecodeError):
-        return {"size": 0, "at": 0, "txid": "", "round": 0, "root": "", "origin": ""}
+        return dict(empty)
     if not isinstance(data, dict):
-        return {"size": 0, "at": 0, "txid": "", "round": 0, "root": "", "origin": ""}
+        return dict(empty)
     return {
         "size": int(data.get("size") or 0),
         "at": int(data.get("at") or 0),
@@ -992,6 +1073,8 @@ def last_confirmed_checkpoint() -> dict:
         "round": int(data.get("round") or data.get("confirmed_round") or 0),
         "root": str(data.get("root") or ""),
         "origin": str(data.get("origin") or ""),
+        "network": str(data.get("network") or ""),
+        "genesis_id": str(data.get("genesis_id") or ""),
     }
 
 
@@ -1003,6 +1086,8 @@ def save_confirmed_checkpoint(
     txid: str,
     confirmed_round: int,
     at: int,
+    network: str = "",
+    genesis_id: str = "",
 ) -> dict:
     """Persist CONFIRMED only. Does not write authorized. Does not POST.
 
@@ -1029,6 +1114,7 @@ def save_confirmed_checkpoint(
     if rnd < 1:
         raise ConflictError("invalid confirmed_round")
     when = int(at)
+    want_network, want_genesis = _normalize_confirmed_network(network, genesis_id, want_origin)
     with _lock:
         conn = _connect()
         last = last_confirmed_checkpoint()
@@ -1067,9 +1153,9 @@ def save_confirmed_checkpoint(
                 raise ConflictError("root mismatch")
         conn.execute(
             "INSERT INTO confirmed_anchors"
-            "(tree_size, origin, root, txid, confirmed_round, at) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (size, want_origin, root_hex, want_txid, rnd, when),
+            "(tree_size, origin, root, txid, confirmed_round, at, network, genesis_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (size, want_origin, root_hex, want_txid, rnd, when, want_network, want_genesis),
         )
         payload = {
             "size": size,
@@ -1078,6 +1164,8 @@ def save_confirmed_checkpoint(
             "round": rnd,
             "root": root_hex,
             "origin": want_origin,
+            "network": want_network,
+            "genesis_id": want_genesis,
         }
         conn.execute(
             "INSERT INTO meta(k, v) VALUES ('last_confirmed_checkpoint', ?) "
@@ -1106,12 +1194,12 @@ def list_confirmed_anchors(limit: int = 250) -> list[dict]:
     with _lock:
         conn = _connect()
         cur = conn.execute(
-            "SELECT tree_size, origin, root, txid, confirmed_round, at "
+            "SELECT tree_size, origin, root, txid, confirmed_round, at, network, genesis_id "
             "FROM confirmed_anchors ORDER BY at DESC, tree_size DESC LIMIT ?",
             (cap,),
         )
         rows = []
-        for tree_size, origin, root, txid, confirmed_round, at in cur.fetchall():
+        for tree_size, origin, root, txid, confirmed_round, at, network, genesis_id in cur.fetchall():
             rows.append(
                 {
                     "size": int(tree_size or 0),
@@ -1120,6 +1208,8 @@ def list_confirmed_anchors(limit: int = 250) -> list[dict]:
                     "txid": str(txid or ""),
                     "round": int(confirmed_round or 0),
                     "at": int(at or 0),
+                    "network": str(network or ""),
+                    "genesis_id": str(genesis_id or ""),
                 }
             )
         return rows
