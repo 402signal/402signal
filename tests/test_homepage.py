@@ -223,7 +223,7 @@ class HomepageProductTests(unittest.TestCase):
         self.assertEqual(parsed.h1, ["Find a paid API that works right now."])
         self.assertNotIn("<h1>402Signal</h1>", html)
         self.assertEqual(html.count("<h1"), 1)
-        self.assertIn("402Signal — Find a paid API that works right now", html)
+        self.assertIn("402Signal: Find a paid API that works right now", html)
         self.assertIn(
             "402Signal independently checks x402 payment endpoints before an agent relies on them. Base, Solana and Algorand.",
             html,
@@ -315,7 +315,7 @@ class HomepageProductTests(unittest.TestCase):
         self.assertIn('data-need="LLM inference"', html)
         self.assertIn('data-need="wallet balance"', html)
         self.assertEqual(html.lower().count("free catalog search"), 0)
-        self.assertIn("x402 API Catalog — 402Signal", html)
+        self.assertIn("x402 API Catalog · 402Signal", html)
         status, raw, _hdrs = _get_full(self.port, "/preview?need=weather")
         self.assertEqual(status, 200)
         body = json.loads(raw)
@@ -481,9 +481,38 @@ class HomepageProductTests(unittest.TestCase):
         for path, html in self.pages.items():
             for phrase in BANNED:
                 self.assertNotIn(phrase, html, f"{path}: {phrase}")
-            body = _strip_head(html)
-            if path != "/transparency":
-                self.assertNotIn("\N{EM DASH}", body, path)
+            self.assertNotIn("\N{EM DASH}", html, path)
+
+    def test_no_em_dash_on_all_human_pages(self):
+        extra = {
+            "/route": _get_full(self.port, "/route", extra_headers={"Accept": "text/html"})[1],
+            "/dashboard": _get_full(self.port, "/dashboard")[1],
+        }
+        for path, html in {**self.pages, **extra}.items():
+            self.assertNotIn("\N{EM DASH}", html, path)
+        for name in ("app.js", "dashboard.js", "transparency.js"):
+            text = _read(name)
+            self.assertNotIn("\N{EM DASH}", text, name)
+
+    def test_authored_human_sources_have_no_em_dash(self):
+        root = Path(__file__).resolve().parent.parent
+        sources = (
+            "live402/static/index.html",
+            "live402/static/catalog.html",
+            "live402/static/how.html",
+            "live402/static/developers.html",
+            "live402/static/route.html",
+            "live402/static/app.js",
+            "live402/static/dashboard.js",
+            "live402/static/transparency.js",
+            "live402/pq/transparency.py",
+        )
+        for rel in sources:
+            text = (root / rel).read_text(encoding="utf-8")
+            self.assertNotIn("\N{EM DASH}", text, rel)
+        from live402 import pulse
+
+        self.assertNotIn("\N{EM DASH}", pulse.dashboard_html())
 
     def test_human_pages_are_static_html_same_csp(self):
         for path in ("/", "/catalog", "/how", "/developers", "/transparency"):
@@ -544,11 +573,11 @@ class HomepageProductTests(unittest.TestCase):
         self.assertIn("accepts", route_body)
 
     def test_seo_titles(self):
-        self.assertIn("<title>402Signal — Find a paid API that works right now</title>", self.home)
-        self.assertIn("<title>x402 API Catalog — 402Signal</title>", self.catalog)
+        self.assertIn("<title>402Signal: Find a paid API that works right now</title>", self.home)
+        self.assertIn("<title>x402 API Catalog · 402Signal</title>", self.catalog)
         self.assertIn("<title>How 402Signal Works</title>", self.how)
         self.assertIn("<title>402Signal Developer API</title>", self.devs)
-        self.assertIn("<title>402Signal Transparency — Verify the routing history</title>", self.transparency)
+        self.assertIn("<title>402Signal Transparency. Verify the routing history</title>", self.transparency)
 
 
 if __name__ == "__main__":

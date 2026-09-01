@@ -15,20 +15,20 @@ from datetime import datetime, timezone
 
 from live402.pq import NOTE_FORMAT, NOTE_VERSION, ORIGIN
 from live402.pq import algo_anchor
+from live402.pq import checkpoint as ckpt
 from live402.pq import store
 from live402.pq import trust
 from live402.pq import worker
 
 _PLACEHOLDER_TXID = frozenset({"", "your_txid", "placeholder", "txid", "none", "null"})
-_HARDCODED_LIVE_TXID = "V2HBS4MPRE5SCT62VLVPTGQYANBQAEOMNDYSSVAUTBFRX4PQDE4Q"
 _SECRET_MARKERS = (
     "LIVE402_PQ_FALCON_SK",
     "LIVE402_PQ_LOG_SK",
     "LIVE402_PQ_SIGNER_TOKEN",
     "LIVE402_HMAC",
     "HMAC_SECRET",
-    "pq-anchor/1",
 )
+HISTORY_LIMIT = 250
 PERA_ADDRESS_URL = "https://testnet.explorer.perawallet.app/address/"
 
 
@@ -223,8 +223,71 @@ def authorized_lifecycle() -> dict | None:
     }
 
 
+def parse_checkpoint_fields(note: str) -> dict | None:
+    """Parse a signed or unsigned checkpoint note. Does not rewrite bytes."""
+    if not note or not isinstance(note, str):
+        return None
+    try:
+        signed = ckpt.parse_signed_note(note)
+        body = ckpt.parse_checkpoint_body(signed["text"])
+    except ValueError:
+        try:
+            body = ckpt.parse_checkpoint_body(note)
+        except ValueError:
+            return None
+    root = body.get("root")
+    if not isinstance(root, (bytes, bytearray)) or len(root) != 32:
+        return None
+    return {
+        "origin": str(body.get("origin") or ""),
+        "tree_size": int(body.get("tree_size") or 0),
+        "root": bytes(root),
+        "root_hex": bytes(root).hex(),
+    }
+
+
+def bound_checkpoint(conf: dict | None) -> dict | None:
+    """Signed checkpoint for the confirmed tree only. Fail closed on mismatch."""
+    if not conf:
+        return None
+    size = int(conf.get("size") or 0)
+    if size < 1:
+        return None
+    note = store.checkpoint_at(size)
+    if not note:
+        return None
+    parsed = parse_checkpoint_fields(note)
+    if not parsed:
+        return None
+    want_origin = str(conf.get("origin") or ORIGIN)
+    if parsed["origin"] != want_origin:
+        return None
+    if parsed["tree_size"] != size:
+        return None
+    if parsed["root_hex"] != str(conf.get("root") or ""):
+        return None
+    vkey = public_vkey()
+    if vkey:
+        try:
+            ckpt.verify_signed_note(note, vkey)
+        except ValueError:
+            return None
+    return {
+        "size": size,
+        "origin": parsed["origin"],
+        "root_hex": parsed["root_hex"],
+        "href": "/pq/log/checkpoint/%s" % size,
+    }
+
+
+def log_integrity_error(current: int, confirmed: dict | None) -> bool:
+    if not confirmed:
+        return False
+    return current < int(confirmed.get("size") or 0)
+
+
 def history_rows() -> list[dict]:
-    rows = store.list_confirmed_anchors()
+    rows = store.list_confirmed_anchors(limit=HISTORY_LIMIT)
     valid = []
     for row in rows:
         txid = str(row.get("txid") or "").strip()
@@ -271,22 +334,34 @@ def page_model() -> dict:
     current = int(store.size() or 0)
     confirmed = confirmed_view()
     confirmed_size = int(confirmed["size"]) if confirmed else 0
-    growth = current - confirmed_size if current >= confirmed_size else 0
+    inconsistent = log_integrity_error(current, confirmed)
+    if inconsistent:
+        growth = 0
+        caught_up = False
+    else:
+        growth = current - confirmed_size if current >= confirmed_size else 0
+        caught_up = bool(confirmed) and growth == 0
     history = history_rows()
+    total = store.confirmed_anchor_count()
     note = note_from_confirmed(confirmed) if confirmed else None
+    bound = bound_checkpoint(confirmed) if confirmed and not inconsistent else None
+    latest_fields = parse_checkpoint_fields(str(store.latest_checkpoint() or ""))
     return {
         "current_size": current,
         "confirmed": confirmed,
         "confirmed_size": confirmed_size,
         "growth": growth,
-        "caught_up": bool(confirmed) and growth == 0,
+        "caught_up": caught_up,
+        "integrity_error": inconsistent,
         "lifecycle": authorized_lifecycle(),
         "history": history,
-        "anchors_confirmed": len(history),
+        "anchors_confirmed": total,
+        "history_truncated": total > len(history),
         "note": note,
+        "bound_checkpoint": bound,
+        "latest_checkpoint_size": int(latest_fields["tree_size"]) if latest_fields else 0,
         "vkey": public_vkey(),
         "falcon_address": public_falcon_address(),
-        "checkpoint": str(store.latest_checkpoint() or ""),
     }
 
 
@@ -294,6 +369,8 @@ def homepage_pq_html() -> str:
     """Homepage PQ card. Empty unless last_confirmed has a real TestNet txid."""
     conf = confirmed_view()
     if not conf:
+        return ""
+    if log_integrity_error(int(store.size() or 0), conf):
         return ""
     evidence = (
         '        <p class="pq-evidence">Latest checkpoint · Tree %s · Block %s · Confirmed</p>\n'
@@ -353,13 +430,26 @@ def _ext_link(href: str, label: str) -> str:
     )
 
 
+def _integrity_banner(model: dict) -> str:
+    if not model.get("integrity_error"):
+        return ""
+    return (
+        '<section class="block" id="log-integrity" role="alert">\n'
+        "  <h2>LOCAL LOG INCONSISTENT</h2>\n"
+        "  <p>The local transparency log is smaller than its latest confirmed historical checkpoint.</p>\n"
+        "</section>\n"
+    )
+
+
 def _status_strip(model: dict) -> str:
     confirmed = model["confirmed"]
     current = model["current_size"]
     confirmed_size = model["confirmed_size"]
     growth = model["growth"]
     n_anchors = model["anchors_confirmed"]
-    if confirmed and growth == 0:
+    if model.get("integrity_error"):
+        since = "LOCAL LOG INCONSISTENT"
+    elif confirmed and growth == 0:
         since = "Caught up"
     elif confirmed and growth > 0:
         since = "%s newer log entries since the latest confirmed anchor" % growth
@@ -381,7 +471,14 @@ def _status_strip(model: dict) -> str:
     )
 
 
-def _four_stage() -> str:
+def _four_stage(model: dict | None = None) -> str:
+    proof = ""
+    if not (model or {}).get("integrity_error"):
+        proof = (
+            "<p class=\"note\">Proof chain: routing evidence is committed to an append-only log; "
+            "402Signal signs a checkpoint of that log; the checkpoint is authorized on Algorand "
+            "TestNet with Falcon-1024 (f1).</p>\n"
+        )
     return (
         '<div class="flow flow-four" role="img" '
         'aria-label="Routing evidence, then append-only log, then signed checkpoint, then Algorand TestNet">\n'
@@ -409,9 +506,7 @@ def _four_stage() -> str:
         "    <p class=\"flow-detail\">The checkpoint is anchored using Falcon-1024 / f1 authorization.</p>\n"
         "  </div>\n"
         "</div>\n"
-        "<p class=\"note\">Proof chain: routing evidence is committed to an append-only log; "
-        "402Signal signs a checkpoint of that log; the checkpoint is authorized on Algorand "
-        "TestNet with Falcon-1024 (f1).</p>\n"
+        + proof
     )
 
 
@@ -430,7 +525,7 @@ def _pera_views(model: dict) -> str:
             "<li>%s. This is the configured Falcon-1024 account. "
             "Not every transaction on that account is a valid 402Signal checkpoint "
             "without PQ1 verification. First-party confirmed history is listed below.</li>"
-            % _ext_link(account, "View all anchors on Pera")
+            % _ext_link(account, "View Falcon account on Pera")
         )
     if not items:
         return ""
@@ -467,7 +562,7 @@ def _confirmed_card(model: dict) -> str:
         "    <p>%s</p>\n"
         '    <p class="pq-kicker">Origin</p>\n'
         "    <p>402signal.com/pq/log</p>\n"
-        '    <p class="pq-kicker">Confirmed</p>\n'
+        '    <p class="pq-kicker">VERIFIED AT</p>\n'
         "    <p>%s</p>\n"
         '    <p class="pq-kicker">Block / round</p>\n'
         "    <p>%s</p>\n"
@@ -480,7 +575,7 @@ def _confirmed_card(model: dict) -> str:
         "    <p>0 ALGO</p>\n"
         '    <p class="hero-actions">\n'
         '      <a class="btn" href="%s" rel="noopener noreferrer">View latest anchor on Pera</a>\n'
-        '      <a class="btn secondary" href="/pq/log/checkpoint">View signed checkpoint</a>\n'
+        "%s"
         "    </p>\n"
         "  </article>\n"
         '  <div class="pq-decoder">\n'
@@ -497,8 +592,22 @@ def _confirmed_card(model: dict) -> str:
             _mono_copy(conf["txid"], abbreviate(conf["txid"]), "transaction id"),
             _falcon_account_row(model["falcon_address"]),
             esc(conf["explorer"]),
+            _confirmed_checkpoint_cta(model),
             decoder,
         )
+    )
+
+
+def _confirmed_checkpoint_cta(model: dict) -> str:
+    bound = model.get("bound_checkpoint")
+    if bound and bound.get("href"):
+        return (
+            '      <a class="btn secondary" href="%s">View signed checkpoint for tree %s</a>\n'
+            % (esc(bound["href"]), esc(bound["size"]))
+        )
+    return (
+        "      <p>The signed checkpoint for this confirmed tree could not be bound "
+        "to the confirmed origin, tree size, and Merkle root.</p>\n"
     )
 
 
@@ -544,28 +653,41 @@ def _current_vs_anchored(model: dict) -> str:
     current = model["current_size"]
     confirmed_size = model["confirmed_size"]
     growth = model["growth"]
-    if model["confirmed"] and growth == 0:
-        compare = "The latest log checkpoint is anchored."
-    elif model["confirmed"] and growth > 0:
-        compare = "%s newer log entries exist after the latest confirmed anchor." % growth
-    elif current > 0 and not model["confirmed"]:
-        compare = "The log has entries, and TestNet anchoring has not yet produced a confirmed checkpoint."
+    if model.get("integrity_error"):
+        compare = (
+            "The local transparency log is smaller than its latest confirmed historical checkpoint."
+        )
+        numbers = (
+            "Current tree %s · confirmed tree %s. Local log is inconsistent with the "
+            "confirmed historical checkpoint." % (esc(current), esc(confirmed_size))
+        )
+        lifecycle = ""
     else:
-        compare = "TestNet anchoring has not yet produced a confirmed checkpoint."
-    lifecycle = ""
-    if model["lifecycle"]:
-        lifecycle = "<p>%s</p>\n" % esc(model["lifecycle"]["label"])
+        if model["confirmed"] and growth == 0:
+            compare = "The latest log checkpoint is anchored."
+        elif model["confirmed"] and growth > 0:
+            compare = "%s newer log entries exist after the latest confirmed anchor." % growth
+        elif current > 0 and not model["confirmed"]:
+            compare = "The log has entries, and TestNet anchoring has not yet produced a confirmed checkpoint."
+        else:
+            compare = "TestNet anchoring has not yet produced a confirmed checkpoint."
+        numbers = "Current tree %s · confirmed tree %s · unanchored growth %s." % (
+            esc(current),
+            esc(confirmed_size if model["confirmed"] else 0),
+            esc(growth),
+        )
+        lifecycle = ""
+        if model["lifecycle"]:
+            lifecycle = "<p>%s</p>\n" % esc(model["lifecycle"]["label"])
     return (
         '<section class="block" id="current-vs-anchored">\n'
         "  <h2>Current vs anchored</h2>\n"
-        "  <p>Current tree %s · confirmed tree %s · unanchored growth %s.</p>\n"
+        "  <p>%s</p>\n"
         "  <p>%s</p>\n"
         "%s"
         "</section>\n"
         % (
-            esc(current),
-            esc(confirmed_size if model["confirmed"] else 0),
-            esc(growth),
+            numbers,
             esc(compare),
             lifecycle,
         )
@@ -576,6 +698,8 @@ def _history(model: dict) -> str:
     rows = model["history"]
     n = model["anchors_confirmed"]
     heading = "<p>TOTAL CONFIRMED ANCHORS %s</p>\n" % esc(n)
+    if model.get("history_truncated"):
+        heading += "<p>Showing latest 250 anchors.</p>\n"
     if not rows:
         return (
             '<section class="block" id="anchor-history">\n'
@@ -601,7 +725,7 @@ def _history(model: dict) -> str:
         )
         cards.append(
             '<article class="history-card">'
-            "<p>TREE %s%s</p><p>Δ LEAVES %s</p><p>CONFIRMED %s</p>"
+            "<p>TREE %s%s</p><p>Δ LEAVES %s</p><p>VERIFIED %s</p>"
             "<p>BLOCK %s</p><p>TRANSACTION %s</p></article>"
             % (esc(row["size"]), esc(span), esc(row["delta"]), when, esc(row["round"]), link)
         )
@@ -612,7 +736,7 @@ def _history(model: dict) -> str:
         + '  <div class="table-wrap history-table">\n'
         '    <table class="anchor-table">\n'
         "      <thead><tr><th scope=\"col\">TREE</th><th scope=\"col\">Δ LEAVES</th>"
-        "<th scope=\"col\">CONFIRMED</th><th scope=\"col\">BLOCK</th>"
+        "<th scope=\"col\">VERIFIED</th><th scope=\"col\">BLOCK</th>"
         "<th scope=\"col\">TRANSACTION</th></tr></thead>\n"
         "      <tbody>%s</tbody>\n"
         "    </table>\n"
@@ -682,12 +806,22 @@ def _technical(model: dict) -> str:
         )
         parts.append("<p>Note length · %s bytes</p>" % esc(note["note_len"]))
         parts.append("<p>Origin hash · %s</p>" % esc(note["origin_hash_hex"]))
-    if model["checkpoint"]:
+    bound = model.get("bound_checkpoint")
+    if bound and bound.get("href"):
         parts.append(
-            "<p>Signed Ed25519 checkpoint</p>"
-            '<div class="scroll-block"><pre class="code">%s</pre></div>'
-            % esc(model["checkpoint"])
+            '<p>Signed checkpoint for confirmed tree %s: '
+            '<a href="%s"><code>%s</code></a></p>'
+            % (esc(bound["size"]), esc(bound["href"]), esc(bound["href"]))
         )
+    elif model.get("confirmed") and not model.get("integrity_error"):
+        parts.append(
+            "<p>The signed checkpoint for this confirmed tree could not be bound "
+            "to the confirmed origin, tree size, and Merkle root.</p>"
+        )
+    parts.append(
+        '<p>Latest signed checkpoint. It may be newer than the latest TestNet anchor. '
+        '<a href="/pq/log/checkpoint"><code>GET /pq/log/checkpoint</code></a></p>'
+    )
     if model["vkey"]:
         parts.append(
             "<p>Public Ed25519 vkey</p><p class=\"mono wrap\">%s %s</p>"
@@ -746,11 +880,21 @@ def _verify_yourself(model: dict) -> str:
             "<li><span>%s</span> %s</li>"
             % (esc(label), _mono_copy(value, display, what))
         )
+    bound = model.get("bound_checkpoint")
+    bound_item = ""
+    if bound and bound.get("href"):
+        bound_item = (
+            '    <li><a href="%s">GET %s</a> '
+            "(signed checkpoint for confirmed tree %s)</li>\n"
+            % (esc(bound["href"]), esc(bound["href"]), esc(bound["size"]))
+        )
     return (
         '<section class="block" id="verify-yourself">\n'
         "  <h2>Verify yourself</h2>\n"
         "  <ul class=\"verify-list\">\n"
-        '    <li><a href="/pq/log/checkpoint">GET /pq/log/checkpoint</a> (signed Ed25519 checkpoint)</li>\n'
+        + bound_item
+        + '    <li><a href="/pq/log/checkpoint">GET /pq/log/checkpoint</a>. '
+        "Latest signed checkpoint. It may be newer than the latest TestNet anchor.</li>\n"
         "    <li>C2SP tiles are published under <code>/pq/log/tile/</code> "
         "(hash tiles and entry bundles). Compare them to the signed checkpoint.</li>\n"
         "  </ul>\n"
@@ -846,7 +990,7 @@ def render_html() -> str:
 
 def page_html() -> str:
     model = page_model()
-    title = "402Signal Transparency — Verify the routing history"
+    title = "402Signal Transparency. Verify the routing history"
     description = (
         "Verify 402Signal’s append-only routing-evidence history, signed checkpoints "
         "and Falcon-authorized Algorand TestNet anchors."
@@ -893,8 +1037,9 @@ def _main(model: dict) -> str:
         "an API, purchases data, or pays for compute.</p>\n"
         "        <p class=\"note\">What did my agent rely on when it spent my money?</p>\n"
         "      </section>\n"
+        + _integrity_banner(model)
         + _status_strip(model)
-        + _four_stage()
+        + _four_stage(model)
         + _confirmed_card(model)
         + _pera_views(model)
         + _current_vs_anchored(model)
@@ -921,5 +1066,4 @@ def assert_no_secrets(html: str) -> None:
     for marker in _SECRET_MARKERS:
         if marker.lower() in low:
             raise ValueError("secret marker in html")
-    if _HARDCODED_LIVE_TXID in html:
-        raise ValueError("hardcoded live txid in html")
+    return

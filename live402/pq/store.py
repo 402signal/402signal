@@ -801,13 +801,26 @@ def save_confirmed_checkpoint(
         return last_confirmed_checkpoint()
 
 
-def list_confirmed_anchors() -> list[dict]:
-    """Persisted confirmed rows, newest first. Read-only. Does not invent rows."""
+def confirmed_anchor_count() -> int:
+    """SELECT COUNT(*) from confirmed_anchors. Does not scan leaf bodies."""
+    with _lock:
+        conn = _connect()
+        cur = conn.execute("SELECT COUNT(*) FROM confirmed_anchors")
+        row = cur.fetchone()
+        return int(row[0] or 0) if row else 0
+
+
+def list_confirmed_anchors(limit: int = 250) -> list[dict]:
+    """Persisted confirmed rows, newest first. Bounded. Does not invent rows."""
+    cap = int(limit)
+    if cap < 1:
+        return []
     with _lock:
         conn = _connect()
         cur = conn.execute(
             "SELECT tree_size, origin, root, txid, confirmed_round, at "
-            "FROM confirmed_anchors ORDER BY at DESC, tree_size DESC"
+            "FROM confirmed_anchors ORDER BY at DESC, tree_size DESC LIMIT ?",
+            (cap,),
         )
         rows = []
         for tree_size, origin, root, txid, confirmed_round, at in cur.fetchall():

@@ -99,7 +99,8 @@ class TransparencyPageTests(unittest.TestCase):
         self.assertIn("ANCHORS CONFIRMED", html)
         self.assertNotIn("AUTHORIZATION", html)
         self.assertIn("Falcon-1024 · f1", html)
-        self.assertIn("<title>402Signal Transparency — Verify the routing history</title>", html)
+        self.assertIn("<title>402Signal Transparency. Verify the routing history</title>", html)
+        self.assertNotIn("\N{EM DASH}", html)
         self.assertIn("canonical", html)
         self.assertIn("https://402signal.com/transparency", html)
         self.assertNotIn("MainNet", html)
@@ -173,7 +174,9 @@ class TransparencyPageTests(unittest.TestCase):
         self.assertIn("View raw TestNet transaction JSON", html)
         self.assertIn(_FALCON, html)
         self.assertIn("OBHYXCUV…34IFFIU", html)
-        self.assertIn("View all anchors on Pera", html)
+        self.assertIn("View Falcon account on Pera", html)
+        self.assertNotIn("View all anchors on Pera", html)
+        self.assertIn("VERIFIED AT", html)
         self.assertIn("https://testnet.explorer.perawallet.app/address/" + _FALCON + "/", html)
         self.assertIn("Not every transaction on that account is a valid 402Signal checkpoint", html)
         self.assertIn("Canonical PQ1 note", html)
@@ -303,6 +306,7 @@ class TransparencyPageTests(unittest.TestCase):
         src = (Path(__file__).resolve().parent.parent / "live402" / "pq" / "transparency.py").read_text(
             encoding="utf-8"
         )
+        self.assertNotIn(_LIVE_TX, src)
         self.assertNotIn("testnet.explorer.perawallet.app/tx/" + _LIVE_TX, src)
         home = (STATIC / "index.html").read_text(encoding="utf-8")
         self.assertNotIn(_LIVE_TX, home)
@@ -317,6 +321,89 @@ class TransparencyPageTests(unittest.TestCase):
         static = (STATIC / "index.html").read_text(encoding="utf-8")
         self.assertNotIn("View TestNet transaction", static)
         self.assertNotIn("perawallet", static)
+
+    def test_confirmed_proof_binds_to_confirmed_size_not_latest(self):
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+        from live402.pq import checkpoint as ckpt
+        from live402.pq import receipt
+
+        key = Ed25519PrivateKey.generate()
+        receipt.configure_signer(key)
+        try:
+            store.append(b"one")
+            note1 = ckpt.sign_checkpoint(ORIGIN, 1, store.root(1), key)
+            store.save_checkpoint(1, note1)
+            _confirm(1, store.root(1), _TX_A, 10, 100)
+            store.append(b"two")
+            note2 = ckpt.sign_checkpoint(ORIGIN, 2, store.root(2), key)
+            store.save_checkpoint(2, note2)
+            html, _ = self._html()
+            self.assertIn("Latest confirmed checkpoint", html)
+            self.assertIn("/pq/log/checkpoint/1", html)
+            self.assertIn("View signed checkpoint for tree 1", html)
+            self.assertIn("Latest signed checkpoint. It may be newer than the latest TestNet anchor.", html)
+            self.assertNotIn(note2, html)
+            self.assertIn(store.root(1).hex(), html)
+            self.assertNotIn("\N{EM DASH}", html)
+            model = pq_view.page_model()
+            self.assertEqual(model["confirmed_size"], 1)
+            self.assertEqual(model["current_size"], 2)
+            self.assertIsNotNone(model["bound_checkpoint"])
+            self.assertEqual(model["bound_checkpoint"]["size"], 1)
+            self.assertEqual(model["latest_checkpoint_size"], 2)
+            status, latest, _hdrs = _get(self.port, "/pq/log/checkpoint")
+            self.assertEqual(status, 200)
+            self.assertEqual(latest, note2)
+            status, hist, _hdrs = _get(self.port, "/pq/log/checkpoint/1")
+            self.assertEqual(status, 200)
+            self.assertEqual(hist, note1)
+            status, cur, _hdrs = _get(self.port, "/pq/log/checkpoint/2")
+            self.assertEqual(status, 200)
+            self.assertEqual(cur, note2)
+        finally:
+            receipt.configure_signer(None)
+
+    def test_integrity_error_when_local_smaller_than_confirmed(self):
+        for i in range(9):
+            store.append(("leaf-%s" % i).encode())
+        _confirm(10, bytes(range(32)), _TX_A, 99, 100)
+        html, _ = self._html()
+        self.assertNotIn("Caught up", html)
+        self.assertIn("LOCAL LOG INCONSISTENT", html)
+        self.assertIn(
+            "The local transparency log is smaller than its latest confirmed historical checkpoint.",
+            html,
+        )
+        self.assertNotIn("The latest log checkpoint is anchored.", html)
+        home, _ = self._html("/")
+        self.assertNotIn('id="pq-testnet"', home)
+        self.assertNotIn("Latest checkpoint · Tree 10", home)
+        self.assertEqual(worker.homepage_pq_html(), "")
+
+    def test_history_count_and_cap(self):
+        alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
+        for i in range(1, 4):
+            store.append(("x%s" % i).encode())
+            txid = (alphabet[i] * 52)
+            _confirm(i, store.root(i), txid, 10 + i, 100 + i)
+        self.assertEqual(store.confirmed_anchor_count(), 3)
+        self.assertEqual(len(store.list_confirmed_anchors(limit=2)), 2)
+        self.assertEqual(len(store.list_confirmed_anchors(limit=250)), 3)
+        html, _ = self._html()
+        self.assertIn("TOTAL CONFIRMED ANCHORS 3", html)
+        self.assertNotIn("Showing latest 250 anchors.", html)
+
+    def test_history_truncation_notice(self):
+        alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
+        for i in range(1, 252):
+            txid = alphabet[i % 32] * 51 + alphabet[(i // 32) % 32]
+            _confirm(i, bytes([(i % 256)] * 32), txid, i, i)
+        self.assertEqual(store.confirmed_anchor_count(), 251)
+        self.assertEqual(len(store.list_confirmed_anchors()), 250)
+        html, _ = self._html()
+        self.assertIn("TOTAL CONFIRMED ANCHORS 251", html)
+        self.assertIn("Showing latest 250 anchors.", html)
 
 
 class TransparencyHelperTests(unittest.TestCase):

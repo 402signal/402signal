@@ -1,6 +1,7 @@
 """C2SP read APIs under /pq/log (no trailing slash on the origin).
 
-GET /pq/log/checkpoint  text/plain; charset=utf-8
+GET /pq/log/checkpoint  text/plain; charset=utf-8  (current / latest)
+GET /pq/log/checkpoint/{tree_size}  signed checkpoint for that tree size
 GET /pq/log/tile/{L}/{N} and .p/{W}  application/octet-stream
 GET /pq/log/tile/entries/{N} and .p/{W}  application/octet-stream
 
@@ -17,6 +18,19 @@ CHECKPOINT_TYPE = "text/plain; charset=utf-8"
 TILE_TYPE = "application/octet-stream"
 
 
+def _checkpoint_tree_size(rel: str) -> int | None:
+    """Parse checkpoint/{tree_size}. None if not that path. Reject junk."""
+    prefix = "checkpoint/"
+    if not rel.startswith(prefix):
+        return None
+    rest = rel[len(prefix) :]
+    if not rest or "/" in rest:
+        return None
+    if not rest.isdigit() or (rest.startswith("0") and rest != "0"):
+        return None
+    return int(rest)
+
+
 def is_log_path(path: str) -> bool:
     raw = (path or "").split("?", 1)[0]
     return raw == HTTP_PREFIX or raw.startswith(HTTP_PREFIX + "/")
@@ -30,6 +44,15 @@ def handle(path: str) -> tuple[int, bytes, str, dict]:
     rel = raw[len(HTTP_PREFIX) :].lstrip("/")
     if rel == "checkpoint":
         note = store.latest_checkpoint()
+        if not note:
+            return 404, b'{"error": "no_checkpoint"}', "application/json; charset=utf-8", {
+                "Cache-Control": "no-store"
+            }
+        data = note.encode("utf-8")
+        return 200, data, CHECKPOINT_TYPE, {"Cache-Control": "no-store"}
+    sized = _checkpoint_tree_size(rel)
+    if sized is not None:
+        note = store.checkpoint_at(sized)
         if not note:
             return 404, b'{"error": "no_checkpoint"}', "application/json; charset=utf-8", {
                 "Cache-Control": "no-store"

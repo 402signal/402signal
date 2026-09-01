@@ -79,6 +79,21 @@ class C2SPHttpTests(unittest.TestCase):
         status, _raw, _hdrs = self._get("/pq/log/tile/8/0/0")
         self.assertEqual(status, 404)
 
+    def test_checkpoint_at_tree_size(self):
+        latest_status, latest, _hdrs = self._get("/pq/log/checkpoint")
+        self.assertEqual(latest_status, 200)
+        size = int(latest.decode("utf-8").split("\n")[1])
+        status, raw, hdrs = self._get("/pq/log/checkpoint/%s" % size)
+        self.assertEqual(status, 200)
+        self.assertTrue(hdrs.get("content-type", "").startswith("text/plain"))
+        self.assertEqual(raw, latest)
+        status, _raw, _hdrs = self._get("/pq/log/checkpoint/0")
+        self.assertEqual(status, 404)
+        status, _raw, _hdrs = self._get("/pq/log/checkpoint/01")
+        self.assertEqual(status, 404)
+        status, _raw, _hdrs = self._get("/pq/log/checkpoint/999999")
+        self.assertEqual(status, 404)
+
     def test_head_checkpoint(self):
         status, raw, hdrs = self._get("/pq/log/checkpoint", method="HEAD")
         self.assertEqual(status, 200)

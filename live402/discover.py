@@ -904,14 +904,38 @@ def openapi_spec(resource_url: str = ROUTE) -> dict:
                     "tags": ["Public"],
                     "summary": "Experimental C2SP signed checkpoint",
                     "description": (
-                        "text/plain C2SP tlog-checkpoint. Experimental. Not MainNet-anchored. "
+                        "text/plain C2SP tlog-checkpoint for the current / latest tree. "
+                        "Experimental. Not MainNet-anchored. "
                         "Falcon broadcast is TestNet-only and off by default. "
                         "/route does not wait for chain. Falcon authorizes a checkpoint "
-                        "txn, not a merchant payment."
+                        "txn, not a merchant payment. May be newer than the latest TestNet anchor."
                     ),
                     "responses": {
                         "200": {"description": "Signed checkpoint note"},
                         "404": {"description": "No checkpoint yet"},
+                    },
+                }
+            },
+            "/pq/log/checkpoint/{tree_size}": {
+                "get": {
+                    "operationId": "pqLogCheckpointAtSize",
+                    "tags": ["Public"],
+                    "summary": "Experimental C2SP signed checkpoint at a tree size",
+                    "description": (
+                        "text/plain C2SP tlog-checkpoint for an exact historical tree size. "
+                        "GET /pq/log/checkpoint remains the current / latest checkpoint."
+                    ),
+                    "parameters": [
+                        {
+                            "in": "path",
+                            "name": "tree_size",
+                            "required": True,
+                            "schema": {"type": "integer", "minimum": 1},
+                        }
+                    ],
+                    "responses": {
+                        "200": {"description": "Signed checkpoint note for that tree size"},
+                        "404": {"description": "No checkpoint at that size"},
                     },
                 }
             },
