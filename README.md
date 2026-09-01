@@ -1,6 +1,6 @@
 # 402Signal
 
-402Signal is a chain-neutral x402 discovery, verification, and routing service for agents. It finds paid APIs across Base, Solana, and Algorand, checks candidates immediately before spend, and returns the best available route with evidence behind the decision. The buyer keeps its wallet, signing, and payment execution. Routing history is committed to an append-only transparency log with Falcon post-quantum authorization on Algorand (currently TestNet; MainNet planned after security validation)
+402Signal is the independent check an AI agent makes right before spending. It finds the strongest x402 route across Base, Solana, and Algorand, verifies it live, and shows the evidence behind the choice. Your agent keeps the wallet. The decision history is committed to an append-only log with Falcon PQ anchoring on Algorand (currently TestNet).
 
 - **Live site:** https://402signal.com
 - **Paid API:** `POST /route` — $0.01 USDC

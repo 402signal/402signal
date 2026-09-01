@@ -768,12 +768,18 @@ class PaywallTests(unittest.TestCase):
         self.assertLessEqual(len(catalog), 500)
         self.assertEqual(discover.DESC, catalog)
         self.assertNotIn("\u2014", catalog)
-        self.assertIn("chain-neutral", catalog)
+        self.assertEqual(
+            catalog,
+            "402Signal is the independent check an AI agent makes right before spending. "
+            "It finds the strongest x402 route across Base, Solana, and Algorand, verifies it live, "
+            "and shows the evidence behind the choice. Your agent keeps the wallet. "
+            "The decision history is committed to an append-only log with Falcon PQ anchoring "
+            "on Algorand (currently TestNet).",
+        )
         self.assertIn("Base, Solana, and Algorand", catalog)
-        self.assertIn("buyer keeps its wallet", catalog)
-        self.assertIn("Falcon post-quantum", catalog)
+        self.assertIn("Your agent keeps the wallet", catalog)
+        self.assertIn("Falcon PQ", catalog)
         self.assertIn("currently TestNet", catalog)
-        self.assertIn("MainNet planned after security validation", catalog)
         required = payment.payment_required("https://402signal.com/route")
         self.assertEqual(required["resource"]["description"], catalog)
         self.assertEqual(payment.BAZAAR_MCP["info"]["input"]["description"], catalog)
