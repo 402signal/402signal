@@ -92,10 +92,20 @@ def validate_descriptor_v2(desc: dict | None) -> dict:
     confirm = desc.get("confirmation_policy") if isinstance(desc.get("confirmation_policy"), dict) else {}
     if str(confirm.get("require") or "") != "fetch_and_decode_actual_txn":
         raise UnknownAlgorithm("confirmation must fetch and decode the actual txn")
+    if confirm.get("http_200_or_txid_not_sufficient") is not True:
+        raise UnknownAlgorithm("HTTP 200 or a txid is not confirmation")
     if confirm.get("independent_provider") is not False:
         raise UnknownAlgorithm("v2 must not claim independent confirmation yet")
     if confirm.get("same_trust_domain_not_sufficient") is not True:
-        raise UnknownAlgorithm("AlgoNode plus AlgoNode is not independent confirmation")
+        raise UnknownAlgorithm("same-org submit plus confirm is not independent")
+    if confirm.get("algonode_and_nodely_same_org") is not True:
+        raise UnknownAlgorithm("AlgoNode and Nodely are the same organization")
+    if str(confirm.get("submit_org") or "") != "nodely" or str(confirm.get("confirm_org") or "") != "nodely":
+        raise UnknownAlgorithm("v2 default hosts are both Nodely")
+    if str(confirm.get("second_confirm_host_allowlisted") or "") != "mainnet-idx.4160.nodely.dev":
+        raise UnknownAlgorithm("v2 second confirm host must stay the Nodely indexer")
+    if str(confirm.get("second_confirm_org") or "") != "nodely":
+        raise UnknownAlgorithm("second confirm host is still Nodely")
     if desc.get("not_mainnet_go") is not True:
         raise UnknownAlgorithm("v2 not_mainnet_go must stay true")
     sig = desc.get("log_signature") if isinstance(desc.get("log_signature"), dict) else {}

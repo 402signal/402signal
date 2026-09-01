@@ -51,8 +51,16 @@
     "public_status_from": "confirmed_only",
     "independent_provider": false,
     "same_trust_domain_not_sufficient": true,
-    "default_submit_and_confirm": "algonode_same_trust_domain",
-    "before_mainnet_go": "independent provider or 402Signal-operated node"
+    "submit_host": "mainnet-api.algonode.cloud",
+    "confirm_host": "mainnet-idx.algonode.cloud",
+    "submit_org": "nodely",
+    "confirm_org": "nodely",
+    "second_confirm_host_allowlisted": "mainnet-idx.4160.nodely.dev",
+    "second_confirm_org": "nodely",
+    "algonode_and_nodely_same_org": true,
+    "algoexplorer_public_indexer": "retired_html_landing",
+    "default_submit_and_confirm": "nodely_same_org",
+    "before_mainnet_go": "402Signal-operated node or different-org provider; fetch+decode+verify still required"
   },
   "unknown_algorithm": "fail-closed",
   "rotation": "new-shard",

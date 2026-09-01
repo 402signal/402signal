@@ -55,6 +55,13 @@ class CloseoutStaticTests(unittest.TestCase):
         self.assertIn("V2_PUBLIC_FIELDS", EVENTS)
         self.assertIn("live", EVENTS.split("V2_PUBLIC_FIELDS")[1][:200])
 
+    def test_website_stays_testnet(self):
+        home = _read("live402/static/index.html")
+        self.assertIn("Currently Algorand TestNet", home)
+        self.assertNotIn("Currently Algorand MainNet", home)
+        trans = _read("live402/pq/transparency.py")
+        self.assertIn("Currently Algorand TestNet", trans)
+
     def test_no_mainnet_falcon_submit(self):
         algo = _read("live402/pq/algo_anchor.py")
         self.assertIn("testnet", algo.lower())
@@ -62,10 +69,16 @@ class CloseoutStaticTests(unittest.TestCase):
         self.assertIn("def automatic_mainnet_enabled", algo)
         self.assertIn("return False", algo.split("def automatic_mainnet_enabled")[1][:400])
         self.assertIn("Never posts MainNet", algo)
-        self.assertIn("mainnet canary is not executed in this PR", algo)
+        self.assertIn("MAINNET_CANARY_ENV", algo)
+        self.assertIn("canary gate off", algo)
+        self.assertIn("def _post_mainnet", algo)
         worker = _read("live402/pq/worker.py")
         self.assertIn("Automatic MainNet is off", worker)
         self.assertNotIn("submit_mainnet_canary", worker)
+        boot = _read("live402/server.py")
+        self.assertNotIn("submit_mainnet_canary", boot)
+        self.assertNotIn("LIVE402_PQ_FALCON_MAINNET_CANARY", FLY)
+        self.assertNotIn("LIVE402_PQ_FALCON_MAINNET_BROADCAST", FLY)
 
     def test_no_raw_payment_logging(self):
         route = _read("live402/route.py")

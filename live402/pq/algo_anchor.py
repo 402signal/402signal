@@ -22,9 +22,11 @@ Falcon SK must never live here. Fixture mode and CI never hit live
 algod unless a send/fetch hook is injected.
 
 MainNet submit is a separate flag LIVE402_PQ_FALCON_MAINNET_BROADCAST.
-TestNet BROADCAST=1 plus NETWORK=mainnet with the MainNet flag unset
-never sends. Automatic MainNet broadcast stays off. send_if_allowed
-never POSTs MainNet. A later human canary uses submit_mainnet_canary.
+A one-shot canary also requires LIVE402_PQ_FALCON_MAINNET_CANARY=1.
+Both default unset. TestNet BROADCAST=1 plus NETWORK=mainnet with the
+MainNet flag unset never sends. Automatic MainNet broadcast stays off.
+send_if_allowed never POSTs MainNet. Worker, tick, and boot never call
+submit_mainnet_canary.
 """
 
 from __future__ import annotations
@@ -80,6 +82,7 @@ NETWORK_ENV = netcfg.NETWORK_ENV
 BROADCAST_ENV = netcfg.BROADCAST_ENV
 ADDRESS_ENV = netcfg.ADDRESS_ENV
 MAINNET_BROADCAST_ENV = netcfg.MAINNET_BROADCAST_ENV
+MAINNET_CANARY_ENV = netcfg.MAINNET_CANARY_ENV
 MAINNET_ADDRESS_ENV = netcfg.MAINNET_ADDRESS_ENV
 MAINNET_SIGNER_TOKEN_ENV = netcfg.MAINNET_SIGNER_TOKEN_ENV
 MAINNET_SIGNER_HOST_ENV = netcfg.MAINNET_SIGNER_HOST_ENV
@@ -526,6 +529,11 @@ def mainnet_broadcast_requested() -> bool:
     return (os.environ.get(MAINNET_BROADCAST_ENV) or "").strip() == "1"
 
 
+def mainnet_canary_requested() -> bool:
+    """One-shot human canary gate. Default unset. Worker never reads this."""
+    return (os.environ.get(MAINNET_CANARY_ENV) or "").strip() == "1"
+
+
 def automatic_mainnet_enabled() -> bool:
     """Later GO. Hard-off in this PR. Worker and tick never MainNet-submit."""
     return False
@@ -637,6 +645,7 @@ def mainnet_submit_allowed(
     expected_origin: str = "",
     expected_size: int = 0,
     expected_root=None,
+    allow_fixture_send_hook: bool = False,
 ) -> bool:
     """True only when every MainNet submit gate is set. Fail closed.
 
@@ -644,8 +653,10 @@ def mainnet_submit_allowed(
     configured MainNet Falcon address, explicit MainNet signer token,
     valid checkpoint fields when a SignedTxn is supplied, semantic
     SignedTxn OK, fee within cap, allowlisted MainNet submit host,
-    LIVE402_PQ_FALCON_MAINNET_BROADCAST=1, and not fixture/CI.
+    and LIVE402_PQ_FALCON_MAINNET_BROADCAST=1.
     TestNet BROADCAST=1 does not satisfy the MainNet flag.
+    Fixture/CI is refused unless allow_fixture_send_hook (tests only).
+    The one-shot canary env is a separate gate on submit_mainnet_canary.
     """
     from live402 import fixtures
 
@@ -653,7 +664,7 @@ def mainnet_submit_allowed(
         return False
     if not mainnet_broadcast_requested():
         return False
-    if fixtures.fixture_mode():
+    if fixtures.fixture_mode() and not allow_fixture_send_hook:
         return False
     from live402.pq import log_identity
     from live402.pq import store as pq_store
@@ -882,6 +893,7 @@ def submit_provider(network: str) -> dict:
         "kind": "submit",
         "host": cfg.submit_host,
         "url": cfg.submit_url,
+        "org": netcfg.provider_org(cfg.submit_host),
         "allowlisted": netcfg.submit_host_allowlisted(cfg.name, cfg.submit_host),
     }
 
@@ -890,20 +902,30 @@ def confirm_provider(network: str) -> dict:
     """Allowlisted fetch+decode target. Separate from submit_provider.
 
     Separable endpoints are not the same as independent confirmation.
-    Default MainNet URLs are both AlgoNode (same trust domain). That
-    does not satisfy the production independent-confirmation requirement.
+    Independence is true only when submit and confirm map to known,
+    different organizations. Default MainNet hosts are both Nodely
+    (AlgoNode is the legacy brand). That does not satisfy the
+    production independent-confirmation requirement.
     """
     cfg = netcfg.get_network(network)
+    submit = submit_provider(cfg.name)
+    independent = netcfg.confirmation_independent(cfg.submit_host, cfg.confirm_host)
     return {
         "network": cfg.name,
         "kind": "confirm",
         "host": cfg.confirm_host,
         "url": cfg.confirm_txn_url,
         "pending_url": cfg.pending_url,
+        "org": netcfg.provider_org(cfg.confirm_host),
+        "submit_org": netcfg.provider_org(cfg.submit_host),
+        "second_host_allowlisted": netcfg.NODELY_MAINNET_CONFIRM_HOST if cfg.name == MAINNET_NAME else "",
         "allowlisted": netcfg.confirm_host_allowlisted(cfg.name, cfg.confirm_host),
-        "independent_of_submit": netcfg.CONFIRM_INDEPENDENT_OF_SUBMIT,
-        "independence_status": netcfg.CONFIRM_INDEPENDENCE_STATUS,
+        "independent_of_submit": independent,
+        "independence_status": (
+            "met_different_org" if independent else netcfg.CONFIRM_INDEPENDENCE_STATUS
+        ),
         "independence_requirement": netcfg.CONFIRM_INDEPENDENCE_REQUIREMENT,
+        "submit_host": submit.get("host") or "",
     }
 
 
@@ -918,23 +940,27 @@ def submit_mainnet_canary(
     expected_root=None,
     send_fn=None,
 ) -> str | None:
-    """Later canary PR only. This function is not a canary executable.
+    """Human one-shot MainNet canary. Worker, tick, and boot never call this.
 
-    PR40 is readiness and fail-closed infrastructure. Do not POST a
-    MainNet txn from this PR. Worker, tick, and boot never call this.
-    Automatic MainNet stays off. A later human canary PR (after merge,
-    keys, independent confirm, drills, monitoring, pentest, and
-    402security GO) may authorize exactly one MainNet POST.
-    Destroying the Falcon key is not the kill switch: unset
-    LIVE402_PQ_FALCON_MAINNET_BROADCAST (or do not deploy).
+    Requires authorize_human_canary is True, automatic MainNet still off,
+    LIVE402_PQ_FALCON_MAINNET_BROADCAST=1, LIVE402_PQ_FALCON_MAINNET_CANARY=1,
+    and every mainnet_submit_allowed gate. Both envs default unset.
+    Tests inject send_fn to exercise authorize -> validate -> would POST.
+    Fixture mode never dials live algod. Unset MAINNET_BROADCAST is the
+    kill switch. Destroying the Falcon key is not the kill switch.
     """
     if authorize_human_canary is not True:
         raise AnchorError("canary not authorized")
     if automatic_mainnet_enabled():
         raise AnchorError("automatic mainnet is a later GO")
+    if not mainnet_canary_requested():
+        raise AnchorError("canary gate off")
+    if not mainnet_broadcast_requested():
+        raise AnchorError("mainnet broadcast gate off")
     blob = bytes(signed) if isinstance(signed, (bytes, bytearray)) else b""
     if not blob or blob == PQSIG_MARKER.encode("utf-8"):
         raise AnchorError("not a signed pq1 txn")
+    hook = send_fn is not None
     if not mainnet_submit_allowed(
         sender=sender,
         params=params,
@@ -942,6 +968,7 @@ def submit_mainnet_canary(
         expected_origin=expected_origin,
         expected_size=expected_size,
         expected_root=expected_root,
+        allow_fixture_send_hook=hook,
     ):
         raise AnchorError("mainnet submit gates failed")
     if send_fn is not None:
@@ -956,7 +983,53 @@ def submit_mainnet_canary(
 
     if fixtures.fixture_mode():
         raise AnchorError("fixture mode never sends mainnet")
-    raise AnchorError("mainnet canary is not executed in this PR")
+    return _post_mainnet(blob)
+
+
+def _post_mainnet(blob: bytes) -> str | None:
+    """POST SignedTxn bytes to pinned MainNet algod. Dual-gate only.
+
+    Reached only after submit_mainnet_canary has checked both
+    MAINNET_BROADCAST and MAINNET_CANARY, plus every identity gate.
+    Worker and boot never call this. Fixture mode never reaches this.
+    """
+    if not mainnet_broadcast_requested() or not mainnet_canary_requested():
+        return None
+    if automatic_mainnet_enabled():
+        return None
+    if not _pinned_https(MAINNET_ALGOD_SEND_URL, MAINNET_ALGOD_HOST):
+        return None
+    if not netcfg.submit_host_allowlisted(MAINNET_NAME, MAINNET_ALGOD_HOST):
+        return None
+    req = urllib.request.Request(
+        MAINNET_ALGOD_SEND_URL,
+        data=bytes(blob),
+        method="POST",
+        headers={
+            "User-Agent": USER_AGENT,
+            "Accept": "application/json",
+            "Content-Type": "application/x-binary",
+        },
+    )
+    opener = urllib.request.build_opener(_NoRedirect)
+    try:
+        with opener.open(req, timeout=TESTNET_SEND_TIMEOUT) as resp:
+            status = getattr(resp, "status", None) or resp.getcode()
+            if not isinstance(status, int) or status < 200 or status >= 300:
+                return None
+            raw = resp.read(512)
+    except urllib.error.HTTPError:
+        return None
+    except Exception:
+        return None
+    try:
+        body = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(body, dict):
+        return None
+    txid = str(body.get("txId") or body.get("txid") or "").strip()
+    return txid if _looks_like_txid(txid) else None
 
 
 def _post_testnet(blob: bytes) -> str | None:
@@ -1044,9 +1117,12 @@ def fetch_confirmed_txn(txid: str, network: str | None = None, fetch_fn=None):
             data = None
         if isinstance(data, dict):
             return data
+    # MainNet pending on the submit host is not independent confirmation.
+    if cfg.name == MAINNET_NAME:
+        return None
     pending_url = cfg.pending_url + txid
     pending_host = urlparse(cfg.pending_url).hostname or cfg.submit_host
-    if not netcfg.confirm_host_allowlisted(cfg.name, pending_host):
+    if not netcfg.pending_host_allowlisted(cfg.name, pending_host):
         return None
     raw = _get_pinned(pending_url, pending_host, TESTNET_FETCH_TIMEOUT)
     if not raw:
@@ -1482,4 +1558,66 @@ def verify_fetched_anchor(
         "pq_auth": bytes(pq_auth),
         "network": cfg.name,
         "genesis_id": cfg.genesis_id,
+    }
+
+
+def is_pq1_construction(decoded: dict, *, expected_address: str = "") -> bool:
+    """Structural PQ1 check. Does not confirm inclusion or a checkpoint."""
+    if not isinstance(decoded, dict):
+        return False
+    pq_auth = decoded.get("pq_auth")
+    if not isinstance(pq_auth, (bytes, bytearray)) or not pq_auth:
+        return False
+    if bytes(pq_auth) == PQSIG_MARKER.encode("utf-8"):
+        return False
+    if _nonzero_blob(decoded.get("auth_addr")):
+        return False
+    addr = (expected_address or "").strip()
+    sender = decoded.get("sender") or ""
+    receiver = decoded.get("receiver") or ""
+    if addr and (sender != addr or receiver != addr):
+        return False
+    if sender and receiver and sender != receiver:
+        return False
+    if int(decoded.get("amount") or 0) != 0:
+        return False
+    try:
+        fee = int(decoded.get("fee") or 0)
+    except (TypeError, ValueError):
+        return False
+    if fee < falcon_min_fee() or fee > MAX_FEE:
+        return False
+    if _nonzero_blob(decoded.get("close")) or _nonzero_blob(decoded.get("rekey")):
+        return False
+    if _nonzero_blob(decoded.get("group")) or _nonzero_blob(decoded.get("lease")):
+        return False
+    if decoded.get("has_axfer") or decoded.get("has_appl"):
+        return False
+    tx_type = str(decoded.get("tx_type") or "")
+    if tx_type and tx_type not in {"pay", "payment"}:
+        return False
+    try:
+        decode_note(bytes(decoded.get("note") or b""))
+    except Exception:
+        return False
+    return True
+
+
+def classify_falcon_account_txn(decoded: dict, *, expected_address: str = "") -> dict:
+    """Unexpected non-PQ1 activity on the Falcon account is an incident."""
+    ok = is_pq1_construction(decoded, expected_address=expected_address)
+    if ok:
+        return {
+            "pq1": True,
+            "incident": False,
+            "alert": "",
+        }
+    from live402.pq import ops_state
+
+    ops_state.record_non_pq1_incident()
+    return {
+        "pq1": False,
+        "incident": True,
+        "alert": "unexpected_non_pq1_txn",
+        "severity": "incident",
     }
