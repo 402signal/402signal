@@ -164,10 +164,12 @@ class C2SPHttpTests(unittest.TestCase):
         spec = json.dumps(discover.openapi_spec())
         self.assertIn("/pq/log/checkpoint", spec)
         self.assertIn("experimental", spec.lower())
-        self.assertIn("not mainnet-anchored", spec.lower())
+        self.assertIn("Falcon anchoring is TestNet-only", spec)
+        self.assertIn("MainNet broadcasting is not enabled", spec)
         self.assertNotIn("pq_secure", spec)
         self.assertIn("GET /pq/log/checkpoint", discover.LLMS_TXT)
-        self.assertIn("Not MainNet-anchored", discover.LLMS_TXT)
+        self.assertIn("Falcon anchoring is TestNet-only", discover.LLMS_TXT)
+        self.assertIn("MainNet broadcasting is not enabled", discover.LLMS_TXT)
         home = (Path(__file__).resolve().parent.parent / "live402" / "static" / "index.html").read_text(
             encoding="utf-8"
         )
