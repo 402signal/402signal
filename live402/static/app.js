@@ -6,12 +6,12 @@
   const results = document.getElementById("search-results");
   const copyBtn = document.getElementById("copy-curl");
   const curlEl = document.getElementById("curl-route");
-  const copyRouteBtn = document.getElementById("copy-route");
   const copyRouteJsonBtn = document.getElementById("copy-route-json");
   const copyRouteCurlBtn = document.getElementById("copy-route-curl");
   const routeJsonEl = document.getElementById("route-json");
   const routeCurlEl = document.getElementById("route-curl");
   const policySummaryEl = document.getElementById("policy-summary");
+  const policyFactsEl = document.getElementById("policy-facts");
   const maxPrice = document.getElementById("max-price");
   const minObservations = document.getElementById("min-observations");
   const requireInvocable = document.getElementById("require-invocable");
@@ -38,7 +38,6 @@
   function syncSearch() {
     const ready = hasContent();
     if (searchBtn) searchBtn.disabled = !ready;
-    if (copyRouteBtn) copyRouteBtn.disabled = !ready;
     if (copyRouteJsonBtn) copyRouteJsonBtn.disabled = !ready;
     if (copyRouteCurlBtn) copyRouteCurlBtn.disabled = !ready;
     renderRouteJson();
@@ -111,49 +110,86 @@
     return parts.slice(0, -1).join(", ") + ", or " + parts[parts.length - 1];
   }
 
+  function policyFacts() {
+    const q = ((need && need.value) || "").trim();
+    if (!q) return [];
+    const rows = [];
+    rows.push(["Capability", q]);
+    if (policy.network !== "any" && RAIL_NAMES[policy.network]) {
+      rows.push(["Network", RAIL_NAMES[policy.network] + " (hard lock)"]);
+    } else {
+      rows.push(["Network", "any supported rail"]);
+    }
+    const price = parseNonnegNumber(maxPrice && maxPrice.value);
+    if (price != null) rows.push(["Maximum merchant price", "$" + formatUsd(price)]);
+    if (requireInvocable && requireInvocable.checked) {
+      rows.push(["Require input schema", "yes"]);
+    }
+    const minObs = parsePositiveInt(minObservations && minObservations.value, 0);
+    if (minObs != null) rows.push(["Minimum observations", String(minObs)]);
+    const objLabel = {
+      best: "best (default)",
+      cheapest: "cheapest among currently probed eligible candidates",
+      fastest: "lowest this-request probe RTT",
+      most_reliable: "stronger observed history among currently probed eligible candidates",
+    };
+    rows.push(["Objective", objLabel[policy.objective] || policy.objective]);
+    if (policy.preferNetwork !== "any" && RAIL_NAMES[policy.preferNetwork]) {
+      rows.push(["Prefer network", RAIL_NAMES[policy.preferNetwork] + " (ranking only)"]);
+    }
+    const total = parseNonnegNumber(maxTotalCost && maxTotalCost.value);
+    if (total != null) rows.push(["Maximum total cost", "$" + formatUsd(total)]);
+    const latencyMs = parsePositiveInt(maxLatency && maxLatency.value, 0);
+    if (latencyMs != null) rows.push(["Maximum probe latency", latencyMs + " ms"]);
+    if (policy.searchDepth === "thorough") rows.push(["Search depth", "thorough"]);
+    return rows;
+  }
+
   function policySummary() {
     const q = ((need && need.value) || "").trim();
-    if (!q) return "Choose a need to describe the decision your agent would make.";
-    const parts = [];
-    parts.push("Find a " + q + " API.");
+    if (!q) return "Enter a capability to compose the POST /route body.";
+    const clauses = [];
+    clauses.push("POST /route will search for " + q + " services");
     if (policy.network !== "any" && RAIL_NAMES[policy.network]) {
-      parts.push("Only consider current " + RAIL_NAMES[policy.network] + " payment options.");
+      clauses.push("require a current " + RAIL_NAMES[policy.network] + " payment option");
     } else {
-      parts.push("Search Base, Solana, and Algorand.");
+      clauses.push("search Base, Solana, and Algorand");
     }
-    const rejects = [];
     const price = parseNonnegNumber(maxPrice && maxPrice.value);
-    if (price != null) rejects.push("above $" + formatUsd(price));
+    if (price != null) clauses.push("reject observed prices above $" + formatUsd(price));
     if (requireInvocable && requireInvocable.checked) {
-      rejects.push("without enough invocation information");
+      clauses.push("require invocation metadata");
     }
     const minObs = parsePositiveInt(minObservations && minObservations.value, 0);
     if (minObs != null) {
-      rejects.push("with fewer than " + minObs + (minObs === 1 ? " prior observation" : " prior observations"));
-    }
-    if (rejects.length) parts.push("Reject anything " + joinOr(rejects) + ".");
-    if (policy.objective === "cheapest") {
-      parts.push("Among currently probed eligible candidates, pick the cheapest known price.");
-    } else if (policy.objective === "fastest") {
-      parts.push("Among currently probed eligible candidates, pick the lowest this-request probe RTT, not settlement latency.");
-    } else if (policy.objective === "most_reliable") {
-      parts.push("Among currently probed eligible candidates, prefer stronger observed history.");
+      clauses.push("require at least " + minObs + (minObs === 1 ? " prior observation" : " prior observations"));
     }
     if (policy.preferNetwork !== "any" && RAIL_NAMES[policy.preferNetwork]) {
-      parts.push("Weakly prefer " + RAIL_NAMES[policy.preferNetwork] + " when ranking, without locking other rails.");
+      clauses.push("rank " + RAIL_NAMES[policy.preferNetwork] + " first without locking other rails");
     }
     const total = parseNonnegNumber(maxTotalCost && maxTotalCost.value);
     if (total != null) {
-      parts.push("Cap merchant price plus known fees at $" + formatUsd(total) + ".");
+      clauses.push("cap merchant price plus known fees at $" + formatUsd(total));
     }
     const latencyMs = parsePositiveInt(maxLatency && maxLatency.value, 0);
     if (latencyMs != null) {
-      parts.push("Drop live hits whose known probe RTT exceeds " + latencyMs + " ms.");
+      clauses.push("drop live hits whose known probe RTT exceeds " + latencyMs + " ms");
     }
     if (policy.searchDepth === "thorough") {
-      parts.push("Use a thorough probe plan.");
+      clauses.push("use a thorough probe plan");
     }
-    return parts.join(" ");
+    if (policy.objective === "cheapest") {
+      clauses.push("rank the eligible probed candidates by known merchant price");
+    } else if (policy.objective === "fastest") {
+      clauses.push("rank the eligible probed candidates by this-request probe RTT");
+    } else if (policy.objective === "most_reliable") {
+      clauses.push("rank the eligible probed candidates by stronger observed history");
+    }
+    if (clauses.length === 1) return clauses[0] + ".";
+    const head = clauses[0];
+    const tail = clauses.slice(1);
+    if (tail.length === 1) return head + " and " + tail[0] + ".";
+    return head + ", " + tail.slice(0, -1).join(", ") + ", and " + tail[tail.length - 1] + ".";
   }
 
   function routeJsonText() {
@@ -169,6 +205,18 @@
     if (routeJsonEl) routeJsonEl.textContent = routeJsonText();
     if (routeCurlEl) routeCurlEl.textContent = routeCurlText();
     if (policySummaryEl) policySummaryEl.textContent = policySummary();
+    if (policyFactsEl) {
+      policyFactsEl.textContent = "";
+      policyFacts().forEach(function (row) {
+        const line = document.createElement("p");
+        const dt = document.createElement("span");
+        dt.className = "fact-label";
+        dt.textContent = row[0];
+        line.appendChild(dt);
+        line.appendChild(document.createTextNode(": " + row[1]));
+        policyFactsEl.appendChild(line);
+      });
+    }
   }
 
   function previewUrl() {
@@ -265,7 +313,7 @@
     side.className = "result-side claim";
     const label = document.createElement("p");
     label.className = "result-side-label";
-    label.textContent = "LISTED · catalog claim";
+    label.textContent = "DISCOVERY LISTING";
     side.appendChild(label);
     const bits = document.createElement("p");
     bits.className = "result-bits";
@@ -287,14 +335,14 @@
     side.className = "result-side observation";
     const label = document.createElement("p");
     label.className = "result-side-label";
-    label.textContent = "LAST OBSERVED · 402Signal history";
+    label.textContent = "PRIOR 402SIGNAL OBSERVATION";
     side.appendChild(label);
     const bits = document.createElement("p");
     bits.className = "result-bits";
     const obs = observationOf(hit);
     const status = obs && typeof obs.status === "string" ? obs.status : "not_yet_observed";
     if (!obs || status === "not_yet_observed") {
-      appendBit(bits, "Not yet observed");
+      appendBit(bits, "No prior 402Signal observation");
       side.appendChild(bits);
       return side;
     }
@@ -367,7 +415,7 @@
     const shown = hits.length;
     const matches = Number(parsed && parsed.discovery_matches);
     const shownLabel = shown === 1 ? "1 shown" : shown + " shown";
-    let text = "LISTED · " + shownLabel + " · not a live check";
+    let text = "DISCOVERY LISTING · " + shownLabel + " · not a live check";
     if (Number.isFinite(matches) && matches > shown) {
       const exhaustive = parsed && parsed.discovery_exhaustive === true;
       text += " · " + matches + (exhaustive ? " discovery matches" : " matches returned by discovery");
@@ -449,8 +497,7 @@
 
   async function copyRouteRequest(button) {
     if (!hasContent()) return;
-    const idle = button === copyRouteBtn ? "Generate live route request" : "Copy request";
-    await copyText(routeJsonText(), button, idle);
+    await copyText(routeJsonText(), button, "Copy JSON");
   }
 
   function bindChipGroup(id, attr, key, allowed) {
@@ -528,12 +575,6 @@
     copyBtn.addEventListener("click", function (ev) {
       ev.preventDefault();
       copyCurl();
-    });
-  }
-  if (copyRouteBtn) {
-    copyRouteBtn.addEventListener("click", function (ev) {
-      ev.preventDefault();
-      copyRouteRequest(copyRouteBtn);
     });
   }
   if (copyRouteJsonBtn) {

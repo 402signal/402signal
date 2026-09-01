@@ -3,17 +3,17 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>402Signal: Find a paid API that works right now</title>
-  <meta name="description" content="402Signal independently checks x402 payment endpoints before an agent relies on them. Base, Solana and Algorand." />
+  <title>402Signal · Live x402 routing checks</title>
+  <meta name="description" content="402Signal searches x402 discovery sources, probes candidate endpoints, and applies caller constraints to observed payment options on Base, Solana, and Algorand." />
   <link rel="canonical" href="https://402signal.com" />
-  <meta property="og:title" content="402Signal: Find a paid API that works right now" />
-  <meta property="og:description" content="402Signal independently checks x402 payment endpoints before an agent relies on them. Base, Solana and Algorand." />
+  <meta property="og:title" content="402Signal · Live x402 routing checks" />
+  <meta property="og:description" content="402Signal searches x402 discovery sources, probes candidate endpoints, and applies caller constraints to observed payment options on Base, Solana, and Algorand." />
   <meta property="og:url" content="https://402signal.com" />
   <meta property="og:type" content="website" />
   <meta property="og:site_name" content="402Signal" />
   <meta name="twitter:card" content="summary" />
-  <meta name="twitter:title" content="402Signal: Find a paid API that works right now" />
-  <meta name="twitter:description" content="402Signal independently checks x402 payment endpoints before an agent relies on them. Base, Solana and Algorand." />
+  <meta name="twitter:title" content="402Signal · Live x402 routing checks" />
+  <meta name="twitter:description" content="402Signal searches x402 discovery sources and probes candidate endpoints on Base, Solana, and Algorand." />
   <meta name="twitter:site" content="@402Signal" />
   <link rel="stylesheet" href="/styles.css" />
 </head>
@@ -25,88 +25,93 @@
         <span class="brand-name">402Signal</span>
       </a>
       <nav class="nav" aria-label="Primary">
+        <a href="/" aria-current="page">Home</a>
         <a href="/how">How it works</a>
+        <a href="/catalog">Explore</a>
         <a href="/developers">Developers</a>
-        <a href="/catalog">Try it</a>
+        <a href="/contact">Contact</a>
       </nav>
     </header>
 
     <main>
       <section class="hero">
         <h1>Find a paid API that works right now.</h1>
-        <p class="lede">Independent check before spend. Catalogs are candidates, not truth. Your agent keeps the wallet. History is Falcon-anchored on Algorand TestNet.</p>
-        <p class="lede follow">402Signal checks paid APIs immediately before an agent spends, applies its policy, and returns a route only when the current evidence supports it.</p>
+        <p class="lede">402Signal searches x402 discovery sources across Base, Solana, and Algorand, probes candidate endpoints immediately before spend, and applies the caller's constraints to the payment options returned by those endpoints. It returns a route only when a current observed option qualifies; otherwise it returns a typed miss.</p>
+        <p class="lede">402Signal does not hold the buyer's keys or execute the selected service's payment.</p>
         <p class="rails-line">Base · Solana · Algorand</p>
+        <p class="note">POST /route · $0.01 USDC per routing check</p>
         <div class="hero-actions">
-          <a class="btn" href="/catalog">Try 402Signal</a>
+          <a class="btn" href="/catalog">Build a route request</a>
           <a class="btn secondary" href="/developers">Developer docs</a>
         </div>
-        <p class="note">$0.01 USDC per live routing check · your agent keeps the wallet.</p>
       </section>
 
       <figure class="signal-flow" aria-labelledby="signal-flow-caption">
-        <div class="signal-row">
+        <div class="signal-row flow-four">
           <div class="flow-box">
             <p class="flow-kicker">DISCOVERY</p>
-            <p class="flow-title">What catalogs claim</p>
-            <p class="flow-detail">Listings and seller metadata. A claim can outlive the endpoint.</p>
+            <p class="flow-title">Search supported discovery sources</p>
           </div>
           <div class="flow-conn gold" aria-hidden="true"></div>
           <div class="flow-box flow-emphasis">
-            <p class="flow-kicker">402SIGNAL</p>
-            <p class="flow-title">Check it now</p>
-            <ol class="flow-ops">
-              <li><span class="flow-op-kicker">DISCOVER</span> Find candidates</li>
-              <li><span class="flow-op-kicker">PROBE</span> Check the endpoint now</li>
-              <li><span class="flow-op-kicker">OBSERVE</span> Capture current x402 behavior</li>
-              <li><span class="flow-op-kicker">COMPARE</span> Apply constraints and rank</li>
-            </ol>
-            <p class="flow-detail">Valid x402? Payment terms? Invocation info? Fresh observation?</p>
+            <p class="flow-kicker">LIVE CHECK</p>
+            <p class="flow-title">Probe candidate endpoints and parse current HTTP 402 payment requirements</p>
           </div>
           <div class="flow-conn gold" aria-hidden="true"></div>
           <div class="flow-box">
-            <p class="flow-kicker">YOUR AGENT</p>
-            <p class="flow-title">Decide whether to spend</p>
-            <p class="flow-detail">Own wallet. Sign. Pay the seller. Call the API.</p>
+            <p class="flow-kicker">POLICY</p>
+            <p class="flow-title">Apply caller constraints and rank eligible observed candidates</p>
+          </div>
+          <div class="flow-conn gold" aria-hidden="true"></div>
+          <div class="flow-box">
+            <p class="flow-kicker">RESULT</p>
+            <p class="flow-title">Return selected route + selected_payment, or a typed miss</p>
           </div>
         </div>
         <div class="trust-rail">
-          <p class="trust-rail-label">EVIDENCE · asynchronous</p>
+          <p class="trust-rail-label">TRANSPARENCY</p>
           <ol class="trust-steps">
-            <li><span class="trust-step-kicker">COMMIT</span> Routing evidence enters an append-only Merkle log.</li>
-            <li><span class="trust-step-kicker">SIGN</span> 402Signal signs a checkpoint with its Ed25519 log identity.</li>
-            <li><span class="trust-step-kicker">ANCHOR</span> Algorand TestNet · Falcon-1024</li>
+            <li>Commit route evidence to the append-only log. Signed checkpoints periodically anchored to Algorand TestNet.</li>
           </ol>
-          <p class="trust-rail-note">The route is gold and synchronous. Evidence is teal and does not delay routing.</p>
         </div>
-        <figcaption class="sr-only" id="signal-flow-caption">Discovery to 402Signal to your agent, with an asynchronous teal evidence path</figcaption>
+        <figcaption class="sr-only" id="signal-flow-caption">Discovery, live check, policy, and result, with an append-only transparency log</figcaption>
       </figure>
 
       <section class="block" id="why">
-        <h2>Why check first</h2>
+        <h2>What a paid check does</h2>
         <div class="decision-grid">
           <article class="decision-card">
-            <h3>Fresh, not just listed</h3>
-            <p>A catalog row is a candidate. 402Signal checks the current 402 envelope before anyone spends.</p>
+            <h3>Current observation</h3>
+            <p>Routing uses the payment requirements observed during this request, not the metadata a discovery source still publishes.</p>
           </article>
           <article class="decision-card">
-            <h3>Policy actually matters</h3>
-            <p>Network locks and price bounds apply to this live check, not to what a listing still claims.</p>
+            <h3>Constraint enforcement</h3>
+            <p>Caller constraints are applied to those observed options before a winner is selected.</p>
           </article>
           <article class="decision-card">
-            <h3>A miss is a valid answer</h3>
-            <p>If nothing observed matches, 402Signal returns a typed miss instead of an unverified substitute.</p>
+            <h3>Explicit failure modes</h3>
+            <p>When no observed option qualifies, the response is a typed miss that reports why evaluation stopped.</p>
           </article>
           <article class="decision-card">
-            <h3>Your wallet stays yours</h3>
-            <p>402Signal does not hold keys and does not pay the seller. Your agent signs and spends.</p>
+            <h3>Execution boundary</h3>
+            <p>The caller retains custody of keys, signing, the selected service's payment, and execution of that service.</p>
           </article>
         </div>
-        <p class="note">Example: weather on Base, at most $0.05. 402Signal finds candidates, checks them live, applies that lock, and returns a route or a typed miss. A catalog Solana claim does not satisfy a Base lock.</p>
       </section>
 
-      <section class="discover-row" aria-label="Discoverable via">
-        <p class="discover-kicker">Discoverable via</p>
+      <section class="pq-testnet" id="pq-testnet">
+        <p class="pq-badge">Currently Algorand TestNet</p>
+        <h2>Verifiable routing history</h2>
+        <p>402Signal commits routing evidence to an append-only Merkle log. Signed checkpoints are authorized with Falcon-1024 on Algorand TestNet.</p>
+        <!--PQ_LATEST-->
+        <p>Later rewriting inconsistent with published checkpoints becomes detectable.</p>
+        <p>Falcon-1024 authorizes a checkpoint. It does not make Base or Solana payments PQ-safe.</p>
+        <p><a class="btn secondary" href="/transparency">View verification details</a></p>
+      </section>
+
+      <section class="discover-row" aria-label="Public directories">
+        <h2>Public directories</h2>
+        <p>402Signal is currently listed in the following public directories and registries.</p>
         <p class="listed-on">
           <a href="https://glama.ai/mcp/servers/402signal/402signal" rel="noopener noreferrer">Glama</a>
           <a href="https://registry.modelcontextprotocol.io/?q=402signal" rel="noopener noreferrer">MCP Registry</a>
@@ -116,7 +121,7 @@
           <a href="https://github.com/michielpost/x402-dev/blob/master/Projects.md" rel="noopener noreferrer">x402-dev</a>
           <a href="https://facilitator.goplausible.xyz/dashboard/bazaar?q=402signal" rel="noopener noreferrer">GoPlausible</a>
         </p>
-        <p class="note">Discovery listings, not endorsements.</p>
+        <p class="note">These links confirm directory presence; they are not endorsements.</p>
       </section>
     </main>
 
@@ -127,7 +132,6 @@
         <a href="/openapi.json">OpenAPI</a>
         <a href="/mcp.json">MCP</a>
         <a href="/transparency">Transparency</a>
-        <a href="/catalog" class="muted">Explore</a>
         <a href="mailto:ross@402signal.com">ross@402signal.com</a>
       </p>
     </footer>

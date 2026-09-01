@@ -3,17 +3,17 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>402Signal Developer API</title>
-  <meta name="description" content="Find a paid API that works right now. Call 402Signal through HTTP or MCP. Pay $0.01 USDC for a live routing check." />
+  <title>402Signal API · HTTP and MCP</title>
+  <meta name="description" content="Call 402Signal over HTTP or MCP. POST /route returns HTTP 402 until you pay $0.01 USDC, then a route or a typed miss." />
   <link rel="canonical" href="https://402signal.com/developers" />
-  <meta property="og:title" content="402Signal Developer API" />
-  <meta property="og:description" content="Find a paid API that works right now. Call 402Signal through HTTP or MCP. Pay $0.01 USDC for a live routing check." />
+  <meta property="og:title" content="402Signal API · HTTP and MCP" />
+  <meta property="og:description" content="Call 402Signal over HTTP or MCP. POST /route returns HTTP 402 until you pay $0.01 USDC, then a route or a typed miss." />
   <meta property="og:url" content="https://402signal.com/developers" />
   <meta property="og:type" content="website" />
   <meta property="og:site_name" content="402Signal" />
   <meta name="twitter:card" content="summary" />
-  <meta name="twitter:title" content="402Signal Developer API" />
-  <meta name="twitter:description" content="Find a paid API that works right now. Call 402Signal through HTTP or MCP." />
+  <meta name="twitter:title" content="402Signal API · HTTP and MCP" />
+  <meta name="twitter:description" content="Call 402Signal over HTTP or MCP. POST /route returns HTTP 402 until you pay $0.01 USDC." />
   <meta name="twitter:site" content="@402Signal" />
   <link rel="stylesheet" href="/styles.css" />
 </head>
@@ -25,17 +25,19 @@
         <span class="brand-name">402Signal</span>
       </a>
       <nav class="nav" aria-label="Primary">
+        <a href="/">Home</a>
         <a href="/how">How it works</a>
+        <a href="/catalog">Explore</a>
         <a href="/developers" aria-current="page">Developers</a>
-        <a href="/catalog">Try it</a>
+        <a href="/contact">Contact</a>
       </nav>
     </header>
 
     <main>
       <section class="hero compact">
-        <h1>Integrate in two minutes.</h1>
-        <p class="lede">Use 402Signal from an agent. Send the capability you need. Pay $0.01 USDC for the live routing check. Get a route with evidence, or a typed miss.</p>
-        <p class="note">Your agent keeps the wallet. Catalog claims stay separate from what the endpoint actually returns.</p>
+        <h1>Developer API</h1>
+        <p class="lede">Use 402Signal over HTTP or MCP. POST /route with the capability you need. An unpaid call returns HTTP 402. Pay $0.01 USDC, retry the same request, and receive a route with selected_payment or a typed miss.</p>
+        <p class="note">402Signal does not hold the buyer's keys or execute the selected service's payment.</p>
       </section>
 
       <div class="seg" role="tablist" aria-label="Integration">
@@ -44,11 +46,11 @@
       </div>
 
       <section id="panel-http" class="block tab-panel" role="tabpanel" aria-labelledby="tab-http">
-        <p class="flow-line">POST /route → unpaid 402 → pay $0.01 USDC → retry → route or typed miss.</p>
+        <p class="flow-line">POST /route → unpaid HTTP 402 → pay $0.01 USDC → retry → route or typed miss.</p>
         <p>Send <code>POST /route</code> with the capability your agent needs. Use your own <code>need</code> string. Unpaid: HTTP 402. Sign a matching $0.01 USDC option and retry with <code>PAYMENT-SIGNATURE</code> (or <code>X-PAYMENT</code>).</p>
         <div class="code-card">
           <div class="code-toolbar">
-            <span>One working curl. Unpaid <code>POST /route</code></span>
+            <span>Example request. Unpaid <code>POST /route</code></span>
             <button type="button" class="btn secondary" id="copy-curl" aria-label="Copy curl example">Copy</button>
           </div>
           <pre class="code" id="curl-route">curl -sS -D - https://402signal.com/route -H 'Content-Type: application/json' -d '{"need":"YOUR_NEED"}'</pre>
@@ -76,24 +78,25 @@
 
       <section class="block">
         <h2>Common recipes</h2>
-        <p class="note"><code>networks</code> is a hard rail lock. <code>prefer_network</code> is a weak ranking preference. <code>cheapest</code> is cheapest among currently probed eligible candidates. <code>fastest</code> is this-request probe RTT, not settlement latency.</p>
+        <p class="note"><code>networks</code> is a hard rail lock. <code>prefer_network</code> is a weak ranking preference. <code>cheapest</code> is cheapest among currently probed eligible candidates. <code>fastest</code> is this-request probe RTT, not settlement latency. <code>payable</code> can be true while <code>invocable</code> is false. <code>constraints_unmet</code> means every probed candidate failed the requested bounds. <code>probe_limit_reached</code> means the request hit <code>probe_ceiling</code> with ranked candidates still untested and budget remaining.</p>
         <h3>Basic</h3>
         <pre class="code">{"need":"weather"}</pre>
-        <h3>Hard Solana lock</h3>
+        <h3>Require Solana</h3>
         <pre class="code">{"need":"weather","networks":["solana"]}</pre>
         <p>Discovery and the HTTP 200 <code>selected_payment.network</code> must be Solana from the current observed 402, never a catalog claim.</p>
-        <h3>Budget + invocable</h3>
+        <h3>Maximum price + invocation schema</h3>
         <pre class="code">{"need":"weather","max_price_usd":0.05,"require_invocable":true}</pre>
         <p>Reject live hits above $0.05 or without an input schema.</p>
-        <h3>Cheapest</h3>
+        <h3>Rank eligible candidates by merchant price</h3>
         <pre class="code">{"need":"weather","objective":"cheapest"}</pre>
         <p>Ranks the currently probed eligible candidates. It is not the cheapest listing in the catalog.</p>
       </section>
 
       <section class="block">
-        <h2>What a paid check returns</h2>
+        <h2>Example responses</h2>
+        <p>The following objects are synthetic examples. They are not live evidence from a paid check.</p>
         <p class="stop-callout"><strong>constraints_unmet</strong> means 402Signal finished the candidates it probed and none satisfied the requested bounds. <strong>probe_limit_reached</strong> means the request hit <code>probe_ceiling</code> with ranked candidates still untested and budget remaining. They are not the same miss. Neither is <code>no_candidates</code>.</p>
-        <h3>Representative success</h3>
+        <h3>Example response · selected route</h3>
         <pre class="code">{
   "live": true,
   "payable": true,
@@ -152,7 +155,7 @@
             <dd>Why probing stopped. <code>winner_selected</code> here. Optional <code>pq_trust</code> is a transparency receipt, not a payment.</dd>
           </div>
         </dl>
-        <h3>Typed miss</h3>
+        <h3>Example response · typed miss</h3>
         <pre class="code">{
   "live": false,
   "url": null,
@@ -244,7 +247,7 @@
           <summary>Hybrid discovery</summary>
           <div class="tech-body">
             <p>Need-scoped search unions current upstream catalogs (Coinbase, PayAI, GoPlausible) with a process-local shadow catalog. That is not a full-world RAM index and not a published listing count. Live hits are write-through into the shadow. HTTP paths under <code>/data</code> stay 404.</p>
-            <p><code>discovery_via</code> is a compact per-rail map (<code>search</code>, <code>pages</code>, <code>error</code>, or <code>fixture</code>). <code>discovery_exhaustive</code> is true only when every queried rail was untruncated and <code>upstream_total</code> equals returned. Paid <code>/route</code> also returns <code>discovery_matches</code>, <code>candidates_discovered</code>, <code>candidates_considered</code>, <code>candidates_probed</code>, <code>discovered_count</code>, <code>probed_count</code>, <code>unprobed_count</code>, and <code>evaluation_complete</code>. <code>interpreted_constraints</code> / <code>applied_constraints</code> echo constraints actually used, including structured body keys.</p>
+            <p><code>discovery_via</code> is a compact per-rail map (<code>search</code>, <code>pages</code>, <code>error</code>, or <code>fixture</code>). <code>discovery_exhaustive</code> is true only when every queried rail was untruncated and <code>upstream_total</code> equals returned. Paid <code>/route</code> also returns <code>discovery_matches</code>, <code>candidates_discovered</code>, <code>candidates_considered</code>, <code>candidates_probed</code>, <code>discovered_count</code>, <code>probed_count</code>, <code>unprobed_count</code>, and <code>evaluation_complete</code>. <code>interpreted_constraints</code> / <code>applied_constraints</code> echo constraints the engine used, including structured body keys.</p>
           </div>
         </details>
         <details class="tech-details">
@@ -309,7 +312,7 @@
           <div class="tech-body">
             <p>These match the OpenAPI surface. Paid paths are named as code, not links, so a browser click does not hit a paywall.</p>
             <p><code>POST /route</code> · <code>GET /route</code> · <code>POST /mcp</code> tools/call route · <a href="/mcp.json">GET /mcp.json</a> · <a href="/preview?need=YOUR_NEED">GET /preview</a> · <a href="/rails">GET /rails</a> · <code>GET /health</code> · <a href="/pulse">GET /pulse</a> · <code>POST /validate</code> · <a href="/attestation">GET /attestation</a> · <a href="/openapi.json">GET /openapi.json</a> · <a href="/.well-known/x402.json">GET /.well-known/x402.json</a> · <a href="/llms.txt">GET /llms.txt</a></p>
-            <p>Human pages: <a href="/how">How it works</a> · <a href="/transparency">Transparency</a></p>
+            <p>Human pages: <a href="/how">How it works</a> · <a href="/catalog">Explore</a> · <a href="/contact">Contact</a> · <a href="/transparency">Transparency</a></p>
             <p class="note">The human explanation lives on <a href="/how">How it works</a>. Machine log interfaces stay at <code>/pq/log/checkpoint</code> and <code>/pq/log/tile/*</code>.</p>
           </div>
         </details>
@@ -351,7 +354,6 @@
         <a href="/openapi.json">OpenAPI</a>
         <a href="/mcp.json">MCP</a>
         <a href="/transparency">Transparency</a>
-        <a href="/catalog" class="muted">Explore</a>
         <a href="mailto:ross@402signal.com">ross@402signal.com</a>
       </p>
     </footer>

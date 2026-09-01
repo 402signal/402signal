@@ -399,30 +399,15 @@ def page_model() -> dict:
 
 
 def homepage_pq_html() -> str:
-    """Homepage PQ card. Empty unless last_confirmed has a real TestNet txid."""
+    """Injected Latest confirmed line. Empty unless last_confirmed has a real TestNet txid."""
     conf = confirmed_view()
     if not conf:
         return ""
     if log_integrity_error(int(store.size() or 0), conf):
         return ""
-    evidence = (
-        '        <p class="pq-evidence">Latest anchor · Tree %s · Block %s · Confirmed</p>\n'
-        % (esc(conf["size"]), esc(conf["round"]))
-    )
     return (
-        '      <section class="pq-testnet" id="pq-testnet">\n'
-        '        <p class="pq-badge">PQ transparency · TestNet</p>\n'
-        "        <h2>Trust the history, too.</h2>\n"
-        "        <p>As agents start spending money on your behalf, there should be a "
-        "record of what they relied on. 402Signal keeps a tamper-evident history of "
-        "its routing evidence and periodically anchors that history to Algorand "
-        "TestNet using Falcon-1024 authorization.</p>\n"
-        f"{evidence}"
-        "        <p>Later rewriting inconsistent with published checkpoints becomes "
-        "detectable.</p>\n"
-        "        <p>This history proves 402Signal's log, not seller truth.</p>\n"
-        '        <p><a class="btn secondary" href="/transparency">View transparency</a></p>\n'
-        "      </section>\n"
+        '        <p class="pq-evidence">Latest confirmed Tree %s · Round %s</p>\n'
+        % (esc(conf["size"]), esc(conf["round"]))
     )
 
 
@@ -492,7 +477,7 @@ def _status_strip(model: dict) -> str:
     latest = _time(confirmed["utc"], confirmed["iso"]) if confirmed else "-"
     last_anchored = str(confirmed_size) if confirmed else "-"
     return (
-        '<section class="status-grid pq-status" aria-label="Live log status">\n'
+        '<section class="status-grid pq-status" aria-label="Current status">\n'
         '  <div><p class="pq-kicker">LOG SIZE</p><p class="pq-stat">%s</p></div>\n'
         '  <div><p class="pq-kicker">LAST ANCHORED</p><p class="pq-stat">%s</p></div>\n'
         '  <div><p class="pq-kicker">STATUS</p><p class="pq-stat">%s</p></div>\n'
@@ -713,7 +698,7 @@ def _history(model: dict) -> str:
     if not rows:
         return (
             '<section class="block" id="anchor-history">\n'
-            "  <h2>Anchor history</h2>\n"
+            "  <h2>Confirmed anchor history</h2>\n"
             + heading
             + "</section>\n"
         )
@@ -741,7 +726,7 @@ def _history(model: dict) -> str:
         )
     return (
         '<section class="block" id="anchor-history">\n'
-        "  <h2>Anchor history</h2>\n"
+        "  <h2>Confirmed anchor history</h2>\n"
         + heading
         + '  <div class="table-wrap history-table desktop-only">\n'
         '    <table class="anchor-table">\n'
@@ -957,9 +942,9 @@ def render_html() -> str:
 
 def page_html() -> str:
     model = page_model()
-    title = "402Signal Transparency. Verify the routing history"
+    title = "402Signal transparency log"
     description = (
-        "Verify 402Signal’s append-only routing-evidence history, signed checkpoints "
+        "Verify 402Signal's append-only routing-evidence log, signed checkpoints, "
         "and Falcon-authorized Algorand TestNet anchors."
     )
     html = (
@@ -1014,47 +999,47 @@ def _verification_details(model: dict) -> str:
 def _main(model: dict) -> str:
     return (
         '      <section class="hero compact">\n'
-        '        <p class="pq-badge">PQ transparency · Algorand TestNet</p>\n'
-        "        <h1>Verify 402Signal’s history.</h1>\n"
+        '        <p class="pq-badge">Currently Algorand TestNet</p>\n'
+        "        <h1>Verify the transparency log</h1>\n"
         "        <p class=\"lede\">402Signal records commitments to its routing evidence in an "
         "append-only transparency log. Signed checkpoints are periodically anchored to "
         "Algorand TestNet using native Falcon-1024 authorization.</p>\n"
-        "        <p class=\"note\">Routing never waits for blockchain confirmation.</p>\n"
+        "        <p class=\"note\">Routing does not wait for confirmation.</p>\n"
         "        <p class=\"privacy-note\">Public transparency commitments do not expose raw "
         "needs, wallets, payment signatures, or seller response bodies.</p>\n"
         '        <details class="tech-details" id="what-is-published">\n'
         "          <summary>What is published?</summary>\n"
         '          <div class="tech-body">\n'
-        "            <p>Transparent history, not public requests. This page "
-        "shows 402Signal infrastructure commitments: log size, signed checkpoints, and "
-        "confirmed TestNet anchors. It does not directly publish your wallet, raw request, "
-        "or payment credentials. It does not publish agent needs, wallets, payment "
-        "signatures, or seller response bodies. A v2 public leaf reveals type, timestamp, "
-        "nonce, commitment hash, and optional live/miss_reason. It does not include salt, "
-        "raw evidence, need, wallet, or payment. It is not a claim of anonymous, unlinkable, "
-        "or fully private traffic.</p>\n"
+        "            <p>This page publishes 402Signal infrastructure commitments: log size, "
+        "signed checkpoints, and confirmed TestNet anchors. It does not publish agent "
+        "needs, wallets, payment signatures, seller response bodies, raw requests, or "
+        "payment credentials. A v2 public leaf includes type, timestamp, nonce, "
+        "commitment hash, and optional live/miss_reason. It does not include salt, "
+        "raw evidence, need, wallet, or payment. Published fields are not a claim of "
+        "anonymous, unlinkable, or fully private traffic.</p>\n"
         "          </div>\n"
         "        </details>\n"
         "      </section>\n"
-        '      <section class="block">\n'
-        "        <h2>What this proves</h2>\n"
-        "        <p>This page is the proof surface for 402Signal's append-only routing-evidence "
-        "log. Signed checkpoints are periodically anchored to Algorand TestNet using "
-        "Falcon-1024 authorization. Routing never waits for blockchain confirmation.</p>\n"
-        "        <p>Later rewriting inconsistent with published checkpoints becomes detectable. "
-        "Anyone can compare the signed checkpoint, Merkle root, and confirmed TestNet "
-        "transaction.</p>\n"
-        "        <p class=\"note\">This proves 402Signal's committed history. It does not prove "
-        "an endpoint was truthful. It is not a merchant payment. Falcon does not make Base "
-        "or Solana payments PQ-safe. The agent keeps the wallet, signing, and seller "
-        "payment.</p>\n"
-        "      </section>\n"
         + _integrity_banner(model)
+        + "      <h2>Current status</h2>\n"
         + _status_strip(model)
         + _confirmed_card(model)
         + _current_vs_anchored(model)
         + _history(model)
         + _verification_details(model)
+        + '      <section class="block">\n'
+        + "        <h2>What this proves / does not prove</h2>\n"
+        + "        <p>Anyone can compare the signed checkpoint, Merkle root, and confirmed "
+        + "TestNet transaction. Later rewriting inconsistent with published checkpoints "
+        + "becomes detectable. Detectability is not a claim that the log cannot be "
+        + "rewritten; it is a claim that inconsistent rewriting can be noticed.</p>\n"
+        + "        <p>This page reports 402Signal's committed routing-evidence history. "
+        + "It does not report whether a seller endpoint described its service accurately. "
+        + "The Algorand transaction authorizes a checkpoint. It is not a merchant payment. "
+        + "Falcon-1024 does not make Base or Solana payments PQ-safe. "
+        + "Routing does not wait for confirmation. The caller retains custody of keys, "
+        + "signing, and the selected service's payment.</p>\n"
+        + "      </section>\n"
     )
 
 
