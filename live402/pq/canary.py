@@ -50,6 +50,7 @@ from live402.pq import ORIGIN_MAINNET
 from live402.pq import algo_anchor
 from live402.pq import checkpoint as ckpt
 from live402.pq import log_identity
+from live402.pq import mainnet_params
 from live402.pq import store
 from live402.pq.signer_client import SignerClientError
 
@@ -135,6 +136,47 @@ def current_checkpoint_identity() -> dict:
     }
 
 
+def _resolve_trusted_params(params: dict | None, fetch_params_fn=None) -> dict:
+    """Operator path fetches the pinned MainNet snapshot itself.
+
+    Injected params are a test-only shortcut. Production CLI never
+    passes them. Empty/missing params always fetch.
+    """
+    if fetch_params_fn is not None:
+        return mainnet_params.fetch_trusted_mainnet_params(fetch_fn=fetch_params_fn)
+    if isinstance(params, dict) and params.get("lastRound"):
+        out = dict(params)
+        out.setdefault("genesisID", algo_anchor.MAINNET_GENESIS_ID)
+        out.setdefault("genesisHash", algo_anchor.MAINNET_GENESIS_HASH)
+        out["require_canonical"] = True
+        return out
+    try:
+        return mainnet_params.fetch_trusted_mainnet_params()
+    except mainnet_params.ParamsError as exc:
+        raise CanaryError("trusted mainnet params unavailable") from exc
+
+
+def project_policy(
+    *,
+    now: int | None = None,
+    params: dict | None = None,
+    fetch_params_fn=None,
+) -> dict:
+    """Read-only projected HMAC policy. Never dials the signer. Never persists."""
+    ident = current_checkpoint_identity()
+    when = int(now if now is not None else time.time())
+    p = _resolve_trusted_params(params, fetch_params_fn)
+    note = algo_anchor.encode_note(ident["origin"], ident["tree_size"], ident["root"])
+    draft = algo_anchor.build_mainnet_payment_txn(note, p)
+    policy = algo_anchor.hmac_policy(algo_anchor.fee_policy_snapshot(p, unsigned=draft, now=when))
+    return {
+        "identity": ident,
+        "params": p,
+        "policy": policy,
+        "draft": draft,
+    }
+
+
 def persist_authorized(
     *,
     tree_size: int,
@@ -166,6 +208,42 @@ def persist_authorized(
     return stored
 
 
+def _existing_authorized_usable(existing: dict, ident: dict, *, now: int | None = None) -> dict:
+    """Reuse fresh AUTHORIZED. Stale AUTHORIZED requires explicit discard."""
+    if not existing or not existing.get("signed"):
+        return {}
+    if not same_authorization_policy(
+        existing,
+        origin=ident["origin"],
+        tree_size=ident["tree_size"],
+        root=ident["root"],
+        checkpoint=ident["checkpoint"],
+    ):
+        raise CanarySecurityError("authorized record does not match")
+    state = send_state_of(existing)
+    if state in _POST_STATES:
+        return existing
+    try:
+        algo_anchor.snapshot_fresh(_frozen_policy(existing), now=now)
+    except algo_anchor.AnchorError as exc:
+        raise CanaryError("stale authorized; explicit discard required") from exc
+    return existing
+
+
+def discard_authorized(row: dict | None = None) -> None:
+    """Explicit operator discard of AUTHORIZED only. Never after SEND_ATTEMPTED."""
+    auth = row or store.last_authorized_checkpoint()
+    if not auth or not auth.get("signed"):
+        return
+    state = send_state_of(auth)
+    if state in _POST_STATES:
+        raise CanaryError("cannot discard after SEND_ATTEMPTED")
+    try:
+        store.discard_authorized_checkpoint(int(auth.get("tree_size") or auth.get("size") or 0))
+    except store.StoreError as exc:
+        raise CanaryError("cannot discard after SEND_ATTEMPTED") from exc
+
+
 def authorize(
     *,
     now: int | None = None,
@@ -174,34 +252,45 @@ def authorize(
     sign_fn=None,
     host: str | None = None,
     port: int | None = None,
+    fetch_params_fn=None,
+    observed_params: dict | None = None,
 ) -> dict:
-    """Checkpoint -> MainNet signer -> verify -> persist AUTHORIZED.
+    """Checkpoint -> fetch frozen policy -> MainNet signer -> verify -> persist.
 
-    Reuses the exact stored SignedTxn when the authorization policy
-    matches. Never re-dials around a different stored auth.
+    Operator path fetches the trusted snapshot itself. Reuses the exact
+    stored SignedTxn when the authorization policy matches and the
+    snapshot is still fresh. Stale AUTHORIZED fail-closes until the
+    operator explicitly discards. Never re-dials around a different
+    stored auth. Never silently modifies fee/fv/lv.
     """
     ident = current_checkpoint_identity()
     existing = store.authorized_at(ident["tree_size"])
     if existing and existing.get("signed"):
-        if not same_authorization_policy(
-            existing,
-            origin=ident["origin"],
-            tree_size=ident["tree_size"],
-            root=ident["root"],
-            checkpoint=ident["checkpoint"],
-        ):
-            raise CanarySecurityError("authorized record does not match")
-        return existing
+        return _existing_authorized_usable(existing, ident, now=now)
     from live402.pq import signer_mainnet
 
     rid = request_id or uuid.uuid4().hex
     when = int(now if now is not None else time.time())
-    p = dict(params) if isinstance(params, dict) else {}
+    p = _resolve_trusted_params(params, fetch_params_fn)
+    note = algo_anchor.encode_note(ident["origin"], ident["tree_size"], ident["root"])
+    draft = algo_anchor.build_mainnet_payment_txn(note, p)
+    policy = algo_anchor.hmac_policy(algo_anchor.fee_policy_snapshot(p, unsigned=draft, now=when))
+    if observed_params is not None:
+        try:
+            algo_anchor.validate_observed_against_router_policy(
+                policy, observed_params, now=when, unsigned=draft
+            )
+        except algo_anchor.AnchorError as exc:
+            raise CanaryError("signer observation rejected") from exc
+    verify_params = algo_anchor.params_from_fee_policy(policy)
+    verify_params.setdefault("genesisID", algo_anchor.MAINNET_GENESIS_ID)
+    verify_params.setdefault("genesisHash", algo_anchor.MAINNET_GENESIS_HASH)
+    verify_params["require_canonical"] = True
     if sign_fn is not None:
         if not callable(sign_fn):
             raise CanaryError("invalid sign hook")
         signed = sign_fn(ident)
-        reply = {"signed": bytes(signed), "verified": {}}
+        reply = {"signed": bytes(signed), "verified": {}, "policy": policy}
     else:
         try:
             reply = signer_mainnet.request_signed(
@@ -210,11 +299,12 @@ def authorize(
                 root=ident["root"],
                 consistency=ident["consistency"],
                 checkpoint=ident["checkpoint"],
+                policy=policy,
                 now=when,
                 request_id=rid,
                 host=host,
                 port=port,
-                params=p,
+                params=verify_params,
             )
         except SignerClientError as exc:
             raise CanaryError("signer unavailable") from exc
@@ -228,22 +318,15 @@ def authorize(
             expected_root=ident["root"],
             expected_address=algo_anchor.falcon_address_for(algo_anchor.MAINNET_NAME),
             expected_network=algo_anchor.MAINNET_NAME,
-            params=p,
+            params=verify_params,
             require_canonical=True,
         )
-    draft = None
-    try:
-        from live402 import algo_tx
-
-        obj = algo_tx.msgpack_decode(bytes(signed))
-        inner = obj.get("txn") if isinstance(obj, dict) else None
-        if isinstance(inner, dict):
-            draft = inner
-    except Exception:
-        draft = None
-    policy = algo_anchor.fee_policy_snapshot(p, unsigned=draft, now=when)
     if int(verified.get("fee") or 0) != int(policy["canonical_fee"]):
         raise CanarySecurityError("canonical fee mismatch")
+    if int(verified.get("fv") or 0) != int(policy["fv"]):
+        raise CanarySecurityError("canonical fv mismatch")
+    if int(verified.get("lv") or 0) != int(policy["lv"]):
+        raise CanarySecurityError("canonical lv mismatch")
     stored = persist_authorized(
         tree_size=ident["tree_size"],
         origin=ident["origin"],
@@ -385,6 +468,10 @@ def poll_expected(
         return None
     decoded = algo_anchor.decode_chain_txn(fetched)
     policy = _policy_params(row, None)
+    stored_fee = 0
+    frozen = _frozen_policy(row)
+    if frozen.get("canonical_fee"):
+        stored_fee = int(frozen["canonical_fee"])
     verified = algo_anchor.verify_fetched_anchor(
         decoded,
         expected_origin=row["origin"],
@@ -393,6 +480,9 @@ def poll_expected(
         expected_address=algo_anchor.falcon_address_for(algo_anchor.MAINNET_NAME),
         expected_txid=expected,
         expected_network=algo_anchor.MAINNET_NAME,
+        expected_fee=stored_fee or None,
+        expected_fv=int(row.get("fv") or frozen.get("fv") or 0) or None,
+        expected_lv=int(row.get("lv") or frozen.get("lv") or 0) or None,
     )
     if str(verified.get("txid") or "") != expected:
         raise CanarySecurityError("provider txid mismatch")
@@ -574,6 +664,119 @@ def summary(row: dict | None = None, *, router_sha: str = "", params: dict | Non
     }
 
 
+def inspect(
+    *,
+    now: int | None = None,
+    params: dict | None = None,
+    fetch_params_fn=None,
+    router_sha: str = "",
+) -> dict:
+    """Read-only operator inspect. Never authorizes. Never persists SignedTxn."""
+    projected = None
+    try:
+        projected = project_policy(now=now, params=params, fetch_params_fn=fetch_params_fn)
+    except (CanaryError, algo_anchor.AnchorError, mainnet_params.ParamsError):
+        projected = None
+    info = summary(None, router_sha=router_sha, params=params)
+    if projected:
+        info["projected_fee"] = projected["policy"]["canonical_fee"]
+        info["projected_fv"] = projected["policy"]["fv"]
+        info["projected_lv"] = projected["policy"]["lv"]
+        info["projected_last_round"] = projected["policy"]["last_round"]
+        info["projected_policy"] = projected["policy"]
+    return {
+        "state": send_state_of(store.last_authorized_checkpoint()),
+        "authorized": None,
+        "summary": info,
+        "sent": False,
+        "read_only": True,
+        "projected": projected["policy"] if projected else {},
+    }
+
+
+def prepare(
+    *,
+    now: int | None = None,
+    params: dict | None = None,
+    sign_fn=None,
+    fetch_params_fn=None,
+    observed_params: dict | None = None,
+    router_sha: str = "",
+    host: str | None = None,
+    port: int | None = None,
+) -> dict:
+    """Preflight already done by caller. Fetch policy, sign once, persist, no POST."""
+    stored = authorize(
+        now=now,
+        params=params,
+        sign_fn=sign_fn,
+        fetch_params_fn=fetch_params_fn,
+        observed_params=observed_params,
+        host=host,
+        port=port,
+    )
+    info = summary(stored, router_sha=router_sha, params=params)
+    return {
+        "state": send_state_of(stored),
+        "authorized": stored,
+        "summary": info,
+        "sent": False,
+        "expected_txid": info.get("expected_txid") or "",
+    }
+
+
+def send_persisted(
+    *,
+    authorize_human_canary: bool,
+    params: dict | None = None,
+    send_fn=None,
+    fetch_fn=None,
+    now: int | None = None,
+    router_sha: str = "",
+    crash_before_post: bool = False,
+    crash_after_send: bool = False,
+) -> dict:
+    """Send an already-persisted AUTHORIZED blob. Never creates a fresh auth."""
+    stored = store.last_authorized_checkpoint()
+    if not stored or not stored.get("signed"):
+        raise CanaryError("no AUTHORIZED blob")
+    info = summary(stored, router_sha=router_sha, params=params)
+    if authorize_human_canary is not True or not human_go_set():
+        return {
+            "state": send_state_of(stored),
+            "authorized": stored,
+            "summary": info,
+            "sent": False,
+            "refused": "human go missing or canary not authorized",
+        }
+    if not algo_anchor.mainnet_canary_requested() or not algo_anchor.mainnet_broadcast_requested():
+        return {
+            "state": send_state_of(stored),
+            "authorized": stored,
+            "summary": info,
+            "sent": False,
+            "refused": "mainnet dual flags off",
+        }
+    out = send_durable(
+        stored,
+        authorize_human_canary=True,
+        params=params,
+        send_fn=send_fn,
+        fetch_fn=fetch_fn,
+        now=now,
+        crash_before_post=crash_before_post,
+        crash_after_send=crash_after_send,
+    )
+    latest = store.authorized_at(int(stored["tree_size"]))
+    return {
+        "state": send_state_of(latest),
+        "authorized": latest,
+        "summary": summary(latest, router_sha=router_sha, params=params),
+        "result": out,
+        "sent": send_state_of(latest) in {STATE_SUBMITTED, STATE_CONFIRMED, STATE_SEND_ATTEMPTED},
+    }
+
+
 def run(
     *,
     authorize_human_canary: bool,
@@ -585,9 +788,10 @@ def run(
     router_sha: str = "",
     crash_before_post: bool = False,
     crash_after_send: bool = False,
+    fetch_params_fn=None,
 ) -> dict:
     """authorize -> persist -> summary. Send only with human GO + dual flags."""
-    stored = authorize(now=now, params=params, sign_fn=sign_fn)
+    stored = authorize(now=now, params=params, sign_fn=sign_fn, fetch_params_fn=fetch_params_fn)
     info = summary(stored, router_sha=router_sha, params=params)
     if authorize_human_canary is not True or not human_go_set():
         return {

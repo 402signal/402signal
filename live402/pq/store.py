@@ -41,6 +41,23 @@ class ConflictError(ValueError):
     """Refusing a confirmed-checkpoint write that would fork history."""
 
 
+class StoreError(RuntimeError):
+    """Fail closed: state regression or immutable canary field mutation."""
+
+
+# AUTHORIZED → SEND_ATTEMPTED → SUBMITTED → CONFIRMED only forward.
+# SEND_INTENT ranks with AUTHORIZED (pre-latch). Empty is AUTHORIZED.
+_SEND_STATE_RANK = {
+    "": 0,
+    "AUTHORIZED": 0,
+    "SEND_INTENT": 0,
+    "SEND_ATTEMPTED": 1,
+    "SUBMITTED": 2,
+    "CONFIRMED": 3,
+}
+_LATCHED_RANK = 1  # SEND_ATTEMPTED and later: blob/txid/policy/fv/lv immutable.
+
+
 # Tests may install a hook between durable append and later steps.
 _after_durable_hooks: list[Callable[[int, bytes], None]] = []
 
@@ -741,6 +758,22 @@ def last_authorized_checkpoint() -> dict:
     return out
 
 
+def send_state_rank(state: str | None) -> int:
+    """Numeric rank. Unknown states fail closed."""
+    key = str(state or "").strip()
+    if key not in _SEND_STATE_RANK:
+        raise StoreError("unknown send_state")
+    return _SEND_STATE_RANK[key]
+
+
+def _policy_text(fee_policy) -> str:
+    if fee_policy is None:
+        return ""
+    if isinstance(fee_policy, str):
+        return fee_policy
+    return json.dumps(fee_policy)
+
+
 def save_authorized_checkpoint(
     *,
     tree_size: int,
@@ -762,11 +795,11 @@ def save_authorized_checkpoint(
     """Persist AUTHORIZED only. Same checkpoint is idempotent. Different checkpoint refused.
 
     submitted + txid record a POST attempt. POST success is not confirmation.
-    send_state advances AUTHORIZED -> SEND_INTENT/SEND_ATTEMPTED -> SUBMITTED.
-    Recovery must reuse the exact stored SignedTxn. A different
-    origin/root/checkpoint is refused (caller fail-closes). The same
-    authorization policy (same origin, tree, root, signed-note) may
-    update send_state / expected_txid.
+    send_state advances AUTHORIZED -> SEND_ATTEMPTED -> SUBMITTED -> CONFIRMED
+    only forward. After SEND_ATTEMPTED the signed blob, expected_txid,
+    origin, tree_size, root, checkpoint, fee_policy, fv, and lv are
+    immutable. Mutation fail-closes. Tests that need a pre-latched row
+    must use the dedicated fixture helper, not this function.
     """
     size = int(tree_size)
     root_hex = bytes(root).hex() if isinstance(root, (bytes, bytearray)) else str(root or "")
@@ -778,18 +811,44 @@ def save_authorized_checkpoint(
     want_txid = str(txid or "").strip()
     want_state = str(send_state or "").strip()
     want_expected = str(expected_txid or "").strip()
-    want_policy = fee_policy if isinstance(fee_policy, str) else json.dumps(fee_policy)
+    want_policy = _policy_text(fee_policy)
     want_fv = int(fv or 0)
     want_lv = int(lv or 0)
     want_attempted = int(send_attempted_at or 0)
+    if want_state:
+        send_state_rank(want_state)
     with _lock:
         conn = _connect()
         existing = _authorized_row(conn, size)
         if existing and existing["signed"]:
-            if existing["checkpoint"] != note or (existing["root"] and root_hex and existing["root"] != root_hex):
-                return existing
-            if existing["signed"] and blob and existing["signed"] != blob:
-                return existing
+            have_state = str(existing.get("send_state") or "").strip()
+            have_rank = send_state_rank(have_state)
+            if want_state:
+                want_rank = send_state_rank(want_state)
+                if want_rank < have_rank:
+                    raise StoreError("send_state regression")
+            if have_rank >= _LATCHED_RANK:
+                if blob and existing["signed"] and blob != existing["signed"]:
+                    raise StoreError("immutable signed blob")
+                if want_expected and existing.get("expected_txid") and want_expected != str(existing.get("expected_txid") or ""):
+                    raise StoreError("immutable expected_txid")
+                if origin and existing.get("origin") and str(origin) != str(existing.get("origin") or ""):
+                    raise StoreError("immutable origin")
+                if root_hex and existing.get("root") and root_hex != str(existing.get("root") or ""):
+                    raise StoreError("immutable root")
+                if note and existing.get("checkpoint") and note != str(existing.get("checkpoint") or ""):
+                    raise StoreError("immutable checkpoint")
+                if want_policy and existing.get("fee_policy") and want_policy != str(existing.get("fee_policy") or ""):
+                    raise StoreError("immutable fee_policy")
+                if want_fv and existing.get("fv") and want_fv != int(existing.get("fv") or 0):
+                    raise StoreError("immutable fv")
+                if want_lv and existing.get("lv") and want_lv != int(existing.get("lv") or 0):
+                    raise StoreError("immutable lv")
+            else:
+                if existing["checkpoint"] != note or (existing["root"] and root_hex and existing["root"] != root_hex):
+                    return existing
+                if existing["signed"] and blob and existing["signed"] != blob:
+                    return existing
             sets = []
             args: list = []
             if want_submitted and want_txid:
@@ -802,13 +861,13 @@ def save_authorized_checkpoint(
             if want_expected:
                 sets.append("expected_txid = ?")
                 args.append(want_expected)
-            if want_policy:
+            if want_policy and have_rank < _LATCHED_RANK:
                 sets.append("fee_policy = ?")
                 args.append(want_policy)
-            if want_fv:
+            if want_fv and have_rank < _LATCHED_RANK:
                 sets.append("fv = ?")
                 args.append(want_fv)
-            if want_lv:
+            if want_lv and have_rank < _LATCHED_RANK:
                 sets.append("lv = ?")
                 args.append(want_lv)
             if want_attempted:
@@ -889,6 +948,31 @@ def save_authorized_checkpoint(
             "lv": want_lv,
             "send_attempted_at": want_attempted,
         }
+
+
+def discard_authorized_checkpoint(tree_size: int) -> None:
+    """Explicit operator discard of AUTHORIZED only. Never after SEND_ATTEMPTED."""
+    size = int(tree_size)
+    with _lock:
+        conn = _connect()
+        existing = _authorized_row(conn, size)
+        if not existing:
+            return
+        if send_state_rank(existing.get("send_state")) >= _LATCHED_RANK:
+            raise StoreError("cannot discard after SEND_ATTEMPTED")
+        conn.execute("DELETE FROM authorized_anchors WHERE tree_size = ?", (size,))
+        raw = meta_get("last_authorized_checkpoint")
+        try:
+            data = json.loads(raw) if raw else {}
+        except (TypeError, ValueError, json.JSONDecodeError):
+            data = {}
+        if isinstance(data, dict) and int(data.get("size") or 0) == size:
+            conn.execute(
+                "INSERT INTO meta(k, v) VALUES ('last_authorized_checkpoint', ?) "
+                "ON CONFLICT(k) DO UPDATE SET v = excluded.v",
+                (json.dumps({"size": 0, "at": 0, "request_id": "", "origin": "", "root": ""}),),
+            )
+        conn.commit()
 
 
 def last_confirmed_checkpoint() -> dict:

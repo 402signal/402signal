@@ -36,3 +36,62 @@ def clear_pq_env() -> None:
     """Drop MainNet/TestNet PQ identity envs so later tests stay TestNet."""
     for key in MAINNET_ENV_KEYS:
         os.environ.pop(key, None)
+
+
+def insert_authorized_fixture(
+    *,
+    tree_size: int,
+    origin: str,
+    root,
+    checkpoint: str,
+    signed: bytes,
+    send_state: str,
+    request_id: str = "fixture",
+    at: int = 1,
+    submitted: bool = False,
+    txid: str = "",
+    expected_txid: str = "",
+    fee_policy: str = "",
+    fv: int = 0,
+    lv: int = 0,
+    send_attempted_at: int = 0,
+) -> dict:
+    """Direct SQL insert for tests. Bypasses production monotonicity.
+
+    Production code must use store.save_authorized_checkpoint. This
+    helper exists so tests can seed SEND_ATTEMPTED/SUBMITTED rows
+    without weakening those invariants.
+    """
+    import json
+
+    from live402.pq import store
+
+    root_hex = bytes(root).hex() if isinstance(root, (bytes, bytearray)) else str(root or "")
+    policy = fee_policy if isinstance(fee_policy, str) else json.dumps(fee_policy or {})
+    with store._lock:
+        conn = store._connect()
+        conn.execute(
+            "INSERT OR REPLACE INTO authorized_anchors"
+            "(tree_size, origin, root, checkpoint, request_id, signed, at, submitted, txid, "
+            "send_state, expected_txid, fee_policy, fv, lv, send_attempted_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                int(tree_size),
+                origin or "",
+                root_hex,
+                checkpoint or "",
+                request_id,
+                bytes(signed or b""),
+                int(at),
+                1 if submitted else 0,
+                txid or "",
+                send_state,
+                expected_txid or "",
+                policy,
+                int(fv or 0),
+                int(lv or 0),
+                int(send_attempted_at or 0),
+            ),
+        )
+        conn.commit()
+    return store.authorized_at(int(tree_size)) or {}

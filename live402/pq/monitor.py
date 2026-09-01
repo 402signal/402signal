@@ -204,32 +204,93 @@ def snapshot() -> dict:
     }
 
 
-def _confirm_reachable(fetch_fn=None) -> dict:
-    """Confirm provider reachability. Fixture without fetch_fn does not dial."""
-    from live402 import fixtures
+def _redact_secret(text: str) -> str:
+    """Never echo an API key. Returns a type-only token."""
+    raw = str(text or "")
+    if not raw:
+        return ""
+    return "redacted"
 
-    confirm = algo_anchor.confirm_provider(
-        algo_anchor.configured_network() or algo_anchor.TESTNET_NAME
-    )
+
+def _confirm_reachable(fetch_fn=None) -> dict:
+    """Confirm provider reachability via the static provider contract.
+
+    Uses the hardcoded host + path template + auth-header name. Never
+    logs the API key. Fixture without fetch_fn does not dial.
+    "not probed" is not reachable.
+    """
+    from live402 import fixtures
+    from live402.pq import network as netcfg
+
+    network = algo_anchor.configured_network() or algo_anchor.TESTNET_NAME
+    confirm = algo_anchor.confirm_provider(network)
     host = confirm.get("host") or ""
+    org = confirm.get("org") or ""
+    auth_header = ""
+    try:
+        provider = netcfg.configured_confirm_provider() if network == algo_anchor.MAINNET_NAME else None
+        if provider is not None:
+            host = provider.host
+            org = provider.org
+            auth_header = provider.auth_header
+    except netcfg.UnknownNetwork:
+        provider = None
     if fetch_fn is not None:
         try:
             ok = bool(fetch_fn(host))
         except Exception:
             ok = False
-        return {"reachable": ok, "host": host, "org": confirm.get("org") or "", "probed": True}
+        return {
+            "reachable": ok,
+            "host": host,
+            "org": org,
+            "probed": True,
+            "auth_header": auth_header,
+            "contract": "static_provider",
+        }
     if fixtures.fixture_mode():
-        return {"reachable": False, "host": host, "org": confirm.get("org") or "", "probed": False}
-    raw = algo_anchor._get_pinned(
-        "https://%s/health" % host,
-        host,
-        5.0,
-    )
+        return {
+            "reachable": False,
+            "host": host,
+            "org": org,
+            "probed": False,
+            "auth_header": auth_header,
+            "contract": "static_provider",
+        }
+    dummy = "A" * 52
+    try:
+        url = netcfg.configured_confirm_txn_url(network, dummy)
+    except netcfg.UnknownNetwork:
+        return {
+            "reachable": False,
+            "host": host,
+            "org": org,
+            "probed": True,
+            "auth_header": auth_header,
+            "error": "unknown_network",
+            "contract": "static_provider",
+        }
+    extra = None
+    try:
+        auth = netcfg.confirm_auth_header() if network == algo_anchor.MAINNET_NAME else None
+        if auth:
+            extra = {auth[0]: auth[1]}
+            auth_header = auth[0]
+    except Exception:
+        extra = None
+    raw = algo_anchor._probe_confirm_contract(url, host, 5.0, extra_headers=extra)
+    blob = str({"host": host, "url": url, "auth_header": auth_header})
+    if extra:
+        secret = list(extra.values())[0]
+        if secret and secret in blob:
+            blob = blob.replace(secret, _redact_secret(secret))
     return {
         "reachable": bool(raw),
         "host": host,
-        "org": confirm.get("org") or "",
+        "org": org,
         "probed": True,
+        "auth_header": auth_header,
+        "contract": "static_provider",
     }
 
 
@@ -262,8 +323,8 @@ def preflight(
     """Operator-safe health. No secrets. Does not create an authorization.
 
     token configured is not signer available. MainNet signer probe uses
-    an invalid-HMAC pq-anchor/1 line (or an injected hook) and never
-    persists a SignedTxn.
+    an invalid-HMAC pq-anchor/2 line (or an injected hook) and never
+    persists a SignedTxn. "not probed" is never treated as healthy.
     """
     global _last_preflight, _preflight_count
     flags = ready_flags()
@@ -325,7 +386,11 @@ def preflight(
             else testnet_token_configured(),
             "reachable": bool(signer.get("reachable")),
             "protocol": bool(signer.get("protocol")),
-            "available": bool(signer.get("reachable") and signer.get("protocol")),
+            "available": bool(
+                signer.get("reachable")
+                and signer.get("protocol")
+                and signer.get("probed", True)
+            ),
             "host": signer.get("host") or "",
             "port": signer.get("port") or 0,
             "error": signer.get("error") or "",
@@ -362,7 +427,7 @@ ALERTS = (
     },
     {
         "id": "signer_unavailable",
-        "when": "MainNet signer token configured is not sufficient; protocol probe must fail closed if 6PN is unreachable or not pq-anchor/1",
+        "when": "MainNet signer token configured is not sufficient; protocol probe must fail closed if 6PN is unreachable or not pq-anchor/2",
     },
     {
         "id": "confirm_provider_error",

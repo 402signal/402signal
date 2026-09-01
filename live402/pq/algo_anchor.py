@@ -11,7 +11,8 @@ suggested `fee` is current fee per byte, not a flat txn fee.
 Hard ceiling MAX_FEE=30000 µALGO (fail closed if required > cap).
 Caller cannot select the fee. Signer and reconstruction derive
 the same canonical fee.
-Falcon signing goes through the 6PN client (pq-anchor/1). This module
+Falcon signing goes through the 6PN client (TestNet pq-anchor/1,
+MainNet pq-anchor/2). This module
 does not load a Falcon SK. send_forbidden() always raises.
 
 TestNet submit of a signer-approved SignedTxn is gated on
@@ -315,6 +316,20 @@ FV_LOOKBACK = 10
 FV_LOOKAHEAD = 10
 # Frozen suggested-params snapshot must be this fresh at canary POST.
 SNAPSHOT_MAX_AGE_S = 90
+# Signer-observed lastRound may differ from the router snapshot by this
+# many rounds. Wider divergence fails closed before AUTHORIZED.
+LAST_ROUND_SLACK = 10
+HMAC_POLICY_KEYS = (
+    "canonical_fee",
+    "fee_per_byte",
+    "fv",
+    "last_round",
+    "lv",
+    "min_fee",
+    "size_rule",
+    "snapshot_at",
+)
+HMAC_SIZE_RULE = "deterministic_falcon_envelope_estimate"
 
 
 def snapshot_last_round(params: dict | None = None, *, require: bool = False) -> int:
@@ -365,9 +380,71 @@ def fee_policy_snapshot(params: dict | None = None, *, unsigned: dict | None = N
         "lv": lv,
         "snapshot_at": int(now if now is not None else _time.time()),
         "snapshot_max_age_s": SNAPSHOT_MAX_AGE_S,
-        "size_rule": "deterministic_falcon_envelope_estimate",
+        "size_rule": HMAC_SIZE_RULE,
+        "version": "pq-anchor/2",
         "formula": "max(fee_per_byte * deterministic_falcon_envelope_estimate, protocol_base_min * 3)",
     }
+
+
+def hmac_policy(policy: dict | None) -> dict:
+    """Narrow policy object HMAC-bound by pq-anchor/2. No arbitrary txn."""
+    if not isinstance(policy, dict):
+        raise AnchorError("policy required")
+    out = {}
+    for key in HMAC_POLICY_KEYS:
+        if policy.get(key) in (None, ""):
+            raise AnchorError("policy field missing")
+        out[key] = policy[key]
+    out["last_round"] = int(out["last_round"])
+    out["min_fee"] = int(out["min_fee"])
+    out["fee_per_byte"] = int(out["fee_per_byte"])
+    out["fv"] = int(out["fv"])
+    out["lv"] = int(out["lv"])
+    out["canonical_fee"] = int(out["canonical_fee"])
+    out["snapshot_at"] = int(out["snapshot_at"])
+    out["size_rule"] = str(out["size_rule"])
+    if out["size_rule"] != HMAC_SIZE_RULE:
+        raise AnchorError("policy field missing")
+    if out["last_round"] < 1 or out["fv"] < 1 or out["canonical_fee"] < 1:
+        raise AnchorError("policy field missing")
+    return {key: out[key] for key in HMAC_POLICY_KEYS}
+
+
+def validate_observed_against_router_policy(
+    policy: dict,
+    observed: dict | None,
+    *,
+    now: int | None = None,
+    unsigned: dict | None = None,
+) -> dict:
+    """Signer-side rule implemented here as the contract + test oracle.
+
+    The private signer MUST independently fetch MainNet params and run
+    the same checks before signing. Never silently modify fee/fv/lv.
+    If the signer's current required fee exceeds the frozen router
+    policy, reject and require a NEW router snapshot before auth.
+    """
+    bound = hmac_policy(policy)
+    snapshot_fresh(policy, now=now)
+    obs = observed if isinstance(observed, dict) else {}
+    if str(obs.get("genesisID") or obs.get("genesis-id") or MAINNET_GENESIS_ID) != MAINNET_GENESIS_ID:
+        raise AnchorError("signer observed genesis mismatch")
+    try:
+        obs_last = snapshot_last_round(obs, require=True)
+    except AnchorError as exc:
+        raise AnchorError("signer observed lastRound missing") from exc
+    if abs(obs_last - int(bound["last_round"])) > LAST_ROUND_SLACK:
+        raise AnchorError("signer observed lastRound diverged")
+    try:
+        obs_min = protocol_base_min(obs)
+    except AnchorError as exc:
+        raise AnchorError("signer observed min-fee invalid") from exc
+    if obs_min < 1:
+        raise AnchorError("signer observed min-fee invalid")
+    obs_need = required_fee(obs, unsigned=unsigned)
+    if obs_need > int(bound["canonical_fee"]):
+        raise AnchorError("signer required fee exceeds frozen policy")
+    return bound
 
 
 def params_from_fee_policy(policy: dict | None) -> dict:
@@ -1311,6 +1388,40 @@ def _post_testnet(blob: bytes) -> str | None:
     return txid if _looks_like_txid(txid) else None
 
 
+def _probe_confirm_contract(
+    url: str,
+    host: str,
+    timeout: float,
+    extra_headers: dict | None = None,
+) -> bool:
+    """Static confirm contract probe. 2xx/4xx means the host spoke.
+
+    Never logs extra_headers values (API keys). Redirects are refused.
+    """
+    if not _pinned_https(url, host):
+        return False
+    headers = {"User-Agent": USER_AGENT, "Accept": "application/json"}
+    if extra_headers:
+        for key, val in extra_headers.items():
+            if key and val:
+                headers[str(key)] = str(val)
+    req = urllib.request.Request(url, method="GET", headers=headers)
+    opener = urllib.request.build_opener(_NoRedirect)
+    try:
+        with opener.open(req, timeout=timeout) as resp:
+            status = getattr(resp, "status", None) or resp.getcode()
+            try:
+                resp.read(2048)
+            except Exception:
+                pass
+            return isinstance(status, int) and 200 <= status < 500
+    except urllib.error.HTTPError as exc:
+        code = int(getattr(exc, "code", 0) or 0)
+        return 400 <= code < 500
+    except Exception:
+        return False
+
+
 def _get_pinned(url: str, host: str, timeout: float, extra_headers: dict | None = None) -> bytes | None:
     if not _pinned_https(url, host):
         return None
@@ -1655,9 +1766,49 @@ def decode_chain_txn(obj) -> dict:
     except (TypeError, ValueError):
         amount = -1
     try:
-        fee = int(unsigned.get("fee") or 0)
+        fee = int(unsigned.get("fee") if unsigned.get("fee") is not None else 0)
     except (TypeError, ValueError):
         fee = -1
+    try:
+        fv = int(
+            unsigned.get("first-valid")
+            if unsigned.get("first-valid") is not None
+            else unsigned.get("firstValid")
+            if unsigned.get("firstValid") is not None
+            else unsigned.get("fv")
+            if unsigned.get("fv") is not None
+            else (txn or {}).get("first-valid")
+            if isinstance(txn, dict) and (txn or {}).get("first-valid") is not None
+            else 0
+        )
+    except (TypeError, ValueError):
+        fv = 0
+    try:
+        lv = int(
+            unsigned.get("last-valid")
+            if unsigned.get("last-valid") is not None
+            else unsigned.get("lastValid")
+            if unsigned.get("lastValid") is not None
+            else unsigned.get("lv")
+            if unsigned.get("lv") is not None
+            else (txn or {}).get("last-valid")
+            if isinstance(txn, dict) and (txn or {}).get("last-valid") is not None
+            else 0
+        )
+    except (TypeError, ValueError):
+        lv = 0
+    gh = (
+        unsigned.get("genesis-hash")
+        or unsigned.get("genesisHash")
+        or unsigned.get("gh")
+        or obj.get("genesis-hash")
+        or obj.get("genesisHash")
+        or ""
+    )
+    if isinstance(gh, (bytes, bytearray)):
+        genesis_hash = base64.b64encode(bytes(gh)).decode("ascii")
+    else:
+        genesis_hash = str(gh or "").strip()
     note = unsigned.get("note")
     if isinstance(note, str):
         note = _b64(note)
@@ -1693,6 +1844,9 @@ def decode_chain_txn(obj) -> dict:
         "authorizer": sender,
         "amount": amount,
         "fee": fee,
+        "fv": fv,
+        "lv": lv,
+        "genesis_hash": genesis_hash,
         "note": note,
         "close": close,
         "rekey": rekey,
@@ -1723,6 +1877,67 @@ def _auth_addr_field(*objs):
     return ""
 
 
+def reconstruct_txid_from_decoded(decoded: dict, *, expected_address: str = "") -> tuple[str | None, list[str]]:
+    """Recompute Algorand txid when Indexer returned enough unsigned fields.
+
+    Returns (txid, missing_fields). missing_fields empty means the
+    unsigned payload was reconstructed. Provider-omitted fields are
+    listed so callers can fall back to semantic + provider-txid compare.
+    """
+    missing = []
+    if not isinstance(decoded, dict):
+        return None, ["decoded"]
+    fee = decoded.get("fee")
+    fv = decoded.get("fv")
+    lv = decoded.get("lv")
+    gen = str(decoded.get("genesis_id") or "").strip()
+    gh = decoded.get("genesis_hash")
+    note = decoded.get("note")
+    sender = str(decoded.get("sender") or "").strip()
+    receiver = str(decoded.get("receiver") or "").strip()
+    addr = (expected_address or sender or "").strip()
+    if fee in (None, "") or int(fee) < 0:
+        missing.append("fee")
+    if not fv:
+        missing.append("fv")
+    if not lv:
+        missing.append("lv")
+    if not gen:
+        missing.append("genesis_id")
+    if not gh:
+        missing.append("genesis_hash")
+    if not note:
+        missing.append("note")
+    if not sender:
+        missing.append("sender")
+    if not receiver:
+        missing.append("receiver")
+    if missing:
+        return None, missing
+    try:
+        gh_bytes = _genesis_hash_bytes(gen, gh)
+        txn = algo_tx.pay_txn(
+            sender or addr,
+            receiver or addr,
+            0,
+            int(fee),
+            int(fv),
+            int(lv),
+            gen,
+            gh_bytes,
+            note=bytes(note),
+        )
+        extra = set(txn) - {"type", "fee", "fv", "gen", "gh", "lv", "note", "rcv", "snd"}
+        for key in extra:
+            txn.pop(key, None)
+        txid = algo_tx.txid_from_unsigned(txn)
+    except Exception:
+        return None, ["reconstruct"]
+    if not _looks_like_txid(txid):
+        return None, ["reconstruct"]
+    return txid, []
+
+
 def verify_fetched_anchor(
     decoded: dict,
     *,
@@ -1732,6 +1947,9 @@ def verify_fetched_anchor(
     expected_address: str,
     expected_txid: str | None = None,
     expected_network: str | None = None,
+    expected_fee: int | None = None,
+    expected_fv: int | None = None,
+    expected_lv: int | None = None,
 ) -> dict:
     """Fail closed unless the fetched txn matches PQ1 construction.
 
@@ -1739,6 +1957,10 @@ def verify_fetched_anchor(
     address == sender == receiver == authorizing account. Any nonempty
     AuthAddr (codec sgnr, REST auth-addr / authAddr) fails confirmation.
     Genesis must exactly match expected_network.
+    When expected_fee / expected_fv / expected_lv are set, the fetched
+    fields must equal the stored authorized values if Indexer returned
+    them. A provider that claims the expected txid but mutates fee/fv/lv
+    is rejected.
     """
     if not isinstance(decoded, dict):
         raise AnchorError("invalid chain object")
@@ -1766,6 +1988,15 @@ def verify_fetched_anchor(
     fee = int(decoded.get("fee") or 0)
     if fee < falcon_min_fee() or fee > MAX_FEE:
         raise AnchorError("fee out of range")
+    if expected_fee is not None and decoded.get("fee") not in (None, "", -1):
+        if int(decoded.get("fee")) != int(expected_fee):
+            raise AnchorError("fetched fee mismatch")
+    if expected_fv is not None and int(decoded.get("fv") or 0) not in (0,):
+        if int(decoded.get("fv")) != int(expected_fv):
+            raise AnchorError("fetched fv mismatch")
+    if expected_lv is not None and int(decoded.get("lv") or 0) not in (0,):
+        if int(decoded.get("lv")) != int(expected_lv):
+            raise AnchorError("fetched lv mismatch")
     if _nonzero_blob(decoded.get("close")):
         raise AnchorError("close forbidden")
     if _nonzero_blob(decoded.get("rekey")):
@@ -1804,6 +2035,11 @@ def verify_fetched_anchor(
         raise AnchorError("invalid confirmed fields")
     if expected_txid and txid != expected_txid.strip():
         raise AnchorError("txid mismatch")
+    recomputed, missing = reconstruct_txid_from_decoded(decoded, expected_address=addr)
+    if recomputed:
+        want = (expected_txid or txid).strip()
+        if recomputed != want:
+            raise AnchorError("reconstructed txid mismatch")
     return {
         "txid": txid,
         "confirmed_round": rnd,
@@ -1813,6 +2049,8 @@ def verify_fetched_anchor(
         "pq_auth": bytes(pq_auth),
         "network": cfg.name,
         "genesis_id": cfg.genesis_id,
+        "reconstructed_txid": recomputed or "",
+        "indexer_missing_fields": missing,
     }
 
 
