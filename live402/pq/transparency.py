@@ -33,6 +33,33 @@ _SECRET_MARKERS = (
 )
 HISTORY_LIMIT = 250
 PERA_ADDRESS_URL = "https://testnet.explorer.perawallet.app/address/"
+PERA_ADDRESS_URL_MAINNET = "https://explorer.perawallet.app/address/"
+
+
+def _live_network_name() -> str:
+    from live402.pq import log_identity
+
+    return log_identity.live_network_name()
+
+
+def _network_label() -> str:
+    return "MainNet" if _live_network_name() == "mainnet" else "TestNet"
+
+
+def _live_origin() -> str:
+    from live402.pq import log_identity
+
+    try:
+        return log_identity.configured_origin()
+    except Exception:
+        return ORIGIN
+
+
+def _pera_address_base() -> str:
+    if _live_network_name() == "mainnet":
+        return PERA_ADDRESS_URL_MAINNET
+    return PERA_ADDRESS_URL
+
 
 
 def esc(value) -> str:
@@ -80,7 +107,7 @@ def pera_tx_url(txid: str) -> str:
     if not _looks_like_txid(txid):
         return ""
     try:
-        return algo_anchor.testnet_explorer_url(txid.strip())
+        return algo_anchor.explorer_url(txid.strip())
     except algo_anchor.AnchorError:
         return ""
 
@@ -89,12 +116,14 @@ def pera_address_url(address: str) -> str:
     text = str(address or "").strip()
     if not text or " " in text:
         return ""
-    return PERA_ADDRESS_URL + text + "/"
+    return _pera_address_base() + text + "/"
 
 
 def indexer_tx_url(txid: str) -> str:
     if not _looks_like_txid(txid):
         return ""
+    if _live_network_name() == "mainnet":
+        return algo_anchor.MAINNET_INDEXER_TXN_URL + txid.strip()
     return algo_anchor.TESTNET_INDEXER_TXN_URL + txid.strip()
 
 
@@ -126,7 +155,7 @@ def public_vkey() -> str:
 
 
 def public_falcon_address() -> str:
-    return str(algo_anchor.falcon_address() or "").strip()
+    return str(algo_anchor.falcon_address_for(_live_network_name()) or "").strip()
 
 
 def decode_pq1_note(note, origin: str | None = None) -> dict | None:
@@ -219,9 +248,9 @@ def authorized_lifecycle() -> dict | None:
         "submitted": submitted,
         "status": "SUBMITTED" if submitted else "AUTHORIZED",
         "label": (
-            "SUBMITTED · awaiting TestNet confirmation"
+            "SUBMITTED · awaiting %s confirmation" % _network_label()
             if submitted
-            else "AUTHORIZED · awaiting TestNet confirmation"
+            else "AUTHORIZED · awaiting %s confirmation" % _network_label()
         ),
     }
 
@@ -401,7 +430,7 @@ def page_model() -> dict:
 
 
 def homepage_pq_html() -> str:
-    """Injected Latest confirmed line. Empty unless last_confirmed has a real TestNet txid."""
+    """Injected Latest confirmed line. Empty unless last_confirmed has a real confirmed txid."""
     conf = confirmed_view()
     if not conf:
         return ""
@@ -446,8 +475,8 @@ def _time(ts_text: str, iso: str) -> str:
 def _ext_link(href: str, label: str) -> str:
     return (
         '<a href="%s" rel="noopener noreferrer">%s '
-        '<span class="ext-hint">(Pera Explorer, TestNet)</span></a>'
-        % (esc(href), esc(label))
+        '<span class="ext-hint">(Pera Explorer, %s)</span></a>'
+        % (esc(href), esc(label), _network_label())
     )
 
 
@@ -513,9 +542,10 @@ def _pera_views(model: dict) -> str:
         return ""
     return (
         '<section class="block" id="pera-views">\n'
-        "  <h2>TestNet explorers</h2>\n"
+        "  <h2>%s explorers</h2>\n"
         '  <ul class="verify-list">%s</ul>\n'
-        "</section>\n" % "".join(items)
+        "</section>\n"
+        % (_network_label(), "".join(items))
     )
 
 
@@ -525,8 +555,9 @@ def _confirmed_card(model: dict) -> str:
         return (
             '<section class="block" id="latest-confirmed">\n'
             "  <h2>Latest confirmed checkpoint</h2>\n"
-            "  <p>TestNet anchoring has not yet produced a confirmed checkpoint.</p>\n"
+            "  <p>Awaiting first confirmed %s checkpoint.</p>\n"
             "</section>\n"
+            % _network_label()
         )
     cta = _confirmed_checkpoint_cta(model)
     bind_note = ""
@@ -591,16 +622,18 @@ def _confirmed_detail_fields(model: dict) -> str:
             "  <div><dt>FALCON ACCOUNT</dt><dd>%s</dd></div>\n"
             % _mono_copy(addr, abbreviate_falcon(addr), "Falcon account")
         )
+    origin = esc(str(conf.get("origin") or _live_origin()))
     return (
         "<h3>Confirmed checkpoint fields</h3>\n"
         '<dl class="pq-decode">\n'
         "  <div><dt>MERKLE ROOT</dt><dd>%s</dd></div>\n"
-        "  <div><dt>ORIGIN</dt><dd>402signal.com/pq/log</dd></div>\n"
+        "  <div><dt>ORIGIN</dt><dd>%s</dd></div>\n"
         "%s"
         "  <div><dt>AMOUNT</dt><dd>0 ALGO</dd></div>\n"
         "</dl>\n"
         % (
             _mono_copy(conf["root"], None, "Merkle root"),
+            origin,
             falcon,
         )
     )
@@ -621,7 +654,7 @@ def _pq1_decoder(note: dict) -> str:
     match = "matches note origin-hash bytes" if note["origin_hash_matches"] else "does not match"
     return (
         "<p>Canonical PQ1 note. Reconstructed from the fields independently verified "
-        "against the confirmed TestNet transaction.</p>\n"
+        "against the confirmed %s transaction.</p>\n"
         '<dl class="pq-decode">\n'
         "  <div><dt>FORMAT</dt><dd>%s</dd></div>\n"
         "  <div><dt>VERSION</dt><dd>%s</dd></div>\n"
@@ -632,6 +665,7 @@ def _pq1_decoder(note: dict) -> str:
         "  <div><dt>NOTE LENGTH</dt><dd>%s bytes</dd></div>\n"
         "</dl>\n"
         % (
+            _network_label(),
             esc(note["format"]),
             esc(note["version"]),
             esc(note["origin"]),
@@ -665,9 +699,9 @@ def _current_vs_anchored(model: dict) -> str:
         elif model["confirmed"] and growth > 0:
             compare = "%s newer log entries exist after the latest confirmed anchor." % growth
         elif current > 0 and not model["confirmed"]:
-            compare = "The log has entries, and TestNet anchoring has not yet produced a confirmed checkpoint."
+            compare = "The log has entries. Awaiting first confirmed %s checkpoint." % _network_label()
         else:
-            compare = "TestNet anchoring has not yet produced a confirmed checkpoint."
+            compare = "Awaiting first confirmed %s checkpoint." % _network_label()
         numbers = "Current tree %s · confirmed tree %s · unanchored growth %s." % (
             esc(current),
             esc(confirmed_size if model["confirmed"] else 0),
@@ -766,18 +800,19 @@ def _growth_chart(rows: list[dict]) -> str:
         y = pad_t + inner_h * (1 - ((size - min_s) / span_s))
         points.append("%.1f,%.1f" % (x, y))
         circles.append('<circle cx="%.1f" cy="%.1f" r="3.5" fill="#fec865" />' % (x, y))
+    label = _network_label()
     return (
         '<figure class="growth-chart">\n'
         "  <figcaption>Tree size at each time 402Signal verified a confirmed "
-        "TestNet anchor. The line joins those observations only.</figcaption>\n"
+        "%s anchor. The line joins those observations only.</figcaption>\n"
         '  <svg viewBox="0 0 %s %s" role="img" '
-        'aria-label="Tree size at each time 402Signal verified a confirmed TestNet anchor. '
+        'aria-label="Tree size at each time 402Signal verified a confirmed %s anchor. '
         'Points are real confirmed checkpoints. The line joins those observations.">\n'
         '    <polyline fill="none" stroke="#e49c60" stroke-width="1.5" points="%s" />\n'
         "    %s\n"
         "  </svg>\n"
         "</figure>\n"
-        % (width, height, " ".join(points), "".join(circles))
+        % (label, width, height, label, " ".join(points), "".join(circles))
     )
 
 
@@ -819,8 +854,9 @@ def _technical(model: dict) -> str:
             "to the confirmed origin, tree size, and Merkle root.</p>"
         )
     parts.append(
-        '<p>Latest signed checkpoint. It may be newer than the latest TestNet anchor. '
+        '<p>Latest signed checkpoint. It may be newer than the latest %s anchor. '
         '<a href="/pq/log/checkpoint"><code>GET /pq/log/checkpoint</code></a></p>'
+        % _network_label()
     )
     if model["vkey"]:
         parts.append(
@@ -844,9 +880,9 @@ def _technical(model: dict) -> str:
         parts.append("<p>Confirmed round · %s</p>" % esc(conf["round"]))
         if conf.get("indexer"):
             parts.append(
-                '<p><a href="%s" rel="noopener noreferrer">View raw TestNet transaction JSON</a> '
-                '<span class="ext-hint">(Algonode TestNet indexer)</span></p>'
-                % esc(conf["indexer"])
+                '<p><a href="%s" rel="noopener noreferrer">View raw %s transaction JSON</a> '
+                '<span class="ext-hint">(Algonode %s indexer)</span></p>'
+                % (esc(conf["indexer"]), _network_label(), _network_label())
             )
     body = "\n".join(parts) if parts else "<p>No additional public fields yet.</p>"
     return "<h3>Technical details</h3>\n<div class=\"tech-body\">%s</div>\n" % body
@@ -888,9 +924,12 @@ def _verify_yourself(model: dict) -> str:
         "  <h2>Verify yourself</h2>\n"
         "  <ul class=\"verify-list\">\n"
         + bound_item
-        + '    <li><a href="/pq/log/checkpoint">GET /pq/log/checkpoint</a>. '
-        "Latest signed checkpoint. It may be newer than the latest TestNet anchor.</li>\n"
-        "    <li>C2SP tiles are published under <code>/pq/log/tile/</code> "
+        + (
+            '    <li><a href="/pq/log/checkpoint">GET /pq/log/checkpoint</a>. '
+            "Latest signed checkpoint. It may be newer than the latest %s anchor.</li>\n"
+            % _network_label()
+        )
+        + "    <li>C2SP tiles are published under <code>/pq/log/tile/</code> "
         "(hash tiles and entry bundles). Compare them to the signed checkpoint.</li>\n"
         "  </ul>\n"
         "  <ul class=\"verify-copies\">%s</ul>\n"
@@ -949,8 +988,9 @@ def page_html() -> str:
     model = page_model()
     title = "402Signal transparency log"
     description = (
-        "Verify 402Signal's append-only routing-evidence log, signed checkpoints, "
-        "and Falcon-authorized Algorand TestNet anchors."
+        "Verify 402Signal's append-only routing-evidence log. "
+        "Production log identity is Algorand MainNet. "
+        "Awaiting first confirmed MainNet checkpoint."
     )
     html = (
         _chrome_head(title, description, "https://402signal.com/transparency")
@@ -1001,22 +1041,44 @@ def _verification_details(model: dict) -> str:
     )
 
 
+def _hero_badge(model: dict) -> str:
+    if model.get("confirmed"):
+        return '        <p class="pq-badge">Algorand MainNet log</p>\n'
+    return (
+        '        <p class="pq-badge">Algorand MainNet log · awaiting first '
+        "confirmed checkpoint</p>\n"
+    )
+
+
+def _hero_lede(model: dict) -> str:
+    if model.get("confirmed"):
+        return (
+            "        <p class=\"lede\">402Signal records commitments to its routing evidence in an "
+            "append-only transparency log. Signed checkpoints are periodically anchored to "
+            "Algorand MainNet using native Falcon-1024 post-quantum authorization.</p>\n"
+        )
+    return (
+        "        <p class=\"lede\">402Signal records commitments to its routing evidence in an "
+        "append-only transparency log. Production log identity is Algorand MainNet. "
+        "Awaiting first confirmed MainNet checkpoint. Checkpoint transactions use native "
+        "Falcon-1024 post-quantum authorization when confirmed on MainNet.</p>\n"
+    )
+
+
 def _main(model: dict) -> str:
     return (
         '      <section class="hero compact">\n'
-        '        <p class="pq-badge">Currently Algorand TestNet</p>\n'
-        "        <h1>Verify the transparency log</h1>\n"
-        "        <p class=\"lede\">402Signal records commitments to its routing evidence in an "
-        "append-only transparency log. Signed checkpoints are periodically anchored to "
-        "Algorand TestNet using native Falcon-1024 post-quantum authorization.</p>\n"
-        "        <p class=\"note\">Routing does not wait for confirmation.</p>\n"
-        "        <p class=\"privacy-note\">Public transparency commitments do not expose raw "
+        + _hero_badge(model)
+        + "        <h1>Verify the transparency log</h1>\n"
+        + _hero_lede(model)
+        + "        <p class=\"note\">Routing does not wait for confirmation.</p>\n"
+        + "        <p class=\"privacy-note\">Public transparency commitments do not expose raw "
         "needs, wallets, payment signatures, or seller response bodies.</p>\n"
         '        <details class="tech-details" id="what-is-published">\n'
         "          <summary>What is published?</summary>\n"
         '          <div class="tech-body">\n'
         "            <p>This page publishes 402Signal infrastructure commitments: log size, "
-        "signed checkpoints, and confirmed TestNet anchors. It does not publish agent "
+        "signed checkpoints, and confirmed MainNet anchors when present. It does not publish agent "
         "needs, wallets, payment signatures, seller response bodies, raw requests, or "
         "payment credentials. A v2 public leaf includes type, timestamp, nonce, "
         "commitment hash, and optional live/miss_reason. It does not include salt, "
@@ -1033,9 +1095,14 @@ def _main(model: dict) -> str:
         + _history(model)
         + _verification_details(model)
         + '      <section class="block">\n'
+        + "        <h2>Historical TestNet archive</h2>\n"
+        + "        <p>The prior public TestNet log shard remains available for reference. "
+        + "It is not the live production MainNet log.</p>\n"
+        + "      </section>\n"
+        + '      <section class="block">\n'
         + "        <h2>What this proves / does not prove</h2>\n"
         + "        <p>Anyone can compare the signed checkpoint, Merkle root, and confirmed "
-        + "TestNet transaction. Later rewriting inconsistent with published checkpoints "
+        + "MainNet transaction. Later rewriting inconsistent with published checkpoints "
         + "becomes detectable. Detectability is not a claim that the log cannot be "
         + "rewritten; it is a claim that inconsistent rewriting can be noticed.</p>\n"
         + "        <p>This page reports 402Signal's committed routing-evidence history. "

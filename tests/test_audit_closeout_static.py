@@ -38,7 +38,12 @@ class CloseoutStaticTests(unittest.TestCase):
     def test_fly_health_check_unchanged_and_broadcast_unset(self):
         self.assertIn('path = "/health"', FLY)
         self.assertNotIn("LIVE402_PQ_FALCON_BROADCAST", FLY)
-        self.assertIn("LIVE402_PQ_FALCON_NETWORK = \"testnet\"", FLY)
+        self.assertIn("LIVE402_PQ_FALCON_NETWORK = \"mainnet\"", FLY)
+        self.assertIn("LIVE402_PQ_LOG_DB = \"/data/pq-log-mainnet.sqlite\"", FLY)
+        self.assertIn("LIVE402_PQ_LOG_EPOCH = \"mainnet-v1\"", FLY)
+        self.assertIn("LIVE402_PQ_LOG_ORIGIN = \"402signal.com/pq/log/mainnet-v1\"", FLY)
+        self.assertNotIn("LIVE402_PQ_FALCON_MAINNET_BROADCAST", FLY)
+        self.assertNotIn("LIVE402_PQ_FALCON_MAINNET_CANARY", FLY)
         # Proposed /ready check is comment-only.
         active = [
             ln for ln in FLY.splitlines()
@@ -55,12 +60,26 @@ class CloseoutStaticTests(unittest.TestCase):
         self.assertIn("V2_PUBLIC_FIELDS", EVENTS)
         self.assertIn("live", EVENTS.split("V2_PUBLIC_FIELDS")[1][:200])
 
-    def test_website_stays_testnet(self):
+    def test_website_production_mainnet_copy(self):
         home = _read("live402/static/index.html")
-        self.assertIn("Currently Algorand TestNet", home)
-        self.assertNotIn("Currently Algorand MainNet", home)
+        self.assertIn("Algorand MainNet log · awaiting first confirmed checkpoint", home)
+        self.assertIn("Production log identity is Algorand MainNet", home)
+        self.assertNotIn("Signed checkpoints are periodically anchored to Algorand MainNet", home)
+        self.assertNotIn("Currently Algorand TestNet", home)
+        self.assertNotIn("quantum-proof", home.lower())
+        self.assertNotIn("—", home)
         trans = _read("live402/pq/transparency.py")
-        self.assertIn("Currently Algorand TestNet", trans)
+        self.assertIn("Algorand MainNet log · awaiting first", trans)
+        self.assertIn("Production log identity is Algorand MainNet", trans)
+        self.assertNotIn("Currently Algorand TestNet", trans)
+        self.assertIn("Awaiting first confirmed", trans)
+        self.assertIn("Historical TestNet archive", trans)
+        fly = _read("fly.toml")
+        self.assertIn("GVIAG3YMJ7OLJ3JAUBNI2YP5JCQQCQYWN25UAGLC2BTPOBUL3ZZTILIMWU", fly)
+        self.assertNotIn("OBHYXCUVOLSTZVBN5JUFIYBD4X4ZFIAFZMWMU2P45VBYGWT26MV34IFFIU", fly)
+        self.assertNotIn("LIVE402_PQ_FALCON_BROADCAST", fly)
+        self.assertNotIn("LIVE402_PQ_FALCON_MAINNET_BROADCAST", fly)
+        self.assertNotIn("LIVE402_PQ_FALCON_MAINNET_CANARY", fly)
 
     def test_no_mainnet_falcon_submit(self):
         algo = _read("live402/pq/algo_anchor.py")

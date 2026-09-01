@@ -122,11 +122,11 @@ class C2SPHttpTests(unittest.TestCase):
     def test_docs_falcon_anchoring_wording(self):
         spec = json.dumps(discover.openapi_spec())
         docs = spec + "\n" + discover.GUIDANCE + "\n" + discover.LLMS_TXT
-        self.assertIn("Falcon anchoring is TestNet-only", spec)
-        self.assertIn("Eligible checkpoints may be broadcast to Algorand TestNet", spec)
-        self.assertIn("MainNet broadcasting is not enabled", spec)
-        self.assertIn("Falcon anchoring is TestNet-only", discover.GUIDANCE)
-        self.assertIn("Falcon anchoring is TestNet-only", discover.LLMS_TXT)
+        self.assertIn("Production log identity targets Algorand MainNet", spec)
+        self.assertIn("Awaiting first confirmed MainNet checkpoint", spec)
+        self.assertIn("MainNet Falcon broadcasting is not enabled", spec)
+        self.assertIn("Production transparency log identity targets Algorand MainNet", discover.GUIDANCE)
+        self.assertIn("Production transparency log identity targets Algorand MainNet", discover.LLMS_TXT)
         self.assertIn("Signer never reads BROADCAST and never POSTs", docs)
         self.assertIn("/route does not wait for chain", docs)
         self.assertIn("Falcon authorizes a checkpoint txn, not a merchant payment", docs)
@@ -164,16 +164,19 @@ class C2SPHttpTests(unittest.TestCase):
         status, raw, _hdrs = self._get("/pq/log")
         self.assertEqual(status, 404)
 
-    def test_docs_say_experimental_not_mainnet(self):
+    def test_docs_say_experimental_mainnet_defaults(self):
         spec = json.dumps(discover.openapi_spec())
         self.assertIn("/pq/log/checkpoint", spec)
         self.assertIn("experimental", spec.lower())
-        self.assertIn("Falcon anchoring is TestNet-only", spec)
-        self.assertIn("MainNet broadcasting is not enabled", spec)
+        self.assertIn("Production log identity targets Algorand MainNet", spec)
+        self.assertIn("MainNet Falcon broadcasting is not enabled", spec)
+        self.assertIn("Awaiting first confirmed MainNet checkpoint", spec)
+        self.assertNotIn("Falcon anchoring is TestNet-only", spec)
         self.assertNotIn("pq_secure", spec)
         self.assertIn("GET /pq/log/checkpoint", discover.LLMS_TXT)
-        self.assertIn("Falcon anchoring is TestNet-only", discover.LLMS_TXT)
-        self.assertIn("MainNet broadcasting is not enabled", discover.LLMS_TXT)
+        self.assertIn("Production transparency log identity targets Algorand MainNet", discover.LLMS_TXT)
+        self.assertIn("MainNet Falcon broadcasting is not enabled", discover.LLMS_TXT)
+        self.assertIn("Awaiting first confirmed MainNet checkpoint", discover.LLMS_TXT)
         home = (Path(__file__).resolve().parent.parent / "live402" / "static" / "index.html").read_text(
             encoding="utf-8"
         )
