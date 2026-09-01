@@ -70,7 +70,7 @@ by flattening those fields into the Go-signer MAC (no nested
 authorize/prepare does not depend on injected params. Canonical
 fee/fv/lv validation is not loosened.
 
-Private signer `402signal/402signal-pq-signer` must independently
+Private signer `402signalhq/402signal-pq-signer` must independently
 fetch MainNet params and validate the router snapshot before
 signing. See `docs/signer-mainnet-spec.md` and the parallel-PR
 checklist there. Reviewed TestNet identity remains merge

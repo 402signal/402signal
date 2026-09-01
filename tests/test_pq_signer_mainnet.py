@@ -293,5 +293,72 @@ class MainNetSignerIsolationTests(unittest.TestCase):
         self.assertNotIn(_TOKEN.lower(), blob)
 
 
+    def test_hmac_error_expected_exact_only(self):
+        self.assertTrue(signer_mainnet.hmac_error_expected("hmac"))
+        for bad in ("hmac_invalid", "invalid_hmac", "mac", "rejected", "HMAC", " hmac "):
+            self.assertFalse(signer_mainnet.hmac_error_expected(bad), bad)
+
+    def test_protocol_probe_rejects_alternate_hmac_strings(self):
+        cases = [
+            (b'{"ok":false,"error":"hmac"}\n', True),
+            (b'{"ok":false,"error":"hmac_invalid"}\n', False),
+            (b'{"ok":false,"error":"invalid_hmac"}\n', False),
+            (b'{"ok":false,"error":"mac"}\n', False),
+            (b'{"ok":false,"error":"rejected"}\n', False),
+            (b'{"ok":true,"error":"hmac"}\n', False),
+            (b'{"ok":false,"error":"hmac","signed":"deadbeef"}\n', False),
+        ]
+        for payload, want in cases:
+            received = []
+
+            def serve(sock, body=payload):
+                sock.listen(1)
+                sock.settimeout(2)
+                while not self._stop:
+                    try:
+                        conn, _addr = sock.accept()
+                    except TimeoutError:
+                        continue
+                    except OSError:
+                        return
+                    try:
+                        raw = b""
+                        while b"\n" not in raw:
+                            chunk = conn.recv(4096)
+                            if not chunk:
+                                break
+                            raw += chunk
+                        received.append(raw)
+                        conn.sendall(body)
+                    finally:
+                        conn.close()
+
+            sock = socket.socket()
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock.bind(("127.0.0.1", 0))
+            port = sock.getsockname()[1]
+            self._socks.append(sock)
+            thread = threading.Thread(target=serve, args=(sock,), daemon=True)
+            thread.start()
+            self._threads.append(thread)
+            out = signer_mainnet.protocol_probe(host="127.0.0.1", port=port)
+            self.assertEqual(out["protocol"], want, payload)
+            self.assertEqual(out["hmac_rejected"], want, payload)
+
+    def test_signer_identity_points_at_merged_production_signer(self):
+        self.assertEqual(
+            signer_mainnet.SIGNER_REVIEWED_HEAD,
+            "6d2480ce5a53c9b7dd574a01c257b4faa2f8dac9",
+        )
+        self.assertEqual(
+            signer_mainnet.SIGNER_MERGE_SHA,
+            "7e58e39817dce9b74c387ffe3a08536f804dcd05",
+        )
+        for stale in ("a901ef7a", "1c3e640a", "9798c38f"):
+            self.assertNotEqual(signer_mainnet.SIGNER_MERGE_SHA, stale)
+            self.assertNotEqual(signer_mainnet.SIGNER_REVIEWED_HEAD, stale)
+
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -11,7 +11,7 @@ The signer authorizes only. It never broadcasts. It never reads
 `LIVE402_PQ_FALCON_BROADCAST` or `LIVE402_PQ_FALCON_MAINNET_BROADCAST`.
 Destroying the Falcon key is not the kill switch.
 
-github.com/402signal/402signal-pq-signer was not readable from this
+github.com/402signalhq/402signal-pq-signer (historical: github.com/402signal/402signal-pq-signer) was not readable from this
 environment. Implement the signer in that private repo against this
 spec. Do not add Falcon SK handling to 402signal.
 
@@ -263,9 +263,9 @@ reimplement the private signer inside this public router.
 
 ## Parallel private-signer PR checklist
 
-Private repo: `402signal/402signal-pq-signer`
+Private repo: `402signalhq/402signal-pq-signer` (historical personal path `402signal/402signal-pq-signer` redirects)
 Suggested branch: `cursor/isolated-falcon-signer-9f06` follow-up
-Reviewed TestNet head remains `9798c38f` / merge `a901ef7a` until
+Historical TestNet head was `9798c38f` / merge `a901ef7a` until
 the pq-anchor/2 MainNet app lands.
 
 This agent cannot edit that private repo. The public router implements

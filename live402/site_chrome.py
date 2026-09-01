@@ -16,7 +16,7 @@ NAV = (
 )
 
 FOOTER = (
-    ("https://github.com/402signal/402signal", "GitHub", True),
+    ("https://github.com/402signalhq/402signal", "GitHub", True),
     ("https://x.com/402Signal", "@402Signal", True),
     ("/openapi.json", "OpenAPI", False),
     ("/mcp.json", "MCP", False),
