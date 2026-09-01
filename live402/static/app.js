@@ -86,7 +86,9 @@
     if (requireInvocable && requireInvocable.checked) body.require_invocable = true;
     const minObs = parsePositiveInt(minObservations && minObservations.value, 0);
     if (minObs != null) body.min_observations = minObs;
-    if (OBJECTIVES[policy.objective]) body.objective = policy.objective;
+    if (policy.objective !== "best" && OBJECTIVES[policy.objective]) {
+      body.objective = policy.objective;
+    }
     if (policy.preferNetwork !== "any" && RAILS[policy.preferNetwork]) {
       body.prefer_network = policy.preferNetwork;
     }
@@ -116,7 +118,7 @@
     const rows = [];
     rows.push(["Capability", q]);
     if (policy.network !== "any" && RAIL_NAMES[policy.network]) {
-      rows.push(["Network", RAIL_NAMES[policy.network] + " (hard lock)"]);
+      rows.push(["Network", RAIL_NAMES[policy.network] + " (required)"]);
     } else {
       rows.push(["Network", "any supported rail"]);
     }
@@ -128,10 +130,10 @@
     const minObs = parsePositiveInt(minObservations && minObservations.value, 0);
     if (minObs != null) rows.push(["Minimum observations", String(minObs)]);
     const objLabel = {
-      best: "best (default)",
-      cheapest: "cheapest among currently probed eligible candidates",
+      best: "default ranking",
+      cheapest: "lowest price among currently probed eligible candidates",
       fastest: "lowest this-request probe RTT",
-      most_reliable: "stronger observed history among currently probed eligible candidates",
+      most_reliable: "observed reliability among currently probed eligible candidates",
     };
     rows.push(["Objective", objLabel[policy.objective] || policy.objective]);
     if (policy.preferNetwork !== "any" && RAIL_NAMES[policy.preferNetwork]) {
@@ -147,7 +149,7 @@
 
   function policySummary() {
     const q = ((need && need.value) || "").trim();
-    if (!q) return "Enter a capability to compose the POST /route body.";
+    if (!q) return "Enter a capability above to generate the request body.";
     const clauses = [];
     clauses.push("POST /route will search for " + q + " services");
     if (policy.network !== "any" && RAIL_NAMES[policy.network]) {
@@ -192,7 +194,10 @@
     return head + ", " + tail.slice(0, -1).join(", ") + ", and " + tail[tail.length - 1] + ".";
   }
 
+  const EMPTY_REQUEST = "Enter a capability above to generate the request body.";
+
   function routeJsonText() {
+    if (!hasContent()) return EMPTY_REQUEST;
     return JSON.stringify(buildRouteBody(), null, 2);
   }
 
@@ -514,6 +519,7 @@
         c.classList.toggle("active", on);
         c.setAttribute("aria-pressed", on ? "true" : "false");
       });
+      if (typeof btn.blur === "function") btn.blur();
       syncSearch();
     });
   }

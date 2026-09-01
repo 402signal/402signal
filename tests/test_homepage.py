@@ -278,6 +278,13 @@ class HomepageProductTests(unittest.TestCase):
         self.assertIn("Return selected route + selected_payment, or a typed miss", html)
         self.assertIn("TRANSPARENCY", html)
         self.assertIn("Commit route evidence to the append-only log", html)
+        self.assertIn("Signed checkpoints are periodically anchored to Algorand TestNet.", html)
+        self.assertIn("Falcon-1024 post-quantum transaction authorization.", html)
+        self.assertIn(
+            "This post-quantum authorization protects the checkpoint transaction. "
+            "It does not make Base or Solana merchant payments post-quantum secure.",
+            html,
+        )
         self.assertIn("Verifiable routing history", html)
         self.assertIn("append-only Merkle log", html)
         self.assertIn("View verification details", html)
@@ -392,7 +399,8 @@ class HomepageProductTests(unittest.TestCase):
         self.assertIn("FREE · NOT A LIVE CHECK", html)
         self.assertIn("Discovery preview uses the capability and discovery network settings above.", html)
         self.assertIn("The route constraints below are included in the paid /route request and are not applied to preview results.", html)
-        self.assertIn("This browser page does not execute the paid request.", html)
+        self.assertIn("POST /route performs the paid live check.", html)
+        self.assertIn("This page builds the request but does not submit it.", html)
         self.assertNotIn("PQ", html)
         self.assertNotIn("Falcon", html)
         self.assertIn('id="need"', html)
@@ -491,10 +499,16 @@ class HomepageProductTests(unittest.TestCase):
         self.assertIn('data-depth="thorough"', html)
         self.assertIn('id="route-json"', html)
         self.assertNotIn('id="copy-route"', html)
-        self.assertIn("Hard policy lock", html)
-        self.assertIn("Weak preference", html)
+        self.assertIn("Required network", html)
+        self.assertIn("Limits discovery and paid selection to the selected network.", html)
+        self.assertIn("Leave as Any to search all supported networks.", html)
+        self.assertIn("No preference", html)
+        self.assertIn("Used for ranking only. It does not restrict the eligible networks.", html)
         self.assertIn("currently probed eligible candidates", html)
-        self.assertIn("probe RTT, not settlement latency", html)
+        self.assertIn("This is not settlement latency.", html)
+        self.assertNotIn("Hard policy lock", html)
+        self.assertNotIn("Network lock", html)
+        self.assertNotIn("Weak preference", html)
         self.assertIn("POST /route will search for ", js)
         self.assertIn("require a current ", js)
         self.assertIn("require invocation metadata", js)
@@ -548,6 +562,14 @@ class HomepageProductTests(unittest.TestCase):
         self.assertNotIn("Where it fits", html)
         self.assertNotIn("HEALTHY", html)
         self.assertNotIn("honest", html.lower())
+        self.assertIn(
+            "Routing evidence committed to append-only log. Signed checkpoints "
+            "periodically anchored to Algorand TestNet using Falcon-1024 "
+            "post-quantum authorization.",
+            html,
+        )
+        self.assertIn("Routing does not wait for confirmation.", html)
+        self.assertNotIn("may later be anchored", html)
 
     def test_developers_page_renders(self):
         html = self.devs
@@ -930,12 +952,151 @@ class HomepageProductTests(unittest.TestCase):
         self.assertIn("TestNet", html)
         self.assertIn("It is not a merchant payment.", html)
         self.assertIn("does not report whether a seller endpoint described its service accurately", html)
-        self.assertIn("Falcon-1024 does not make Base or Solana payments PQ-safe", html)
+        self.assertIn("native Falcon-1024 post-quantum authorization", html)
+        self.assertIn("does not make Base or Solana merchant payments post-quantum secure", html)
+        self.assertNotIn("PQ-safe", html)
+        self.assertIn("Authorization · Falcon-1024 · f1 as native Algorand PQ tx auth for the checkpoint", html)
         self.assertIn("Routing does not wait for confirmation.", html)
         self.assertIn("Later rewriting inconsistent with published checkpoints becomes detectable.", html)
         self.assertNotIn("See the check-first flow on the", html)
         self.assertNotIn("MainNet", html)
         self.assertNotIn('class="signal-flow"', html)
+
+    def test_catalog_chip_groups_start_with_exactly_one_selected(self):
+        html = self.catalog
+        for group_id in ("network-chips", "prefer-chips", "objective-chips", "depth-chips"):
+            match = re.search(r'id="%s"[^>]*>(.*?)</div>' % group_id, html, re.S)
+            self.assertIsNotNone(match, group_id)
+            block = match.group(1)
+            self.assertEqual(block.count('class="chip active"'), 1, group_id)
+            self.assertEqual(block.count('aria-pressed="true"'), 1, group_id)
+            self.assertEqual(block.count('aria-pressed="false"'), block.count('class="chip"'), group_id)
+
+    def test_catalog_json_mapping_and_empty_state(self):
+        html = self.catalog
+        js = self.js
+        self.assertIn('body.networks = [policy.network]', js)
+        self.assertNotIn("body.network =", js)
+        self.assertIn('body.prefer_network = policy.preferNetwork', js)
+        self.assertIn('if (policy.objective !== "best"', js)
+        self.assertIn('body.search_depth = "thorough"', js)
+        self.assertIn('policy.searchDepth === "thorough"', js)
+        self.assertNotIn('fetch("/route"', js)
+        self.assertIn("Enter a capability above to generate the request body.", html)
+        self.assertIn("Enter a capability above to generate the request body.", js)
+        self.assertIn(">Enter a capability above to generate the request body.</pre>", html)
+        self.assertNotIn(">{}</pre>", html)
+        self.assertIn("copyRouteJsonBtn.disabled = !ready", js)
+        self.assertIn("copyRouteCurlBtn.disabled = !ready", js)
+        self.assertIn(">Default ranking<", html)
+        self.assertIn(">Lowest price<", html)
+        self.assertIn(">Lowest probe latency<", html)
+        self.assertIn(">Observed reliability<", html)
+        self.assertIn(">No preference<", html)
+        self.assertIn("Minimum prior observations", html)
+        self.assertIn("Require invocation schema", html)
+        self.assertIn("body.require_invocable", js)
+        self.assertIn(">Generated request<", html)
+        self.assertNotIn("Request documentation", html)
+        self.assertNotIn(">Generate<", html)
+        self.assertNotIn("Generate live", html)
+        self.assertIn("c.classList.toggle(\"active\", on)", js)
+        self.assertIn('c.setAttribute("aria-pressed", on ? "true" : "false")', js)
+
+    def test_selected_vs_focus_are_distinct(self):
+        css = self.css
+        self.assertIn(".chip.active", css)
+        self.assertIn('.chip[aria-pressed="true"]', css)
+        self.assertIn(".chip:focus-visible", css)
+        self.assertIn(".chip:focus { outline: none; }", css)
+        self.assertNotIn(".chip:hover, .chip:focus { border-color: var(--accent);", css)
+        focus_block = css.split(".chip:focus-visible", 1)[1].split("}", 1)[0]
+        self.assertNotIn("var(--accent)", focus_block)
+        self.assertNotIn("var(--fox)", focus_block)
+
+    def test_human_html_references_versioned_assets(self):
+        from live402 import asset_version
+
+        ver = asset_version.asset_version()
+        self.assertTrue(ver)
+        self.assertNotIn("/", ver)
+        self.assertNotIn(":", ver)
+        for path, html in self.pages.items():
+            self.assertIn("/styles.css?v=%s" % ver, html, path)
+            self.assertNotIn('href="/styles.css"', html, path)
+            self.assertNotIn("FLY_IMAGE_REF", html, path)
+        self.assertIn("/app.js?v=%s" % ver, self.catalog)
+        self.assertIn("/app.js?v=%s" % ver, self.devs)
+        self.assertIn("/transparency.js?v=%s" % ver, self.transparency)
+        dash = _get_full(self.port, "/dashboard")[1]
+        route = _get_full(self.port, "/route", extra_headers={"Accept": "text/html"})[1]
+        self.assertIn("/dashboard.js?v=%s" % ver, dash)
+        self.assertIn("/styles.css?v=%s" % ver, route)
+        for name in ("index.html", "catalog.html", "how.html", "developers.html", "contact.html"):
+            source = _read(name)
+            self.assertIn('href="/styles.css"', source, name)
+            self.assertNotIn("?v=", source, name)
+
+    def test_html_revalidates_and_fingerprinted_assets_can_long_cache(self):
+        from live402 import asset_version
+
+        ver = asset_version.asset_version()
+        _st, _raw, home_hdrs = _get_full(self.port, "/")
+        self.assertEqual(home_hdrs.get("cache-control"), asset_version.HTML_REVALIDATE)
+        _st, _raw, cat_hdrs = _get_full(self.port, "/catalog")
+        self.assertEqual(cat_hdrs.get("cache-control"), asset_version.HTML_REVALIDATE)
+        _st, _raw, how_hdrs = _get_full(self.port, "/how")
+        self.assertEqual(how_hdrs.get("cache-control"), asset_version.HTML_REVALIDATE)
+        _st, _raw, tr_hdrs = _get_full(self.port, "/transparency")
+        self.assertEqual(tr_hdrs.get("cache-control"), "no-store")
+        _st, css, css_hdrs = _get_full(self.port, "/styles.css?v=%s" % ver)
+        self.assertEqual(_st, 200)
+        self.assertIn("text/css", css_hdrs.get("content-type", ""))
+        self.assertEqual(css_hdrs.get("cache-control"), asset_version.ASSET_LONG_CACHE)
+        _st, js, js_hdrs = _get_full(self.port, "/app.js?v=%s" % ver)
+        self.assertEqual(_st, 200)
+        self.assertNotIn("text/html", js_hdrs.get("content-type", ""))
+        self.assertEqual(js_hdrs.get("cache-control"), asset_version.ASSET_LONG_CACHE)
+        _st, _raw, bare_hdrs = _get_full(self.port, "/styles.css")
+        self.assertEqual(bare_hdrs.get("cache-control"), asset_version.HTML_REVALIDATE)
+        health_st, health_raw, _hdrs = _get_full(self.port, "/health")
+        self.assertEqual(health_st, 200)
+        self.assertEqual(json.loads(health_raw), {"ok": True})
+        self.assertNotIn(ver, health_raw)
+        for sneak in (
+            "/styles.css/../server.py",
+            "/app.js/../../README.md",
+            "/dashboard.js/%2e%2e/asset_version.py",
+        ):
+            sneak_st, sneak_raw, sneak_hdrs = _get_full(self.port, sneak)
+            self.assertEqual(sneak_st, 404, sneak)
+            self.assertIn("json", sneak_hdrs.get("content-type", ""), sneak)
+            self.assertNotIn("def ", sneak_raw, sneak)
+
+    def test_post_quantum_wording_precise_not_saturated(self):
+        banned = (
+            "FN-DSA",
+            "FIPS 206",
+            "quantum-proof",
+            "fully quantum-safe",
+            "PQ-safe",
+            "merchant payments PQ-safe",
+        )
+        self.assertIn("post-quantum", self.home.lower())
+        self.assertIn("post-quantum", self.transparency.lower())
+        self.assertIn("post-quantum", self.how.lower())
+        self.assertNotIn("post-quantum", self.devs.lower())
+        self.assertNotIn("post-quantum", self.catalog.lower())
+        self.assertNotIn("post-quantum", self.contact.lower())
+        for path, html in self.pages.items():
+            for phrase in banned:
+                self.assertNotIn(phrase, html, f"{path}: {phrase}")
+            self.assertNotIn("Circle", html, path)
+            self.assertNotIn(">Try 402Signal<", html, path)
+            self.assertNotIn(">Try it<", html, path)
+            labels = [text for text, _href in _parse(html).nav_links]
+            self.assertIn("Explore", labels, path)
+            self.assertNotIn("Try", labels, path)
 
 
 if __name__ == "__main__":

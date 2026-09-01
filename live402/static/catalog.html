@@ -53,9 +53,9 @@
         </div>
 
         <fieldset class="policy-field lock">
-          <legend>Network lock</legend>
-          <p class="policy-hint">Hard policy lock. Discovery and a paid winner must be on this rail from the current observed 402. Any searches all rails.</p>
-          <div class="chips lock-chips" id="network-chips" role="radiogroup" aria-label="Network lock">
+          <legend>Required network</legend>
+          <p class="policy-hint">Limits discovery and paid selection to the selected network. Leave as Any to search all supported networks.</p>
+          <div class="chips lock-chips" id="network-chips" role="radiogroup" aria-label="Required network">
             <button type="button" class="chip active" data-network="any" aria-pressed="true">Any</button>
             <button type="button" class="chip" data-network="base" aria-pressed="false">Base</button>
             <button type="button" class="chip" data-network="solana" aria-pressed="false">Solana</button>
@@ -65,9 +65,9 @@
 
         <fieldset class="policy-field prefer">
           <legend>Prefer network</legend>
-          <p class="policy-hint">Weak preference. Ranks this rail first but still searches all rails the network lock allows. Not a filter.</p>
+          <p class="policy-hint">Used for ranking only. It does not restrict the eligible networks.</p>
           <div class="chips prefer-chips" id="prefer-chips" role="radiogroup" aria-label="Prefer network">
-            <button type="button" class="chip active" data-prefer="any" aria-pressed="true">Any</button>
+            <button type="button" class="chip active" data-prefer="any" aria-pressed="true">No preference</button>
             <button type="button" class="chip" data-prefer="base" aria-pressed="false">Base</button>
             <button type="button" class="chip" data-prefer="solana" aria-pressed="false">Solana</button>
             <button type="button" class="chip" data-prefer="algorand" aria-pressed="false">Algorand</button>
@@ -98,25 +98,25 @@
             <input id="max-price" type="number" min="0" step="0.01" inputmode="decimal" placeholder="0.05" />
           </div>
           <div class="policy-field">
-            <label class="label" for="min-observations">Minimum observations</label>
+            <label class="label" for="min-observations">Minimum prior observations</label>
             <input id="min-observations" type="number" min="0" step="1" inputmode="numeric" placeholder="3" />
           </div>
         </div>
 
         <label class="toggle">
           <input id="require-invocable" type="checkbox" />
-          <span>Require invocable</span>
+          <span>Require invocation schema</span>
         </label>
-        <p class="policy-hint">If set, a paid /route drops live hits without an input schema.</p>
+        <p class="policy-hint">Exclude live payment endpoints that do not provide enough input information to construct the call.</p>
 
         <fieldset class="policy-field">
           <legend>Objective</legend>
-          <p class="policy-hint">Cheapest is cheapest among currently probed eligible candidates. Fastest is this-request probe RTT, not settlement latency.</p>
+          <p class="policy-hint">Default ranking uses the server's usual order. Lowest price, lowest probe latency, and observed reliability apply only to currently probed eligible candidates.</p>
           <div class="chips" id="objective-chips" role="radiogroup" aria-label="Objective">
-            <button type="button" class="chip active" data-objective="best" aria-pressed="true">Best (default)</button>
-            <button type="button" class="chip" data-objective="cheapest" aria-pressed="false">Cheapest</button>
-            <button type="button" class="chip" data-objective="fastest" aria-pressed="false">Fastest</button>
-            <button type="button" class="chip" data-objective="most_reliable" aria-pressed="false">Most reliable</button>
+            <button type="button" class="chip active" data-objective="best" aria-pressed="true">Default ranking</button>
+            <button type="button" class="chip" data-objective="cheapest" aria-pressed="false">Lowest price</button>
+            <button type="button" class="chip" data-objective="fastest" aria-pressed="false">Lowest probe latency</button>
+            <button type="button" class="chip" data-objective="most_reliable" aria-pressed="false">Observed reliability</button>
           </div>
         </fieldset>
 
@@ -124,17 +124,19 @@
           <summary>Advanced route constraints</summary>
           <div class="policy-grid pair">
             <div class="policy-field">
-              <label class="label" for="max-total-cost">Max total cost (USD)</label>
+              <label class="label" for="max-total-cost">Maximum total cost</label>
               <input id="max-total-cost" type="number" min="0" step="0.01" inputmode="decimal" placeholder="0.10" />
+              <p class="policy-hint">Merchant price plus known fees. Unknown required cost components fail closed.</p>
             </div>
             <div class="policy-field">
-              <label class="label" for="max-latency">Max probe latency (ms)</label>
+              <label class="label" for="max-latency">Maximum probe latency</label>
               <input id="max-latency" type="number" min="0" step="1" inputmode="numeric" placeholder="800" />
+              <p class="policy-hint">Maximum HTTP probe RTT for the current check. This is not settlement latency.</p>
             </div>
           </div>
           <fieldset class="policy-field">
             <legend>Search depth</legend>
-            <p class="policy-hint">standard is the typical probe plan. thorough may probe deeper. Hard server ceiling is 20.</p>
+            <p class="policy-hint">Thorough allows a deeper probe set. The server-wide maximum is 20 candidates.</p>
             <div class="chips" id="depth-chips" role="radiogroup" aria-label="Search depth">
               <button type="button" class="chip active" data-depth="standard" aria-pressed="true">Standard</button>
               <button type="button" class="chip" data-depth="thorough" aria-pressed="false">Thorough</button>
@@ -142,9 +144,9 @@
           </fieldset>
         </details>
 
-        <h3>Request documentation</h3>
+        <h3>Generated request</h3>
         <div id="policy-facts" class="policy-facts"></div>
-        <p id="policy-summary" class="policy-summary">Enter a capability to compose the POST /route body.</p>
+        <p id="policy-summary" class="policy-summary">Enter a capability above to generate the request body.</p>
         <div class="code-toolbar">
           <p class="muted">POST /route JSON from these controls</p>
           <div class="row">
@@ -153,9 +155,9 @@
             <a href="/developers">Developers</a>
           </div>
         </div>
-        <pre id="route-json" class="code" aria-live="polite">{}</pre>
+        <pre id="route-json" class="code" aria-live="polite">Enter a capability above to generate the request body.</pre>
         <pre id="route-curl" class="code" hidden></pre>
-        <p class="note">Sending this request to POST /route starts the paid routing check. Unpaid returns HTTP 402 for $0.01 USDC. This browser page does not execute the paid request.</p>
+        <p class="note">POST /route performs the paid live check. Unpaid HTTP 402 $0.01 USDC. This page builds the request but does not submit it.</p>
       </section>
     </main>
 

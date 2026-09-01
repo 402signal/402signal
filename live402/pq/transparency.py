@@ -783,7 +783,10 @@ def _technical(model: dict) -> str:
     conf = model["confirmed"]
     note = model["note"]
     parts = []
-    parts.append("<p>Authorization · Falcon-1024 · f1</p>")
+    parts.append(
+        "<p>Authorization · Falcon-1024 · f1 as native Algorand PQ tx auth "
+        "for the checkpoint</p>"
+    )
     if note:
         parts.append(
             "<p>Canonical PQ1 note · reconstructed from independently verified "
@@ -1003,7 +1006,7 @@ def _main(model: dict) -> str:
         "        <h1>Verify the transparency log</h1>\n"
         "        <p class=\"lede\">402Signal records commitments to its routing evidence in an "
         "append-only transparency log. Signed checkpoints are periodically anchored to "
-        "Algorand TestNet using native Falcon-1024 authorization.</p>\n"
+        "Algorand TestNet using native Falcon-1024 post-quantum authorization.</p>\n"
         "        <p class=\"note\">Routing does not wait for confirmation.</p>\n"
         "        <p class=\"privacy-note\">Public transparency commitments do not expose raw "
         "needs, wallets, payment signatures, or seller response bodies.</p>\n"
@@ -1036,7 +1039,8 @@ def _main(model: dict) -> str:
         + "        <p>This page reports 402Signal's committed routing-evidence history. "
         + "It does not report whether a seller endpoint described its service accurately. "
         + "The Algorand transaction authorizes a checkpoint. It is not a merchant payment. "
-        + "Falcon-1024 does not make Base or Solana payments PQ-safe. "
+        + "This post-quantum authorization protects the checkpoint transaction. "
+        + "It does not make Base or Solana merchant payments post-quantum secure. "
         + "Routing does not wait for confirmation. The caller retains custody of keys, "
         + "signing, and the selected service's payment.</p>\n"
         + "      </section>\n"

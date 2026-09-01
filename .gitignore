@@ -49,6 +49,9 @@ venv/
 *.swp
 *~
 
+# Build-time asset fingerprint (written in the image, not authored)
+.asset-version
+
 # Fly local
 .fly/
 

@@ -11,6 +11,29 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
+# Fingerprint static assets from the git SHA of this build.
+# Pass --build-arg GIT_SHA=$(git rev-parse HEAD) when available.
+# If omitted, record SHA from the copied .git/HEAD + refs (see .dockerignore).
+# Runtime never reads FLY_IMAGE_REF and does not expose a public SHA endpoint.
+ARG GIT_SHA=
+RUN set -eu; \
+    sha="${GIT_SHA}"; \
+    if [ -z "${sha}" ] && [ -f /app/.git/HEAD ]; then \
+      ref="$(cat /app/.git/HEAD)"; \
+      case "${ref}" in \
+        ref:*) \
+          refpath="/app/.git/${ref#ref: }"; \
+          if [ -f "${refpath}" ]; then \
+            sha="$(tr -d '[:space:]' < "${refpath}")"; \
+          elif [ -f /app/.git/packed-refs ]; then \
+            sha="$(awk -v r="${ref#ref: }" '$2==r {print $1; exit}' /app/.git/packed-refs)"; \
+          fi ;; \
+        *) sha="$(printf '%s' "${ref}" | tr -d '[:space:]')" ;; \
+      esac; \
+    fi; \
+    if [ -n "${sha}" ]; then printf '%s\n' "${sha}" > /app/.asset-version; fi
+ENV LIVE402_ASSET_VERSION=${GIT_SHA}
+
 ENV LIVE402_HOST=0.0.0.0
 ENV PORT=8080
 ENV PYTHONPATH=/app
