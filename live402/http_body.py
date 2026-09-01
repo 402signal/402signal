@@ -7,7 +7,7 @@ import math
 
 # 64 KiB hard cap. Callers may pass a smaller max_body.
 MAX_BODY = 64 * 1024
-BODY_READ_TIMEOUT = 8.0
+BODY_READ_TIMEOUT = 3.0
 
 
 class BodyReadError(Exception):

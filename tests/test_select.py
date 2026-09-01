@@ -44,18 +44,21 @@ def _hist(success_7d=None, n_7d=0, success_24h=None, n_24h=0):
     }
 
 
+_UNSET = object()
+
+
 def _hit(
     url="https://a.example/x",
     rail="base",
     live=True,
-    pay_to=None,
+    pay_to=_UNSET,
     amount=10000,
     latency=10,
     invocable=True,
     history=None,
     **extra,
 ):
-    if pay_to is None:
+    if pay_to is _UNSET:
         pay_to = _payto_for_rail(rail)
     asset = extra.pop("asset", None)
     accepts = extra.pop("accepts", None)

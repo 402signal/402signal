@@ -26,7 +26,7 @@ def _item(url, amount="10000", network="base"):
         "accepts": [
             {
                 "network": network,
-                "payTo": "0xabc",
+                "payTo": "0xabcabcabcabcabcabcabcabcabcabcabcabcabca",
                 "amount": amount,
                 "asset": _usdc(network),
             }
@@ -38,7 +38,7 @@ def _live(url, amount=10000, latency=10):
     return {
         "live": True,
         "url": url,
-        "payTo": "0xabc",
+        "payTo": "0xabcabcabcabcabcabcabcabcabcabcabcabcabca",
         "amount": amount,
         "asset": _usdc(),
         "latency_ms": latency,
@@ -53,7 +53,7 @@ def _live(url, amount=10000, latency=10):
             {
                 "network": "eip155:8453",
                 "asset": _usdc(),
-                "payTo": "0xabc",
+                "payTo": "0xabcabcabcabcabcabcabcabcabcabcabcabcabca",
                 "amount": amount,
             }
         ],
@@ -178,7 +178,7 @@ class ProbeLifecycleTests(unittest.TestCase):
                 "live": True,
                 "status": 402,
                 "latency_ms": 10,
-                "payTo": "0xabc",
+                "payTo": "0xabcabcabcabcabcabcabcabcabcabcabcabcabca",
                 "batch_id": "seedbatch",
             },
         )
@@ -215,7 +215,7 @@ class ProbeLifecycleTests(unittest.TestCase):
                 "live": True,
                 "status": 402,
                 "latency_ms": 9,
-                "payTo": "0xabc",
+                "payTo": "0xabcabcabcabcabcabcabcabcabcabcabcabcabca",
                 "batch_id": bid,
             },
         )
@@ -261,7 +261,7 @@ class ProbeLifecycleTests(unittest.TestCase):
                 "live": True,
                 "status": 402,
                 "latency_ms": 80,
-                "payTo": "0xabc",
+                "payTo": "0xabcabcabcabcabcabcabcabcabcabcabcabcabca",
                 "batch_id": bid,
             },
         )

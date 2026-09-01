@@ -36,7 +36,10 @@ def _complete_envelope(pay_to, amount="10000", rail="base"):
     }
 
 
-def _snap(live=True, payTo="0xabc", **extra):
+VALID_BASE_PAYTO = "0xabcabcabcabcabcabcabcabcabcabcabcabcabca"
+
+
+def _snap(live=True, payTo=VALID_BASE_PAYTO, **extra):
     row = {
         "live": bool(live),
         "status": 402 if live else None,
@@ -59,7 +62,7 @@ def _snap(live=True, payTo="0xabc", **extra):
     return row
 
 
-def _probe_result(pay_to="0xabc", schema=False, catalog_pay=None, url="https://wx.example/forecast"):
+def _probe_result(pay_to=VALID_BASE_PAYTO, schema=False, catalog_pay=None, url="https://wx.example/forecast"):
     snap = {
         "live": True,
         "status": 402,
@@ -136,10 +139,10 @@ class HistoryDbTests(unittest.TestCase):
         unseen = "https://a.example/algo-weather"
         history.record_probe(
             seen,
-            _snap(live=True, payTo="0xabc", latency_ms=17, invocable=1, payable=1),
+            _snap(live=True, payTo=VALID_BASE_PAYTO, latency_ms=17, invocable=1, payable=1),
         )
         for _ in range(3):
-            history.record_probe(seen, _snap(live=True, payTo="0xabc", latency_ms=17))
+            history.record_probe(seen, _snap(live=True, payTo=VALID_BASE_PAYTO, latency_ms=17))
         obs = history.preview_observations([seen, unseen])
         self.assertEqual(obs[unseen]["status"], "not_yet_observed")
         self.assertEqual(obs[seen]["status"], "observed")
@@ -307,14 +310,14 @@ class HistoryDbTests(unittest.TestCase):
                 self.fail("record_probe raised %r" % exc)
 
     def test_probe_result_verified_and_readiness(self):
-        payable = _probe_result(pay_to="0xabc", schema=False)
+        payable = _probe_result(schema=False)
         self.assertEqual(payable.get("verified_seconds_ago"), 0)
         self.assertEqual(payable.get("verified_at"), payable.get("probed_at"))
         self.assertIn(payable.get("readiness"), ("payable", "recently_verified"))
         self.assertNotEqual(payable.get("readiness"), "healthy")
         self.assertIn(payable.get("readiness_healthy"), (None, "unknown"))
         self.assertTrue(payable.get("live"))
-        inv = _probe_result(pay_to="0xabc", schema=True)
+        inv = _probe_result(schema=True)
         self.assertEqual(inv.get("verified_seconds_ago"), 0)
         self.assertEqual(inv.get("readiness"), "invocable")
         self.assertTrue(inv.get("invocable"))
@@ -487,7 +490,7 @@ class HistoryDbTests(unittest.TestCase):
 
     def test_envelope_amount_and_schema_are_observed(self):
         url = "https://hist.example/envelope"
-        snap = _snap(live=True, payTo="0xabc")
+        snap = _snap(live=True, payTo=VALID_BASE_PAYTO)
         snap["envelope"] = {
             "x402Version": 2,
             "accepts": [
@@ -496,7 +499,7 @@ class HistoryDbTests(unittest.TestCase):
                     "network": payment.BASE_CAIP2,
                     "asset": payment.USDC_BASE,
                     "amount": "10000",
-                    "payTo": "0xabc",
+                    "payTo": VALID_BASE_PAYTO,
                 }
             ],
             "inputSchema": {"type": "object", "properties": {"q": {"type": "string"}}, "required": ["q"]},
@@ -786,13 +789,13 @@ class RankPayToChangedTests(unittest.TestCase):
             {
                 "url": "https://stable.example/weather",
                 "description": "weather forecast",
-                "accepts": [{"network": "base", "payTo": "0xabc"}],
+                "accepts": [{"network": "base", "payTo": VALID_BASE_PAYTO}],
             },
         ]
 
         def fake_probe(url, catalog_item=None, deadline=None, **kwargs):
             _ = catalog_item, deadline
-            pay_to = "0xnew" if "changed" in url else "0xabc"
+            pay_to = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" if "changed" in url else VALID_BASE_PAYTO
             row = {
                 "live": True,
                 "url": url,

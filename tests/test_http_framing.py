@@ -185,8 +185,17 @@ class FramingServerTests(unittest.TestCase):
         self.assertIn(b"Connection: close", raw)
 
     def test_short_body(self):
-        raw = self._post("Content-Length: 40\r\n", b'{"need":"x"}')
+        raw = _raw(
+            self.port,
+            (
+                b"POST /route HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+                b"Content-Type: application/json\r\nContent-Length: 40\r\n\r\n"
+                b'{"need":"x"}'
+            ),
+            timeout=12,
+        )
         self.assertEqual(_status(raw), 400)
+        self.assertIn(b"Connection: close", raw)
 
     def test_malformed_json(self):
         body = b"{not-json"
