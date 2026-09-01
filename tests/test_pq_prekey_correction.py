@@ -31,7 +31,7 @@ _GOLDEN_POLICY = {
     "lv": 1010,
     "min_fee": 1000,
     "size_rule": "deterministic_falcon_envelope_estimate",
-    "size_version": 1,
+    "size_version": "1",
     "snapshot_at": 1700000000,
 }
 FLAT_HMAC_GOLDEN = (
@@ -200,7 +200,7 @@ class PrekeyCorrectionTests(unittest.TestCase):
         self.assertEqual(policy["fv"], 1)
         self.assertEqual(policy["lv"], 1001)
         self.assertEqual(policy["size_rule"], "deterministic_falcon_envelope_estimate")
-        self.assertEqual(policy["size_version"], 1)
+        self.assertEqual(policy["size_version"], "1")
 
     def test_empty_params_do_not_hide_missing_snapshot(self):
         with self.assertRaises(canary.CanaryError):
@@ -243,7 +243,7 @@ class PrekeyCorrectionTests(unittest.TestCase):
             "canonical_fee": 3000,
             "snapshot_at": 1_700_000_000,
             "size_rule": "deterministic_falcon_envelope_estimate",
-            "size_version": 1,
+            "size_version": "1",
         }
         body = signer_mainnet.canonical_bytes(
             origin=ORIGIN_MAINNET,
@@ -262,7 +262,7 @@ class PrekeyCorrectionTests(unittest.TestCase):
         self.assertIn(b"v=pq-anchor/2\n", body)
         self.assertNotIn(b"policy=", body)
         self.assertNotIn(b"txn=", body)
-        missing = {**policy, "size_version": 2}
+        missing = {**policy, "size_version": "2"}
         with self.assertRaises(signer_mainnet.SignerClientError):
             signer_mainnet.canonical_bytes(
                 origin=ORIGIN_MAINNET,
@@ -487,9 +487,58 @@ class PrekeyCorrectionTests(unittest.TestCase):
         self.assertFalse(status["confirm_falcon_compatible"])
         self.assertFalse(status["confirmation_ready"])
 
+    def test_narrow_policy_rejects_int_size_version(self):
+        """Go SizeVersion is string; JSON number 1 must not be coerced."""
+        policy = {
+            "canonical_fee": 3000,
+            "fee_per_byte": 0,
+            "fv": 10,
+            "last_round": 10,
+            "lv": 1010,
+            "min_fee": 1000,
+            "size_rule": "deterministic_falcon_envelope_estimate",
+            "size_version": 1,
+            "snapshot_at": 1700000000,
+        }
+        with self.assertRaises(signer_mainnet.SignerClientError) as ctx:
+            signer_mainnet.narrow_policy(policy)
+        self.assertEqual(str(ctx.exception), "policy field missing")
+
+    def test_narrow_policy_emits_size_version_json_string(self):
+        """After narrow_policy, JSON wire contains string '1' not number 1."""
+        policy = {
+            "canonical_fee": 3000,
+            "fee_per_byte": 0,
+            "fv": 10,
+            "last_round": 10,
+            "lv": 1010,
+            "min_fee": 1000,
+            "size_rule": "deterministic_falcon_envelope_estimate",
+            "size_version": "1",
+            "snapshot_at": 1700000000,
+        }
+        bound = signer_mainnet.narrow_policy(policy)
+        self.assertIsInstance(bound["size_version"], str)
+        self.assertEqual(bound["size_version"], "1")
+        encoded = json.dumps({"policy": bound}, separators=(",", ":"))
+        self.assertIn('"size_version":"1"', encoded)
+        self.assertNotIn('"size_version":1', encoded)
+        self.assertNotIn('"size_version": 1', encoded)
+        body = signer_mainnet.canonical_bytes(
+            origin=ORIGIN_MAINNET,
+            tree_size=2,
+            root=_GOLDEN_ROOT,
+            consistency=[],
+            timestamp=1700000000,
+            request_id="golden-v2",
+            checkpoint="NOTE",
+            policy=bound,
+        )
+        self.assertIn(b"size_version=1\n", body)
+
     def test_flat_hmac_golden_vector_matches_go_signer_format(self):
         self.assertEqual(signer_mainnet.CANONICAL_KEYS, FLAT_HMAC_FIELD_ORDER)
-        self.assertEqual(signer_mainnet.HMAC_SIZE_VERSION, 1)
+        self.assertEqual(signer_mainnet.HMAC_SIZE_VERSION, "1")
         want = FLAT_HMAC_GOLDEN.encode("utf-8")
         self.assertEqual(len(want), 380)
         body = signer_mainnet.canonical_bytes(
