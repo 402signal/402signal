@@ -57,6 +57,10 @@ def _direct_url_result(body: dict, url: str, need: str, deadline: float) -> tupl
             "probe_ceiling": 1,
             "probe_budget_exhausted": False,
             "candidate_evaluation_complete": True,
+            "evaluation_complete": True,
+            "discovered_count": 0,
+            "probed_count": 0,
+            "unprobed_count": 0,
             "payTo": None,
             "traction": "unknown",
             "objective": objective,
@@ -97,6 +101,10 @@ def _direct_url_result(body: dict, url: str, need: str, deadline: float) -> tupl
     result["probe_ceiling"] = 1
     result["probe_budget_exhausted"] = False
     result["candidate_evaluation_complete"] = True
+    result["evaluation_complete"] = True
+    result["discovered_count"] = 0
+    result["probed_count"] = 1
+    result["unprobed_count"] = 0
     result.setdefault("payTo", None)
     result.setdefault("traction", "unknown")
     policy_mod.attach_policy(result, body)
@@ -176,8 +184,20 @@ def run_probe(body: dict, deadline: float | None = None) -> tuple[int, dict]:
     result.setdefault("payTo", None)
     result.setdefault("traction", "unknown")
     policy_mod.attach_policy(result, body)
-    if result.get("live"):
+    if result.get("live") and select.http200_winner_ok(result, objective, constraints):
         return 200, result
+    if result.get("live"):
+        result["miss_reason"] = result.get("miss_reason") or "constraints_unmet"
+        if result.get("miss_reason") == "no_input_schema":
+            result["miss_reason"] = "constraints_unmet"
+        result["stop_reason"] = "constraints_unmet"
+        unmet = select.collect_unmet_constraints([result], constraints)
+        if unmet:
+            result["unmet_constraints"] = unmet
+        result["live"] = False
+        result["invocable"] = False
+        result["payable"] = False
+        result["selected_payment"] = None
     return 503, result
 
 

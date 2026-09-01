@@ -125,6 +125,13 @@ class EngineUsesStructuredOnlyTests(unittest.TestCase):
         self.assertTrue(select.passes_constraints(cheap, cons))
         self.assertFalse(select.passes_constraints(dear, cons))
 
+    def test_attach_policy_echoes_structured_networks(self):
+        body = {"need": "algorand asset lookup", "networks": ["algorand"]}
+        out = policy.attach_policy({}, body)
+        self.assertEqual(out["interpreted_constraints"].get("networks"), ["algorand"])
+        self.assertEqual(out["applied_constraints"].get("networks"), ["algorand"])
+        self.assertNotEqual(out["interpreted_constraints"], {})
+
     def test_unresolved_nl_does_not_fail_closed_unless_structured(self):
         compiled = policy.compile_policy("weather with high reputation")
         self.assertTrue(compiled["unresolved_constraints"])

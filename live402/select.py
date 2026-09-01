@@ -1,4 +1,18 @@
-"""Constraint-aware best-of-N selection. Rail-neutral PRE-PAYMENT SIGNAL. Fail closed. Never pay."""
+"""Constraint-aware best-of-N selection. Rail-neutral PRE-PAYMENT SIGNAL. Fail closed. Never pay.
+
+networks is a hard policy lock: a HTTP 200 winner must carry selected_payment
+from the CURRENT observed HTTP 402, and that option's rail must be in
+request.networks (same rail_of_network matching the rest of the product).
+Catalog claims never satisfy networks and never fill selected_payment.
+
+prefer_network is a weak ranking preference only. It does not restrict
+discovery or selection. Do not treat it as a filter.
+
+cheapest / fastest / most_reliable rank the probed survivor set (currently
+probed eligible candidates), not every discovered endpoint. fastest uses
+this-request probe RTT (latency_ms), not settlement latency.
+fastest_settlement is a separate objective.
+"""
 
 from __future__ import annotations
 
@@ -18,6 +32,7 @@ OBJECTIVES = (
 RAILS = frozenset(("base", "solana", "algorand"))
 WEAK_MIN_N = 3
 MATURE_N = 10
+COMPARED_CAP = 5
 # Keys we still cannot compute. Empty in this slice: settlement/reputation/success
 # are measured when data exists and fail closed when unknown.
 UNMEASURED_CONSTRAINTS = ()
@@ -387,13 +402,71 @@ def amount_atomic(result) -> int | None:
 
 
 def _result_rails(result) -> set:
+    """Observed payment-option rails only. Catalog result.rail must not count."""
     rails: set = set()
-    if isinstance(result, dict) and result.get("rail") in RAILS:
-        rails.add(result.get("rail"))
     for opt in payment_options(result):
         if opt.get("rail") in RAILS:
             rails.add(opt["rail"])
     return rails
+
+
+def _complete_options_for_constraints(result, cons) -> list[dict]:
+    """Complete CURRENT observed options that survive network + price bounds."""
+    env = result.get("envelope") if isinstance(result, dict) and isinstance(result.get("envelope"), dict) else {}
+    return [
+        o
+        for o in _options_for_constraints(result, cons)
+        if payment.is_complete_payment_option(o, env)
+    ]
+
+
+def selected_payment_is_complete(selected) -> bool:
+    """True iff selected_payment is a complete observed option. Never invent fields."""
+    if not isinstance(selected, dict):
+        return False
+    rail = selected.get("rail")
+    if rail not in RAILS:
+        return False
+    network = selected.get("network")
+    if not network or payment.rail_of_network(network) != rail:
+        return False
+    if selected.get("amount_atomic") is None:
+        return False
+    if not selected.get("asset"):
+        return False
+    if not selected.get("payTo"):
+        return False
+    return True
+
+
+def selected_payment_matches_networks(selected, constraints) -> bool:
+    """selected_payment.network must be in request.networks when that lock is set."""
+    rails = constraints.get("rails") if isinstance(constraints, dict) else None
+    if not isinstance(rails, frozenset):
+        return True
+    if not selected_payment_is_complete(selected):
+        return False
+    rail = selected.get("rail") or payment.rail_of_network(selected.get("network"))
+    return rail in rails
+
+
+def http200_winner_ok(result, objective=None, constraints=None) -> bool:
+    """HTTP 200 requires a live payable winner plus the exact observed option.
+
+    selected_payment must be CURRENT observed 402 (never catalog). When
+    networks is a nonempty lock, that option's rail must be in the lock.
+    """
+    if not isinstance(result, dict) or not result.get("live"):
+        return False
+    if not _is_payable(result):
+        return False
+    cons = constraints if isinstance(constraints, dict) else {}
+    selected = result.get("selected_payment")
+    if not selected_payment_is_complete(selected):
+        selected = pick_selected_payment(result, objective, cons)
+    if not selected_payment_is_complete(selected):
+        return False
+    return selected_payment_matches_networks(selected, cons)
 
 
 def _options_for_constraints(result, cons) -> list[dict]:
@@ -575,10 +648,11 @@ def passes_constraints(result, constraints) -> bool:
         return False
     rails = cons.get("rails")
     if isinstance(rails, frozenset):
-        if _result_rails(result).isdisjoint(rails):
+        # Catalog result.rail is not a matching observed option. Fail closed.
+        if not _complete_options_for_constraints(result, cons):
             return False
-    if cons.get("max_amount_atomic") is not None or cons.get("max_price_usd") is not None:
-        # Unknown or cross-asset atomic cannot apply the bound — drop the candidate.
+    elif cons.get("max_amount_atomic") is not None or cons.get("max_price_usd") is not None:
+        # Unknown or cross-asset atomic cannot apply the bound. Drop the candidate.
         if not _options_for_constraints(result, cons):
             return False
     max_probe = cons.get("max_probe_latency_ms")
@@ -642,8 +716,12 @@ def _readiness_tier(result) -> int:
 
 
 def _best_usd(result, cons=None) -> float | None:
-    opts = _options_for_constraints(result, cons or {})
+    cons = cons if isinstance(cons, dict) else {}
+    opts = _options_for_constraints(result, cons)
     if not opts:
+        # Do not fall back to another rail when networks locked this candidate.
+        if isinstance(cons.get("rails"), frozenset):
+            return None
         opts = payment_options(result)
     vals = [o.get("normalized_usd") for o in opts if o.get("normalized_usd") is not None]
     if not vals:
@@ -652,8 +730,11 @@ def _best_usd(result, cons=None) -> float | None:
 
 
 def _best_atomic_for_asset(result, asset_key: str, cons=None) -> int | None:
-    opts = _options_for_constraints(result, cons or {})
+    cons = cons if isinstance(cons, dict) else {}
+    opts = _options_for_constraints(result, cons)
     if not opts:
+        if isinstance(cons.get("rails"), frozenset):
+            return None
         opts = payment_options(result)
     vals = []
     for opt in opts:
@@ -705,6 +786,8 @@ def _cheapest_comparable_subset(results, cons) -> list[dict]:
     for result in results:
         opts = _options_for_constraints(result, cons)
         if not opts:
+            if isinstance(cons.get("rails"), frozenset):
+                continue
             opts = payment_options(result)
         usd = [o for o in opts if o.get("normalized_usd") is not None]
         if usd:
@@ -912,6 +995,10 @@ def pick_winner(results: list[dict], objective: str, constraints: dict | None = 
     First last_payTo rotation (payTo_pending) is dropped unless
     accept_payTo_change. Claimed vs observed (payTo_changed) stays
     pickable so catalog mismatch does not brick a live dest.
+
+    A winner without a complete CURRENT observed selected_payment is not a
+    winner. networks is a hard lock on that observed option, never on a
+    catalog rail tag.
     """
     if not isinstance(results, list) or not results:
         return None
@@ -939,7 +1026,10 @@ def pick_winner(results: list[dict], objective: str, constraints: dict | None = 
     cmp_fn = _CMP.get(obj, _cmp_best)
     # Stable: original remaining order is the last tie-break (first wins).
     ranked = sorted(remaining, key=cmp_to_key(cmp_fn))
-    return ranked[0]
+    for candidate in ranked:
+        if pick_selected_payment(candidate, obj, cons) is not None:
+            return candidate
+    return None
 
 
 def _readiness_label(result) -> str | None:
@@ -968,53 +1058,152 @@ def _compared_7d(result) -> tuple[int, float | None]:
     return n_7d, _as_float(hist.get("success_7d"))
 
 
-def comparison(results, winner, objective=None, constraints=None) -> list[dict]:
-    """Slim rows for a later `compared` field. Cap 5. n<3 → success_7d is None.
+def _is_winner_result(result, winner) -> bool:
+    if not isinstance(result, dict) or not isinstance(winner, dict):
+        return False
+    if result is winner:
+        return True
+    url = result.get("url")
+    return bool(url) and url == winner.get("url")
 
-    amount_atomic / rail / selected_payment on the winner row are the same
-    CURRENT OBSERVED option stored on selected_payment.
+
+def _compared_row(result, selected, pay) -> dict:
+    n_7d, success_7d = _compared_7d(result)
+    row = {
+        "url": result.get("url"),
+        "rail": (pay or {}).get("rail") or result.get("rail"),
+        "amount_atomic": (pay or {}).get("amount_atomic")
+        if pay and pay.get("amount_atomic") is not None
+        else amount_atomic(result),
+        "latency_ms": latency_ms(result),
+        "success_7d": success_7d,
+        "n_7d": n_7d,
+        "readiness": _readiness_label(result),
+        "live": bool(result.get("live")),
+        "invocable": bool(result.get("invocable")),
+        "selected": bool(selected),
+    }
+    if selected and pay:
+        row["selected_payment"] = pay
+    rep = reputation.public_row(result)
+    if rep:
+        row["reputation"] = rep
+    eco = None
+    if pay and pay.get("economics"):
+        eco = pay.get("economics")
+    else:
+        eco = economics.for_result(result, pay)
+    if eco:
+        row["economics"] = eco
+    return row
+
+
+def comparison(results, winner, objective=None, constraints=None) -> list[dict]:
+    """Slim rows for a later `compared` field. Cap COMPARED_CAP.
+
+    n<3 → success_7d is None. amount_atomic / rail / selected_payment on the
+    winner row are the same CURRENT OBSERVED option stored on selected_payment.
+    The winner always occupies a slot even when the list is capped.
     """
     rows: list[dict] = []
     if not isinstance(results, list):
-        return rows
+        results = []
     winner_pay = None
     if isinstance(winner, dict):
         winner_pay = winner.get("selected_payment")
         if not isinstance(winner_pay, dict):
             winner_pay = pick_selected_payment(winner, objective, constraints)
+    winner_row = None
     for result in results:
         if not isinstance(result, dict):
             continue
-        n_7d, success_7d = _compared_7d(result)
-        selected = result is winner
+        selected = _is_winner_result(result, winner)
         pay = winner_pay if selected else pick_selected_payment(result, objective, constraints)
-        row = {
-            "url": result.get("url"),
-            "rail": (pay or {}).get("rail") or result.get("rail"),
-            "amount_atomic": (pay or {}).get("amount_atomic")
-            if pay and pay.get("amount_atomic") is not None
-            else amount_atomic(result),
-            "latency_ms": latency_ms(result),
-            "success_7d": success_7d,
-            "n_7d": n_7d,
-            "readiness": _readiness_label(result),
-            "live": bool(result.get("live")),
-            "invocable": bool(result.get("invocable")),
-            "selected": selected,
-        }
-        if selected and pay:
-            row["selected_payment"] = pay
-        rep = reputation.public_row(result)
-        if rep:
-            row["reputation"] = rep
-        eco = None
-        if pay and pay.get("economics"):
-            eco = pay.get("economics")
-        else:
-            eco = economics.for_result(result, pay)
-        if eco:
-            row["economics"] = eco
+        row = _compared_row(result, selected, pay)
+        if selected:
+            winner_row = row
         rows.append(row)
-        if len(rows) >= 5:
-            break
-    return rows
+    if winner_row is None and isinstance(winner, dict):
+        winner_row = _compared_row(winner, True, winner_pay)
+    if winner_row is None:
+        return rows[:COMPARED_CAP]
+    if any(r.get("selected") for r in rows[:COMPARED_CAP]) and len(rows) <= COMPARED_CAP:
+        return rows
+    if any(r.get("selected") for r in rows[:COMPARED_CAP]):
+        return rows[:COMPARED_CAP]
+    others = [r for r in rows if not r.get("selected")]
+    return others[: max(0, COMPARED_CAP - 1)] + [winner_row]
+
+
+def unmet_constraint_names(result, constraints) -> list[str]:
+    """Named bounds this live candidate failed. Empty if it would pass.
+
+    Tiny-price and high-min-observation misses stay distinct names.
+    """
+    if not isinstance(result, dict) or not isinstance(constraints, dict):
+        return []
+    if not result.get("live"):
+        return []
+    unmet: list[str] = []
+    rails = constraints.get("rails")
+    if isinstance(rails, frozenset) and not _complete_options_for_constraints(result, constraints):
+        unmet.append("networks")
+    if constraints.get("max_amount_atomic") is not None or constraints.get("max_price_usd") is not None:
+        if not _options_for_constraints(result, constraints):
+            if constraints.get("max_price_usd") is not None:
+                unmet.append("max_price_usd")
+            if constraints.get("max_amount_atomic") is not None:
+                unmet.append("max_amount_atomic")
+    max_probe = constraints.get("max_probe_latency_ms")
+    if max_probe is None:
+        max_probe = constraints.get("max_latency_ms")
+    if max_probe is not None:
+        lat = latency_ms(result)
+        if lat is None or lat > max_probe:
+            unmet.append("max_probe_latency_ms")
+    if constraints.get("max_service_latency_ms") is not None:
+        svc = service_latency_ms(result)
+        if svc is None or svc > constraints["max_service_latency_ms"]:
+            unmet.append("max_service_latency_ms")
+    if constraints.get("min_observations") is not None:
+        n = observation_count(result)
+        if n is None or n < constraints["min_observations"]:
+            unmet.append("min_observations")
+    if constraints.get("min_observed_success") is not None:
+        rate = reputation.observed_success_of(result)
+        if rate is None or float(rate) < float(constraints["min_observed_success"]):
+            unmet.append("min_observed_success")
+    if constraints.get("min_reputation_score") is not None:
+        score = reputation.score_of(result)
+        if score is None or float(score) < float(constraints["min_reputation_score"]):
+            unmet.append("min_reputation_score")
+    if constraints.get("min_reputation_confidence") is not None:
+        conf = reputation.confidence_of(result)
+        if conf is None or float(conf) < float(constraints["min_reputation_confidence"]):
+            unmet.append("min_reputation_confidence")
+    if constraints.get("max_settlement_latency_ms") is not None:
+        settle = economics.settlement_or_finality_ms(result)
+        if settle is None or int(settle) > int(constraints["max_settlement_latency_ms"]):
+            unmet.append("max_settlement_latency_ms")
+    if constraints.get("max_total_cost_usd") is not None:
+        cost = economics.total_cost_usd(result)
+        if cost is None or float(cost) > float(constraints["max_total_cost_usd"]):
+            unmet.append("max_total_cost_usd")
+    if constraints.get("require_invocable") and not result.get("invocable"):
+        unmet.append("require_invocable")
+    return unmet
+
+
+def collect_unmet_constraints(results, constraints) -> list[str]:
+    """Unique unmet bound names across evaluated live candidates, stable order."""
+    names: list[str] = []
+    seen: set[str] = set()
+    if not isinstance(results, list):
+        return names
+    for result in results:
+        for name in unmet_constraint_names(result, constraints):
+            if name in seen:
+                continue
+            seen.add(name)
+            names.append(name)
+    return names

@@ -1,6 +1,7 @@
 """C2SP read APIs under /pq/log (no trailing slash on the origin).
 
 GET /pq/log/checkpoint  text/plain; charset=utf-8  (current / latest)
+GET /pq/log/checkpoint/latest  alias of GET /pq/log/checkpoint
 GET /pq/log/checkpoint/{tree_size}  signed checkpoint for that tree size
 GET /pq/log/tile/{L}/{N} and .p/{W}  application/octet-stream
 GET /pq/log/tile/entries/{N} and .p/{W}  application/octet-stream
@@ -29,6 +30,7 @@ def parse_checkpoint_tree_size(rel: str) -> tuple[bool, int | None]:
     Returns (is_sized_path, n). n is None when the path is a sized checkpoint
     request that must 404 without touching the checkpoint table: 0, leading
     zero, sign, whitespace, junk, overflow, or more than 19 digits.
+    checkpoint/latest is not a sized path (handled as the current alias).
     """
     prefix = "checkpoint/"
     if not rel.startswith(prefix):
@@ -70,7 +72,7 @@ def handle(path: str) -> tuple[int, bytes, str, dict]:
 
         body = json.dumps(trust.public_descriptor()).encode("utf-8")
         return 200, body, "application/json; charset=utf-8", {"Cache-Control": "no-store"}
-    if rel == "checkpoint":
+    if rel == "checkpoint" or rel == "checkpoint/latest":
         note = store.latest_checkpoint()
         if not note:
             return 404, b'{"error": "no_checkpoint"}', "application/json; charset=utf-8", {

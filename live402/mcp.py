@@ -66,7 +66,13 @@ OUTPUT_SCHEMA = {
         "probe_ceiling": {"type": "integer"},
         "probe_budget_exhausted": {"type": "boolean"},
         "candidate_evaluation_complete": {"type": "boolean"},
+        "evaluation_complete": {"type": "boolean"},
+        "discovered_count": {"type": "integer"},
+        "probed_count": {"type": "integer"},
+        "unprobed_count": {"type": "integer"},
         "interpreted_constraints": {"type": "object"},
+        "applied_constraints": {"type": "object"},
+        "unmet_constraints": {"type": "array", "items": {"type": "string"}},
         "unresolved_constraints": {"type": "array"},
         "stop_reason": {
             "type": "string",
@@ -113,7 +119,7 @@ PREVIEW_INPUT_SCHEMA = {
         "networks": {
             "type": "array",
             "items": {"type": "string", "enum": list(schema_fields.RAILS)},
-            "description": "Restrict searchable rails to this set. Unlike prefer_network, other rails are not queried.",
+            "description": "Hard policy lock. Restricts searchable rails to this set. Unlike prefer_network, this is not a ranking preference.",
         },
     },
     "required": ["need"],

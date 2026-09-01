@@ -305,6 +305,19 @@ class ConstraintTests(unittest.TestCase):
         self.assertTrue(select.passes_constraints(invocable, cons))
         self.assertIs(select.pick_winner([payable, invocable], "best", cons), invocable)
 
+    def test_prefer_network_is_not_a_hard_filter(self):
+        cons = select.parse_constraints({"prefer_network": "solana"})
+        self.assertIsNone(cons["rails"])
+        base = _hit(url="https://base-only.example/x", rail="base")
+        algo = _hit(url="https://algo-only.example/x", rail="algorand")
+        self.assertTrue(select.passes_constraints(base, cons))
+        self.assertTrue(select.passes_constraints(algo, cons))
+        self.assertIs(select.pick_winner([base, algo], "best", cons), base)
+        merged = select.parse_constraints({"prefer_network": "solana", "networks": ["base"]})
+        self.assertEqual(merged["rails"], frozenset({"base"}))
+        self.assertFalse(select.passes_constraints(algo, merged))
+        self.assertTrue(select.passes_constraints(base, merged))
+
     def test_rails_solana_drops_base_and_algorand(self):
         base = _hit(url="https://base.example/x", rail="base")
         sol = _hit(url="https://sol.example/x", rail="solana")
@@ -924,6 +937,9 @@ class RouteNeedSelectTests(unittest.TestCase):
         self.assertIn("d6.example", result.get("url") or "")
         self.assertIn("https://d6.example/weather", started)
         self.assertEqual(result.get("candidates_probed"), 6)
+        compared_urls = [row.get("url") for row in (result.get("compared") or [])]
+        self.assertIn(result.get("url"), compared_urls)
+        self.assertLessEqual(len(compared_urls), select.COMPARED_CAP)
         self.assertLess(result.get("candidates_probed"), 20)
         self.assertLess(result.get("candidates_probed"), probe.PROBE_CEILING)
         self.assertEqual(result.get("probe_ceiling"), probe.STANDARD_PROBE_CAP)

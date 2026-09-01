@@ -98,7 +98,7 @@
         <details class="tech-details">
           <summary>Objectives</summary>
           <div class="tech-body">
-            <p>Optional <code>objective</code> ranks live hits. Unknown values fall back to <code>best</code>. Same function on Base, Solana, and Algorand.</p>
+            <p>Optional <code>objective</code> ranks the currently probed eligible candidates, not every discovered endpoint. Unknown values fall back to <code>best</code>. Same function on Base, Solana, and Algorand.</p>
             <dl class="checks compact">
               <div>
                 <dt>best</dt>
@@ -106,15 +106,15 @@
               </div>
               <div>
                 <dt>cheapest</dt>
-                <dd>Lowest known merchant price on the current observed option. Unknown price is not treated as zero.</dd>
+                <dd>Lowest known merchant price among currently probed eligible candidates. Unknown price is not treated as zero.</dd>
               </div>
               <div>
                 <dt>fastest</dt>
-                <dd>Lowest probe RTT on this request. Not settlement, not historical p50.</dd>
+                <dd>Lowest probe RTT on this request among currently probed eligible candidates. Not settlement latency, not historical p50. <code>fastest_settlement</code> is the separate settlement objective.</dd>
               </div>
               <div>
                 <dt>most_reliable</dt>
-                <dd>Observed success when <code>n_7d</code> is large enough. Below 3 observations the rate is unknown, never 0. Below 10 it is weak and not a public reliability percent.</dd>
+                <dd>Observed success among currently probed eligible candidates when <code>n_7d</code> is large enough. Below 3 observations the rate is unknown, never 0. Below 10 it is weak and not a public reliability percent.</dd>
               </div>
               <div>
                 <dt>lowest_total_cost</dt>
@@ -131,13 +131,13 @@
         <details class="tech-details">
           <summary>prefer_network vs networks</summary>
           <div class="tech-body">
-            <p><code>prefer_network=base|solana|algorand</code> ranks that rail first but still searches all three. <code>networks</code> restricts which rails are queried and selectable. They are not the same knob.</p>
+            <p><code>prefer_network=base|solana|algorand</code> is a weak ranking preference. It ranks that rail first but still searches and selects across all three. It is not a filter. <code>networks</code> is a hard policy lock: discovery and the HTTP 200 <code>selected_payment.network</code> must be in that set from the current observed 402, never a catalog claim. They are not the same knob.</p>
           </div>
         </details>
         <details class="tech-details">
           <summary>selected_payment</summary>
           <div class="tech-body">
-            <p><code>selected_payment</code> is the exact current observed payment option that won this route: rail, network, asset, amount, payTo, facilitator. It is never a catalog-only rail. Catalog rails stay on claimed payment options.</p>
+            <p><code>selected_payment</code> is the exact current observed payment option that won this route: rail, network, asset, amount, payTo, facilitator. A HTTP 200 winner is that resource plus this option. If <code>selected_payment</code> is missing or outside requested <code>networks</code>, the response is a typed miss, never 200. It is never copied from a catalog claim. Catalog rails stay on claimed payment options.</p>
           </div>
         </details>
         <details class="tech-details">
@@ -150,7 +150,7 @@
           <summary>Hybrid discovery</summary>
           <div class="tech-body">
             <p>Need-scoped search unions current upstream catalogs (Coinbase, PayAI, GoPlausible) with a process-local shadow catalog. That is not a full-world RAM index and not a published listing count. Live hits are write-through into the shadow. HTTP paths under <code>/data</code> stay 404.</p>
-            <p><code>discovery_via</code> is a compact per-rail map (<code>search</code>, <code>pages</code>, <code>error</code>, or <code>fixture</code>). <code>discovery_exhaustive</code> is true only when every queried rail was untruncated and <code>upstream_total</code> equals returned. Paid <code>/route</code> also returns <code>discovery_matches</code>, <code>candidates_discovered</code>, <code>candidates_considered</code>, and <code>candidates_probed</code>.</p>
+            <p><code>discovery_via</code> is a compact per-rail map (<code>search</code>, <code>pages</code>, <code>error</code>, or <code>fixture</code>). <code>discovery_exhaustive</code> is true only when every queried rail was untruncated and <code>upstream_total</code> equals returned. Paid <code>/route</code> also returns <code>discovery_matches</code>, <code>candidates_discovered</code>, <code>candidates_considered</code>, <code>candidates_probed</code>, <code>discovered_count</code>, <code>probed_count</code>, <code>unprobed_count</code>, and <code>evaluation_complete</code>. <code>interpreted_constraints</code> / <code>applied_constraints</code> echo constraints actually used, including structured body keys.</p>
           </div>
         </details>
         <details class="tech-details">
@@ -168,7 +168,7 @@
         <details class="tech-details">
           <summary>Adaptive probing</summary>
           <div class="tech-body">
-            <p>Typical plan: probe the first 3, then expand 2 to 4 more if there is no winner (standard cap 7). <code>thorough</code> may go to 15. Hard <code>probe_ceiling</code> is 20. The 55s budget can stop earlier. <code>candidate_evaluation_complete</code> is true only when every ranked candidate in this request's working set was probed, not the global catalog.</p>
+            <p>Typical plan: probe the first 3, then expand 2 to 4 more if there is no winner (standard cap 7). <code>thorough</code> may go to 15. Hard <code>probe_ceiling</code> is 20. The 55s budget can stop earlier. <code>candidate_evaluation_complete</code> is true only when every ranked candidate in this request's working set was probed, not the global catalog. <code>compared</code> is capped, but the winner always occupies a slot.</p>
           </div>
         </details>
         <details class="tech-details">
@@ -181,7 +181,7 @@
         <details class="tech-details">
           <summary>Readiness</summary>
           <div class="tech-body">
-            <p>Readiness is a ladder, never a binary healthy flag: discovered, payable, invocable, recently_verified. Pulse may include <code>n_7d</code> and rates only when <code>n_7d &gt;= 10</code>. There is no public <code>healthy</code> and no <code>executable_now_rate</code>.</p>
+            <p>Readiness is a ladder, never a binary healthy flag: discovered, payable, invocable, recently_verified. <code>payable=true</code> can coexist with <code>invocable=false</code>. <code>no_input_schema</code> explains a successful payable-but-not-invocable winner. <code>require_invocable</code> excludes it and may return <code>constraints_unmet</code>. Pulse may include <code>n_7d</code> and rates only when <code>n_7d &gt;= 10</code>. There is no public <code>healthy</code> and no <code>executable_now_rate</code>.</p>
           </div>
         </details>
         <details class="tech-details">
@@ -203,7 +203,7 @@
           <div class="tech-body">
             <p><code>POST /validate</code> returns readiness, claimed vs observed, and flags. Never a binary healthy flag. Unpaid probes are GET first, then POST empty JSON only if GET was not a live 402 and POST is justified. Catalog-declared seller bodies are never POSTed. Required-body misses are <code>unsafe_to_probe</code>. DNS is resolved once and the TCP/TLS connection is pinned to those SSRF-checked public IPs with TLS SNI and HTTP Host set to the original hostname.</p>
             <p><code>GET /attestation</code> is a public sha256 of a recent 402signal_observed probe batch. It is a hash of that batch, not an on-chain proof.</p>
-            <p>402Signal maintains a public append-only transparency log at <code>/pq/log/checkpoint</code> and <code>/pq/log/tile/*</code>.</p>
+            <p>402Signal maintains a public append-only transparency log at <code>/pq/log/checkpoint</code> (also <code>/pq/log/checkpoint/latest</code>) and <code>/pq/log/tile/*</code>.</p>
             <p>Confirmed checkpoints are currently anchored to Algorand TestNet using native Falcon-1024 (f1) authorization.</p>
             <p>The Algorand transaction authorizes a transparency-log checkpoint. It is not a merchant payment, and paid <code>/route</code> does not wait for blockchain confirmation.</p>
             <p>The human-readable transparency view is available at <a href="/transparency">/transparency</a>.</p>

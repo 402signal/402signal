@@ -2065,6 +2065,10 @@ def _discovery_unavailable_miss(objective: str) -> dict:
         "probe_ceiling": STANDARD_PROBE_CAP,
         "probe_budget_exhausted": False,
         "candidate_evaluation_complete": True,
+        "evaluation_complete": True,
+        "discovered_count": 0,
+        "probed_count": 0,
+        "unprobed_count": 0,
         "stop_reason": "candidate_set_exhausted",
         "health": {
             "live": False,
@@ -2092,13 +2096,23 @@ def _align_target_with_selected(result: dict, selected: dict | None) -> None:
 
 
 def _attach_selection(body: dict, probed: list, winner, objective: str, constraints=None) -> dict:
+    """Attach selected_payment from the CURRENT observed 402 only.
+
+    Never copy a catalog claim into selected_payment. A live body without
+    a complete matching selected_payment is not a HTTP 200 winner.
+    """
     body["objective"] = objective
+    selected = None
     if isinstance(winner, dict):
         selected = select.pick_selected_payment(winner, objective, constraints)
-        if selected:
+        if selected and select.http200_winner_ok(winner, objective, constraints):
             winner["selected_payment"] = selected
             body["selected_payment"] = selected
             _align_target_with_selected(winner, selected)
+        else:
+            winner.pop("selected_payment", None)
+            body.pop("selected_payment", None)
+            selected = None
         if winner.get("reputation"):
             body["reputation"] = winner["reputation"]
         elif selected or winner.get("url"):
@@ -2110,7 +2124,7 @@ def _attach_selection(body: dict, probed: list, winner, objective: str, constrai
                     body["reputation"] = winner["reputation"]
             except Exception:
                 pass
-    body["compared"] = select.comparison(probed, winner, objective, constraints)
+    body["compared"] = select.comparison(probed, winner if selected else None, objective, constraints)
     body["tried"] = len(probed)
     return body
 
@@ -2181,6 +2195,15 @@ def _attach_route_funnel(
     body["probe_ceiling"] = int(probe_ceiling if probe_ceiling is not None else STANDARD_PROBE_CAP)
     body["probe_budget_exhausted"] = bool(probe_budget_exhausted)
     body["candidate_evaluation_complete"] = bool(candidate_evaluation_complete)
+    body["evaluation_complete"] = bool(candidate_evaluation_complete)
+    discovered = int(
+        candidates_discovered if candidates_discovered is not None else discovery_matches
+    )
+    considered = int(candidates_considered)
+    probed_n = int(candidates_probed)
+    body["discovered_count"] = discovered
+    body["probed_count"] = probed_n
+    body["unprobed_count"] = max(0, considered - probed_n)
     body["stop_reason"] = stop_reason
     return body
 
@@ -2468,8 +2491,13 @@ def route_need(
 ) -> dict:
     """Rank, probe in adaptive tranches under the 55s budget, pick best-of-N.
 
-    Typical: first 3, then 2–4 more if no winner. Hard server ceiling is 20.
-    Candidate #6 is reachable when 1–5 fail without every request doing 20.
+    Typical: first 3, then 2-4 more if no winner. Hard server ceiling is 20.
+    Candidate #6 is reachable when 1-5 fail without every request doing 20.
+
+    networks (constraints.rails) is a hard policy lock on the CURRENT observed
+    402 option. prefer_network is ranking-only and is not a filter.
+    cheapest / fastest / most_reliable rank the probed survivor set, not the
+    entire discovery set. fastest is probe RTT, not settlement latency.
     """
     if deadline is None:
         deadline = clock.monotonic() + PROBE_BUDGET_SECONDS
@@ -2555,6 +2583,8 @@ def route_need(
         probe_budget_exhausted = True
 
     winner = winner_now()
+    if winner and not select.http200_winner_ok(winner, obj, cons):
+        winner = None
     evaluation_complete = _candidate_evaluation_complete(ranked, probed)
     some_live = any(isinstance(r, dict) and r.get("live") for r in probed)
     stop_reason = _stop_reason(
@@ -2621,6 +2651,9 @@ def route_need(
         body["miss_reason"] = "probe_limit_reached"
     elif some_live:
         body["miss_reason"] = "constraints_unmet"
+        unmet = select.collect_unmet_constraints(probed, cons)
+        if unmet:
+            body["unmet_constraints"] = unmet
     elif last and last.get("miss_reason"):
         body["miss_reason"] = public_miss_reason(last.get("miss_reason")) or last.get("miss_reason")
     elif untested:

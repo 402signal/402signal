@@ -250,6 +250,49 @@ def merge_constraints(body: dict | None, compiled: dict | None = None) -> dict:
     return cons
 
 
+def public_applied_constraints(cons: dict | None, body: dict | None = None) -> dict:
+    """Echo constraints the engine actually used. Empty means unconstrained.
+
+    Structured body keys and compiled NL that reached parse_constraints are
+    included. prefer_network is echoed as a ranking preference only; it is
+    never a networks lock.
+    """
+    src = body if isinstance(body, dict) else {}
+    engine = cons if isinstance(cons, dict) else {}
+    out: dict = {}
+    rails = engine.get("rails")
+    if isinstance(rails, frozenset):
+        out["networks"] = sorted(rails)
+    for key in (
+        "max_amount_atomic",
+        "max_price_usd",
+        "max_latency_ms",
+        "max_probe_latency_ms",
+        "max_service_latency_ms",
+        "min_observations",
+        "min_observed_success",
+        "min_reputation_score",
+        "min_reputation_confidence",
+        "max_total_cost_usd",
+        "max_settlement_latency_ms",
+    ):
+        val = engine.get(key)
+        if val is not None:
+            out[key] = val
+    if engine.get("require_invocable"):
+        out["require_invocable"] = True
+    elif "require_invocable" in src:
+        out["require_invocable"] = bool(engine.get("require_invocable"))
+    if engine.get("accept_payTo_change"):
+        out["accept_payTo_change"] = True
+    if engine.get("require_transparency"):
+        out["require_transparency"] = True
+    prefer = src.get("prefer_network")
+    if isinstance(prefer, str) and prefer.strip():
+        out["prefer_network"] = prefer.strip().lower()
+    return out
+
+
 def attach_policy(result: dict, body: dict | None) -> dict:
     src = body if isinstance(body, dict) else {}
     text = ""
@@ -258,6 +301,12 @@ def attach_policy(result: dict, body: dict | None) -> dict:
     elif isinstance(src.get("need"), str):
         text = src.get("need")
     compiled = compile_policy(text)
-    result["interpreted_constraints"] = compiled["interpreted_constraints"]
+    cons = merge_constraints(src, compiled)
+    applied = public_applied_constraints(cons, src)
+    # interpreted_constraints must show constraints actually used, including
+    # structured body keys. It previously stayed {} when only networks/etc.
+    # were supplied.
+    result["interpreted_constraints"] = dict(applied)
+    result["applied_constraints"] = dict(applied)
     result["unresolved_constraints"] = compiled["unresolved_constraints"]
     return result

@@ -28,15 +28,19 @@ NEED_OR_URL_ANYOF = (
 )
 
 OBJECTIVE_DESC = (
-    "Best-of-N ranking. lowest_total_cost fails closed when a fee is unknown. "
-    "fastest_settlement is settlement/finality, not probe RTT."
+    "Best-of-N among currently probed eligible candidates, not every discovered "
+    "endpoint. cheapest, fastest, and most_reliable rank that probed survivor "
+    "set. fastest is this-request probe RTT, not settlement latency. "
+    "fastest_settlement is a separate settlement/finality objective. "
+    "lowest_total_cost fails closed when a fee is unknown."
 )
 
 NEED_DESC = "What the caller wants routed (plain English)."
 URL_DESC = "Optional https URL to probe instead of discovery. need or url (or both) is required."
 PREFER_NETWORK_DESC = (
-    "Prefer this pay-in rail when ranking. Searches all supported rails; "
-    "does not restrict to this rail. Use networks to restrict."
+    "Weak ranking preference only. Ranks this pay-in rail first but still "
+    "searches and selects across all supported rails. Not a filter. "
+    "Use networks for a hard policy lock."
 )
 ACCEPT_PAYTO_CHANGE_DESC = (
     "If true, allow selecting a destination whose payTo just changed for the first time. "
@@ -106,7 +110,12 @@ def route_constraint_properties() -> dict:
         "networks": {
             "type": "array",
             "items": {"type": "string", "enum": list(RAILS)},
-            "description": "Restrict searchable and selectable rails to this set. Unlike prefer_network, other rails are not queried.",
+            "description": (
+                "Hard policy lock. Restricts discovery and selection to this set. "
+                "A HTTP 200 winner must have selected_payment.network in this set "
+                "from the CURRENT observed 402, never a catalog claim. "
+                "Unlike prefer_network, this is not a ranking preference."
+            ),
         },
         "min_observations": {
             "type": "integer",
