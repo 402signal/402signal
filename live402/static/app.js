@@ -8,14 +8,15 @@
   const curlEl = document.getElementById("curl-route");
   const copyRouteBtn = document.getElementById("copy-route");
   const copyRouteJsonBtn = document.getElementById("copy-route-json");
+  const copyRouteCurlBtn = document.getElementById("copy-route-curl");
   const routeJsonEl = document.getElementById("route-json");
+  const routeCurlEl = document.getElementById("route-curl");
+  const policySummaryEl = document.getElementById("policy-summary");
   const maxPrice = document.getElementById("max-price");
   const minObservations = document.getElementById("min-observations");
   const requireInvocable = document.getElementById("require-invocable");
   const maxTotalCost = document.getElementById("max-total-cost");
-  const maxCandidates = document.getElementById("max-candidates");
-  const maxServiceLatency = document.getElementById("max-service-latency");
-  const maxSettlementLatency = document.getElementById("max-settlement-latency");
+  const maxLatency = document.getElementById("max-latency");
 
   const RAIL_NAMES = { base: "Base", solana: "Solana", algorand: "Algorand" };
   const FORBIDDEN_RESULT_LABELS = /^(recommended|verified|live|payable now|best for|live now|verified now|best)$/i;
@@ -39,6 +40,7 @@
     if (searchBtn) searchBtn.disabled = !ready;
     if (copyRouteBtn) copyRouteBtn.disabled = !ready;
     if (copyRouteJsonBtn) copyRouteJsonBtn.disabled = !ready;
+    if (copyRouteCurlBtn) copyRouteCurlBtn.disabled = !ready;
     renderRouteJson();
   }
 
@@ -91,23 +93,82 @@
     }
     const total = parseNonnegNumber(maxTotalCost && maxTotalCost.value);
     if (total != null) body.max_total_cost_usd = total;
-    const serviceMs = parsePositiveInt(maxServiceLatency && maxServiceLatency.value, 0);
-    if (serviceMs != null) body.max_service_latency_ms = serviceMs;
-    const settleMs = parsePositiveInt(maxSettlementLatency && maxSettlementLatency.value, 0);
-    if (settleMs != null) body.max_settlement_latency_ms = settleMs;
+    const latencyMs = parsePositiveInt(maxLatency && maxLatency.value, 0);
+    if (latencyMs != null) body.max_latency_ms = latencyMs;
     if (policy.searchDepth === "thorough") body.search_depth = "thorough";
-    const candidates = parsePositiveInt(maxCandidates && maxCandidates.value, 1);
-    if (candidates != null) body.max_candidates_to_probe = candidates;
     return body;
+  }
+
+  function formatUsd(n) {
+    const raw = String(n);
+    if (!raw.includes(".")) return raw;
+    return raw.replace(/\.?0+$/, "");
+  }
+
+  function joinOr(parts) {
+    if (parts.length <= 1) return parts[0] || "";
+    if (parts.length === 2) return parts[0] + " or " + parts[1];
+    return parts.slice(0, -1).join(", ") + ", or " + parts[parts.length - 1];
+  }
+
+  function policySummary() {
+    const q = ((need && need.value) || "").trim();
+    if (!q) return "Choose a need to describe the decision your agent would make.";
+    const parts = [];
+    parts.push("Find a " + q + " API.");
+    if (policy.network !== "any" && RAIL_NAMES[policy.network]) {
+      parts.push("Only consider current " + RAIL_NAMES[policy.network] + " payment options.");
+    } else {
+      parts.push("Search Base, Solana, and Algorand.");
+    }
+    const rejects = [];
+    const price = parseNonnegNumber(maxPrice && maxPrice.value);
+    if (price != null) rejects.push("above $" + formatUsd(price));
+    if (requireInvocable && requireInvocable.checked) {
+      rejects.push("without enough invocation information");
+    }
+    const minObs = parsePositiveInt(minObservations && minObservations.value, 0);
+    if (minObs != null) {
+      rejects.push("with fewer than " + minObs + (minObs === 1 ? " prior observation" : " prior observations"));
+    }
+    if (rejects.length) parts.push("Reject anything " + joinOr(rejects) + ".");
+    if (policy.objective === "cheapest") {
+      parts.push("Among currently probed eligible candidates, pick the cheapest known price.");
+    } else if (policy.objective === "fastest") {
+      parts.push("Among currently probed eligible candidates, pick the lowest this-request probe RTT, not settlement latency.");
+    } else if (policy.objective === "most_reliable") {
+      parts.push("Among currently probed eligible candidates, prefer stronger observed history.");
+    }
+    if (policy.preferNetwork !== "any" && RAIL_NAMES[policy.preferNetwork]) {
+      parts.push("Weakly prefer " + RAIL_NAMES[policy.preferNetwork] + " when ranking, without locking other rails.");
+    }
+    const total = parseNonnegNumber(maxTotalCost && maxTotalCost.value);
+    if (total != null) {
+      parts.push("Cap merchant price plus known fees at $" + formatUsd(total) + ".");
+    }
+    const latencyMs = parsePositiveInt(maxLatency && maxLatency.value, 0);
+    if (latencyMs != null) {
+      parts.push("Drop live hits whose known probe RTT exceeds " + latencyMs + " ms.");
+    }
+    if (policy.searchDepth === "thorough") {
+      parts.push("Use a thorough probe plan.");
+    }
+    return parts.join(" ");
   }
 
   function routeJsonText() {
     return JSON.stringify(buildRouteBody(), null, 2);
   }
 
+  function routeCurlText() {
+    const compact = JSON.stringify(buildRouteBody());
+    return "curl -sS -D - https://402signal.com/route -H 'Content-Type: application/json' -d '" + compact + "'";
+  }
+
   function renderRouteJson() {
-    if (!routeJsonEl) return;
-    routeJsonEl.textContent = routeJsonText();
+    if (routeJsonEl) routeJsonEl.textContent = routeJsonText();
+    if (routeCurlEl) routeCurlEl.textContent = routeCurlText();
+    if (policySummaryEl) policySummaryEl.textContent = policySummary();
   }
 
   function previewUrl() {
@@ -315,7 +376,7 @@
     results.appendChild(heading);
     const note = document.createElement("p");
     note.className = "policy-hint";
-    note.textContent = "Preview shows discovery + prior observations. A paid route may differ after 402Signal checks candidates now.";
+    note.textContent = "Preview shows discovery listings and prior 402Signal observations. A paid route may differ after 402Signal checks candidates now.";
     results.appendChild(note);
     hits.forEach(function (hit) {
       results.appendChild(renderHit(hit));
@@ -388,7 +449,8 @@
 
   async function copyRouteRequest(button) {
     if (!hasContent()) return;
-    await copyText(routeJsonText(), button, button === copyRouteBtn ? "Copy live route request" : "Copy");
+    const idle = button === copyRouteBtn ? "Generate live route request" : "Copy request";
+    await copyText(routeJsonText(), button, idle);
   }
 
   function bindChipGroup(id, attr, key, allowed) {
@@ -442,7 +504,7 @@
     need.addEventListener("input", syncSearch);
     need.addEventListener("change", syncSearch);
   }
-  [maxPrice, minObservations, requireInvocable, maxTotalCost, maxCandidates, maxServiceLatency, maxSettlementLatency].forEach(function (el) {
+  [maxPrice, minObservations, requireInvocable, maxTotalCost, maxLatency].forEach(function (el) {
     if (!el) return;
     el.addEventListener("input", syncSearch);
     el.addEventListener("change", syncSearch);
@@ -478,6 +540,13 @@
     copyRouteJsonBtn.addEventListener("click", function (ev) {
       ev.preventDefault();
       copyRouteRequest(copyRouteJsonBtn);
+    });
+  }
+  if (copyRouteCurlBtn) {
+    copyRouteCurlBtn.addEventListener("click", function (ev) {
+      ev.preventDefault();
+      if (!hasContent()) return;
+      copyText(routeCurlText(), copyRouteCurlBtn, "Copy curl");
     });
   }
   bindTabs();

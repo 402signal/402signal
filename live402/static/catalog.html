@@ -39,7 +39,7 @@
 
       <p class="preview-callout">
         <span class="kicker">Preview is not a live check</span>
-        Preview shows discovery + prior observations. A paid route may differ after 402Signal checks candidates now.
+        Preview shows discovery listings and prior 402Signal observations. A paid route may differ after 402Signal checks candidates now.
       </p>
 
       <form id="search-form" class="policy-builder">
@@ -53,10 +53,10 @@
           <button type="button" class="chip" data-need="wallet balance">wallet balance</button>
         </div>
 
-        <fieldset class="policy-field">
-          <legend>Network</legend>
-          <p class="policy-hint">Hard policy lock. Discovery and a paid winner must be on this rail. Any searches all rails.</p>
-          <div class="chips" id="network-chips" role="radiogroup" aria-label="Network">
+        <fieldset class="policy-field lock">
+          <legend>Network lock</legend>
+          <p class="policy-hint">Hard policy lock. Discovery and a paid winner must be on this rail from the current observed 402. Any searches all rails.</p>
+          <div class="chips lock-chips" id="network-chips" role="radiogroup" aria-label="Network lock">
             <button type="button" class="chip active" data-network="any" aria-pressed="true">Any</button>
             <button type="button" class="chip" data-network="base" aria-pressed="false">Base</button>
             <button type="button" class="chip" data-network="solana" aria-pressed="false">Solana</button>
@@ -85,7 +85,7 @@
           <legend>Objective</legend>
           <p class="policy-hint">Cheapest is cheapest among currently probed eligible candidates. Fastest is this-request probe RTT, not settlement latency.</p>
           <div class="chips" id="objective-chips" role="radiogroup" aria-label="Objective">
-            <button type="button" class="chip active" data-objective="best" aria-pressed="true">Best</button>
+            <button type="button" class="chip active" data-objective="best" aria-pressed="true">Best (default)</button>
             <button type="button" class="chip" data-objective="cheapest" aria-pressed="false">Cheapest</button>
             <button type="button" class="chip" data-objective="fastest" aria-pressed="false">Fastest</button>
             <button type="button" class="chip" data-objective="most_reliable" aria-pressed="false">Most reliable</button>
@@ -94,10 +94,10 @@
 
         <details class="policy-advanced">
           <summary>Advanced</summary>
-          <fieldset class="policy-field">
+          <fieldset class="policy-field prefer">
             <legend>Prefer network</legend>
-            <p class="policy-hint">Weak preference. Ranks this rail first but still searches all rails the network lock allows.</p>
-            <div class="chips" id="prefer-chips" role="radiogroup" aria-label="Prefer network">
+            <p class="policy-hint">Weak preference. Ranks this rail first but still searches all rails the network lock allows. Not a filter.</p>
+            <div class="chips prefer-chips" id="prefer-chips" role="radiogroup" aria-label="Prefer network">
               <button type="button" class="chip active" data-prefer="any" aria-pressed="true">Any</button>
               <button type="button" class="chip" data-prefer="base" aria-pressed="false">Base</button>
               <button type="button" class="chip" data-prefer="solana" aria-pressed="false">Solana</button>
@@ -110,20 +110,13 @@
               <input id="max-total-cost" type="number" min="0" step="0.01" inputmode="decimal" placeholder="0.10" />
             </div>
             <div class="policy-field">
-              <label class="label" for="max-candidates">Max candidates to probe</label>
-              <input id="max-candidates" type="number" min="1" step="1" inputmode="numeric" placeholder="7" />
-            </div>
-            <div class="policy-field">
-              <label class="label" for="max-service-latency">Max service latency (ms)</label>
-              <input id="max-service-latency" type="number" min="0" step="1" inputmode="numeric" placeholder="800" />
-            </div>
-            <div class="policy-field">
-              <label class="label" for="max-settlement-latency">Max settlement latency (ms)</label>
-              <input id="max-settlement-latency" type="number" min="0" step="1" inputmode="numeric" placeholder="5000" />
+              <label class="label" for="max-latency">Max probe latency (ms)</label>
+              <input id="max-latency" type="number" min="0" step="1" inputmode="numeric" placeholder="800" />
             </div>
           </div>
           <fieldset class="policy-field">
             <legend>Search depth</legend>
+            <p class="policy-hint">standard is the typical probe plan. thorough may probe deeper. Hard server ceiling is 20.</p>
             <div class="chips" id="depth-chips" role="radiogroup" aria-label="Search depth">
               <button type="button" class="chip active" data-depth="standard" aria-pressed="true">Standard</button>
               <button type="button" class="chip" data-depth="thorough" aria-pressed="false">Thorough</button>
@@ -134,17 +127,24 @@
         <div class="row actions">
           <button type="submit" id="search-btn" class="btn" disabled>Preview discovery</button>
           <span class="not-live">NOT A LIVE CHECK</span>
-          <button type="button" id="copy-route" class="btn secondary" disabled>Copy live route request</button>
           <span id="search-status" class="muted" role="status" aria-live="polite"></span>
         </div>
       </form>
 
-      <section class="route-request" aria-label="POST /route request">
+      <section class="route-request" aria-label="Live route request">
+        <h2>Live route request</h2>
+        <p id="policy-summary" class="policy-summary">Choose a need to describe the decision your agent would make.</p>
         <div class="code-toolbar">
           <p class="muted">POST /route JSON from these controls</p>
-          <button type="button" id="copy-route-json" class="copy-btn" disabled>Copy</button>
+          <div class="row">
+            <button type="button" id="copy-route-json" class="copy-btn" disabled>Copy request</button>
+            <button type="button" id="copy-route-curl" class="copy-btn" disabled>Copy curl</button>
+            <a href="/developers">Developers</a>
+          </div>
         </div>
         <pre id="route-json" class="code" aria-live="polite">{}</pre>
+        <pre id="route-curl" class="code" hidden></pre>
+        <button type="button" id="copy-route" class="btn secondary" disabled>Generate live route request</button>
       </section>
 
       <div id="search-results" aria-live="polite" aria-relevant="additions text"></div>

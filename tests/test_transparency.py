@@ -533,6 +533,8 @@ class TransparencyPrivacyTests(unittest.TestCase):
     def test_transparency_has_no_customer_activity_ui(self):
         status, html, _hdrs = _get(self.port, "/transparency")
         self.assertEqual(status, 200)
+        self.assertIn("Public transparency commitments do not expose raw needs, wallets, payment signatures, or seller response bodies.", html)
+        self.assertIn("What is published?", html)
         self.assertIn("Transparent history, not public requests", html)
         low = html.lower()
         self.assertNotIn("is anonymous", low)

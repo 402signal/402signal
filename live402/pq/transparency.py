@@ -1020,7 +1020,12 @@ def _main(model: dict) -> str:
         "append-only transparency log. Signed checkpoints are periodically anchored to "
         "Algorand TestNet using native Falcon-1024 authorization.</p>\n"
         "        <p class=\"note\">Routing never waits for blockchain confirmation.</p>\n"
-        "        <p class=\"privacy-note\">Transparent history, not public requests. This page "
+        "        <p class=\"privacy-note\">Public transparency commitments do not expose raw "
+        "needs, wallets, payment signatures, or seller response bodies.</p>\n"
+        '        <details class="tech-details" id="what-is-published">\n'
+        "          <summary>What is published?</summary>\n"
+        '          <div class="tech-body">\n'
+        "            <p>Transparent history, not public requests. This page "
         "shows 402Signal infrastructure commitments: log size, signed checkpoints, and "
         "confirmed TestNet anchors. It does not directly publish your wallet, raw request, "
         "or payment credentials. It does not publish agent needs, wallets, payment "
@@ -1028,6 +1033,8 @@ def _main(model: dict) -> str:
         "nonce, commitment hash, and optional live/miss_reason. It does not include salt, "
         "raw evidence, need, wallet, or payment. It is not a claim of anonymous, unlinkable, "
         "or fully private traffic.</p>\n"
+        "          </div>\n"
+        "        </details>\n"
         "      </section>\n"
         '      <section class="block">\n'
         "        <h2>What this proves</h2>\n"

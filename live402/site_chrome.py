@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import html as html_mod
 
+CONTACT_EMAIL = "ross@402signal.com"
+CONTACT_MAILTO = "mailto:ross@402signal.com"
+
 NAV = (
     ("/how", "How it works"),
     ("/developers", "Developers"),
@@ -17,7 +20,7 @@ FOOTER = (
     ("/mcp.json", "MCP", False),
     ("/transparency", "Transparency", False),
     ("/catalog", "Explore", False),
-    ("mailto:ross@402signal.com", "ross@402signal.com", False),
+    (CONTACT_MAILTO, CONTACT_EMAIL, False),
 )
 
 LISTED_ON = (
@@ -71,13 +74,29 @@ def footer_html(current: str = "") -> str:
     )
 
 
-def listed_on_html(*, title: str = "Listed on", note: str = "") -> str:
+def listed_on_items_html() -> str:
     items = []
     for href, label in LISTED_ON:
         items.append(
             '        <a href="%s" rel="noopener noreferrer">%s</a>'
             % (esc(href), esc(label))
         )
+    return "\n".join(items)
+
+
+def listed_on_row_html() -> str:
+    return (
+        '      <section class="discover-row" aria-label="Discoverable via">\n'
+        '        <p class="discover-kicker">Discoverable via</p>\n'
+        '        <p class="listed-on">\n'
+        + listed_on_items_html()
+        + "\n        </p>\n"
+        '        <p class="note">Discovery listings, not endorsements.</p>\n'
+        "      </section>\n"
+    )
+
+
+def listed_on_html(*, title: str = "Listed on", note: str = "") -> str:
     extra = ""
     if note:
         extra = '        <p class="note">%s</p>\n' % esc(note)
@@ -86,7 +105,7 @@ def listed_on_html(*, title: str = "Listed on", note: str = "") -> str:
         "        <summary>%s</summary>\n"
         '        <p class="listed-on">\n'
         % esc(title)
-        + "\n".join(items)
+        + listed_on_items_html()
         + "\n        </p>\n"
         + extra
         + "      </details>\n"

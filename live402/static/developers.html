@@ -33,8 +33,8 @@
 
     <main>
       <section class="hero compact">
-        <h1>Use 402Signal from an agent</h1>
-        <p class="lede">Find a paid API that works right now. Send the capability you need. Pay $0.01 USDC for the live routing check. Get a route with evidence, or a typed miss.</p>
+        <h1>Integrate in two minutes.</h1>
+        <p class="lede">Use 402Signal from an agent. Send the capability you need. Pay $0.01 USDC for the live routing check. Get a route with evidence, or a typed miss.</p>
         <p class="note">Your agent keeps the wallet. Catalog claims stay separate from what the endpoint actually returns.</p>
       </section>
 
@@ -44,10 +44,11 @@
       </div>
 
       <section id="panel-http" class="block tab-panel" role="tabpanel" aria-labelledby="tab-http">
+        <p class="flow-line">POST /route → unpaid 402 → pay $0.01 USDC → retry → route or typed miss.</p>
         <p>Send <code>POST /route</code> with the capability your agent needs. Use your own <code>need</code> string. Unpaid: HTTP 402. Sign a matching $0.01 USDC option and retry with <code>PAYMENT-SIGNATURE</code> (or <code>X-PAYMENT</code>).</p>
         <div class="code-card">
           <div class="code-toolbar">
-            <span>Unpaid <code>POST /route</code></span>
+            <span>One working curl. Unpaid <code>POST /route</code></span>
             <button type="button" class="btn secondary" id="copy-curl" aria-label="Copy curl example">Copy</button>
           </div>
           <pre class="code" id="curl-route">curl -sS -D - https://402signal.com/route -H 'Content-Type: application/json' -d '{"need":"YOUR_NEED"}'</pre>
@@ -71,6 +72,99 @@
           <pre class="code">https://402signal.com/mcp</pre>
         </div>
         <p><code>initialize</code>, <code>tools/list</code>, <code>preview</code>, and <code>validate</code> need no payment. Unpaid <code>route</code> returns HTTP 402; retry the same <code>tools/call</code> with a matching $0.01 USDC signature.</p>
+      </section>
+
+      <section class="block">
+        <h2>Common recipes</h2>
+        <p class="note"><code>networks</code> is a hard rail lock. <code>prefer_network</code> is a weak ranking preference. <code>cheapest</code> is cheapest among currently probed eligible candidates. <code>fastest</code> is this-request probe RTT, not settlement latency.</p>
+        <h3>Basic</h3>
+        <pre class="code">{"need":"weather"}</pre>
+        <h3>Hard Solana lock</h3>
+        <pre class="code">{"need":"weather","networks":["solana"]}</pre>
+        <p>Discovery and the HTTP 200 <code>selected_payment.network</code> must be Solana from the current observed 402, never a catalog claim.</p>
+        <h3>Budget + invocable</h3>
+        <pre class="code">{"need":"weather","max_price_usd":0.05,"require_invocable":true}</pre>
+        <p>Reject live hits above $0.05 or without an input schema.</p>
+        <h3>Cheapest</h3>
+        <pre class="code">{"need":"weather","objective":"cheapest"}</pre>
+        <p>Ranks the currently probed eligible candidates. It is not the cheapest listing in the catalog.</p>
+      </section>
+
+      <section class="block">
+        <h2>What a paid check returns</h2>
+        <p class="stop-callout"><strong>constraints_unmet</strong> means 402Signal finished the candidates it probed and none satisfied the requested bounds. <strong>probe_limit_reached</strong> means the request hit <code>probe_ceiling</code> with ranked candidates still untested and budget remaining. They are not the same miss. Neither is <code>no_candidates</code>.</p>
+        <h3>Representative success</h3>
+        <pre class="code">{
+  "live": true,
+  "payable": true,
+  "invocable": true,
+  "url": "https://example.com/x402/weather",
+  "probed_at": "2026-08-29T22:00:00-04:00",
+  "selected_payment": {
+    "network": "eip155:8453",
+    "amount_atomic": 10000,
+    "normalized_usd": 0.01,
+    "display_amount": "$0.01"
+  },
+  "compared": [{"url": "https://example.com/x402/weather", "selected": true}],
+  "discovered_count": 4,
+  "probed_count": 3,
+  "unprobed_count": 1,
+  "evaluation_complete": false,
+  "stop_reason": "winner_selected",
+  "pq_trust": {"transparency": {"status": "pending"}}
+}</pre>
+        <dl class="checks compact annotate">
+          <div>
+            <dt>url</dt>
+            <dd>Winner URL after this paid check. Not a catalog recommendation.</dd>
+          </div>
+          <div>
+            <dt>live / payable / invocable</dt>
+            <dd>This request's observation. payable is a complete observed 402 option. invocable is payable plus input schema.</dd>
+          </div>
+          <div>
+            <dt>selected_payment</dt>
+            <dd>The exact current observed payment option that won. network is the observed rail, not a catalog claim.</dd>
+          </div>
+          <div>
+            <dt>normalized price</dt>
+            <dd><code>selected_payment.normalized_usd</code> / <code>display_amount</code> when the observed asset is known USDC.</dd>
+          </div>
+          <div>
+            <dt>observed timestamp</dt>
+            <dd><code>probed_at</code> is this request's check time.</dd>
+          </div>
+          <div>
+            <dt>compared</dt>
+            <dd>Slim probe rows from this request. The winner occupies a slot.</dd>
+          </div>
+          <div>
+            <dt>discovered_count / probed_count / unprobed_count</dt>
+            <dd>How many ranked candidates this request discovered, probed, and left untested.</dd>
+          </div>
+          <div>
+            <dt>evaluation_complete</dt>
+            <dd>True only when every ranked candidate in this request's working set was probed. A winner can stop earlier.</dd>
+          </div>
+          <div>
+            <dt>stop_reason</dt>
+            <dd>Why probing stopped. <code>winner_selected</code> here. Optional <code>pq_trust</code> is a transparency receipt, not a payment.</dd>
+          </div>
+        </dl>
+        <h3>Typed miss</h3>
+        <pre class="code">{
+  "live": false,
+  "url": null,
+  "miss_reason": "constraints_unmet",
+  "stop_reason": "constraints_unmet",
+  "unmet_constraints": ["max_price_usd", "require_invocable"],
+  "discovered_count": 6,
+  "probed_count": 6,
+  "unprobed_count": 0,
+  "evaluation_complete": true
+}</pre>
+        <p>Every probed candidate failed the requested bounds. If <code>stop_reason</code> were <code>probe_limit_reached</code>, ranked candidates would still be untested.</p>
       </section>
 
       <section class="block">

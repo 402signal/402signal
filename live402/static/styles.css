@@ -821,6 +821,50 @@ a.lookup:link, a.lookup:visited { color: var(--ink); text-decoration: none; }
   border-left: 3px solid var(--teal);
   max-width: 42rem;
 }
+.policy-field.lock {
+  margin-top: 20px;
+  padding: 0 0 0 12px;
+  border-left: 3px solid var(--fox);
+}
+.policy-field.prefer {
+  margin-top: 16px;
+  padding: 0 0 0 12px;
+  border-left: 3px dashed var(--muted);
+}
+.lock-chips .chip.active {
+  border-color: var(--fox);
+  color: var(--accent);
+}
+.prefer-chips .chip.active {
+  border-color: var(--teal);
+  color: var(--teal);
+}
+.policy-summary {
+  margin: 0 0 14px;
+  max-width: 42rem;
+  font-size: 16px;
+  line-height: 1.45;
+}
+.discover-row { margin: 8px 0 0; max-width: 42rem; }
+.discover-kicker {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.discover-row .listed-on {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin: 0;
+}
+.flow-line { font-weight: 650; }
+.stop-callout {
+  margin: 0 0 16px;
+  padding: 0 0 0 12px;
+  border-left: 3px solid var(--accent);
+  max-width: 42rem;
+}
+.lede.follow { margin-top: 10px; }
 .preview-callout .kicker {
   display: block;
   margin: 0 0 6px;

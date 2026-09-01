@@ -1893,7 +1893,7 @@ class ProductBriefTests(unittest.TestCase):
         self.assertIn("get", spec["paths"]["/preview"])
         self.assertIn("/rails", spec["paths"])
         self.assertIn("get", spec["paths"]["/rails"])
-        self.assertEqual(spec["info"]["contact"]["email"], "402signal@gmail.com")
+        self.assertEqual(spec["info"]["contact"]["email"], "ross@402signal.com")
         self.assertIn("feePayer", spec["info"]["x-guidance"])
         self.assertIn("eip155:8453", spec["info"]["x-guidance"])
         self.assertIn("x402.org", spec["info"]["x-guidance"])

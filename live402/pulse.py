@@ -10,7 +10,7 @@ import threading
 import time
 from urllib.parse import urlparse, urlencode
 
-from live402 import catalog, fixtures, payment, probe
+from live402 import catalog, fixtures, payment, probe, site_chrome
 
 CACHE_TTL = 15.0
 OURS_URL = "https://402signal.com/route"
@@ -1160,17 +1160,7 @@ def dashboard_html(payload: dict | None = None) -> str:
 </head>
 <body>
   <div class="page wide">
-    <header class="site">
-      <a class="brand" href="/">
-        <span class="mark">402</span>
-        <span class="brand-name">402Signal</span>
-      </a>
-      <nav class="nav" aria-label="Primary">
-        <a href="/how">How it works</a>
-        <a href="/developers">Developers</a>
-        <a href="/catalog">Try it</a>
-      </nav>
-    </header>
+    {site_chrome.header_html()}
     <main>
       <section class="hero compact">
         <h1>Lookups 402Signal can try</h1>
@@ -1182,17 +1172,7 @@ def dashboard_html(payload: dict | None = None) -> str:
         {"".join(cols)}
       </div>
     </main>
-    <footer class="foot">
-      <p>
-        <a href="https://github.com/402signal/402signal" rel="noopener noreferrer">GitHub</a>
-        <a href="https://x.com/402Signal" rel="noopener noreferrer">@402Signal</a>
-        <a href="/openapi.json">OpenAPI</a>
-        <a href="/mcp.json">MCP</a>
-        <a href="/transparency">Transparency</a>
-        <a href="/catalog" class="muted">Explore</a>
-        <a href="mailto:ross@402signal.com">ross@402signal.com</a>
-      </p>
-    </footer>
+    {site_chrome.footer_html()}
   </div>
   <script src="/dashboard.js"></script>
 </body>

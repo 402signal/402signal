@@ -372,7 +372,7 @@ def openapi_spec(resource_url: str = ROUTE) -> dict:
             "version": "0.5.0",
             "description": OPENAPI_INFO_DESCRIPTION,
             "x-guidance": GUIDANCE,
-            "contact": {"url": ORIGIN, "name": "402Signal", "email": "402signal@gmail.com"},
+            "contact": {"url": ORIGIN, "name": "402Signal", "email": "ross@402signal.com"},
         },
         "servers": [{"url": origin, "description": "This origin"}],
         "tags": [
