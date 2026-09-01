@@ -118,6 +118,8 @@ class CloseoutStaticTests(unittest.TestCase):
             "docs/pq-recovery.md",
             "docs/pq-first-production-event.md",
             "docs/backup.md",
+            "docs/automation-security-boundaries.md",
+            "docs/github-protection.md",
         ]
         em = "\u2014"
         for rel in authored:

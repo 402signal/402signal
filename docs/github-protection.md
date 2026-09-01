@@ -1,18 +1,24 @@
-# GitHub branch protection (human checklist)
+# GitHub branch protection
 
-This repository cannot set branch protection through the GitHub API from this PR. Do not claim protection is on until a repo admin completes the steps below.
+`main` is protected by the active repository ruleset **Protect main**.
+This file does not create, edit, or disable GitHub rulesets.
 
 Required CI check name (job id in `.github/workflows/test.yml`):
 
 **`test`**
 
-1. GitHub → Settings → Rules → Rulesets (or Branches → Branch protection) for `main`.
-2. Require a pull request before merging.
-3. Require status checks to pass: add exactly `test`.
-4. Do not require checks that only exist on `pull_request_target` (that trigger is not used).
-5. Restrict who can push to `main`.
-6. Require CODEOWNERS review for the paths in `.github/CODEOWNERS` once the `@402signal/maintainers` team exists.
-7. Do not attach deploy secrets to pull-request workflows. `test` and CodeQL use `contents: read` only (CodeQL also needs `security-events: write` to upload results).
-8. Confirm CODEOWNERS team membership before enforcing reviews.
+CodeQL also publishes `analyze (python)` and
+`analyze (javascript-typescript)`. Those names appear on the active
+ruleset. This PR does not add or remove required checks.
 
-CODEOWNERS is implemented in-tree. Branch protection is **human**, not implemented by this change.
+Remaining human tightening (optional, admin-only, not this PR):
+
+1. Require CODEOWNERS review for the paths in `.github/CODEOWNERS`.
+   Reviews are assigned to `@ross402signal`.
+2. Restrict who can push to `main` further if the ruleset is loosened.
+3. Do not attach deploy secrets to pull-request workflows. `test` and
+   CodeQL use `contents: read` only (CodeQL also needs
+   `security-events: write` to upload results).
+
+CODEOWNERS is implemented in-tree. Branch protection is already
+enabled. This PR does not change the ruleset.
