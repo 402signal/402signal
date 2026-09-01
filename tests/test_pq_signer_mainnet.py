@@ -38,6 +38,7 @@ def _policy(now=1_700_000_000, last_round=1, fee=3000):
         "canonical_fee": fee,
         "snapshot_at": now,
         "size_rule": "deterministic_falcon_envelope_estimate",
+        "size_version": 1,
     }
 
 

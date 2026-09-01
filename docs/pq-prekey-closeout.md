@@ -64,7 +64,9 @@ the trusted MainNet network-parameter path.
 Follow-up (this PR): protocol is **pq-anchor/2**. The router fetches
 a pinned MainNet suggested-params snapshot itself and HMAC-binds
 the narrow policy (`last_round`, `min_fee`, `fee_per_byte`, `fv`,
-`lv`, `canonical_fee`, `snapshot_at`, `size_rule`). Operator
+`lv`, `canonical_fee`, `snapshot_at`, `size_rule`, `size_version=1`)
+by flattening those fields into the Go-signer MAC (no nested
+`policy=` blob). Operator
 authorize/prepare does not depend on injected params. Canonical
 fee/fv/lv validation is not loosened.
 

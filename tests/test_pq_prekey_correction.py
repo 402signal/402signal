@@ -20,6 +20,62 @@ _SIG = base64.b64encode(b"\x00" * 4 + b"\x22" * 64).decode("ascii")
 _FALCON_PK = b"pk" + bytes(range(14))
 _FALCON_SIG = b"sig" + bytes(range(29))
 
+# Shared with 402signal-pq-signer pq-anchor/2 HMAC. Flat k=v, size_version=1.
+_GOLDEN_TOKEN = "vector-token"
+_GOLDEN_ROOT = "00" * 32
+_GOLDEN_BODY = "402signal.com/pq/log/mainnet-v1\n1\nAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\n"
+_GOLDEN_CHECKPOINT = "%s\n%s %s %s\n" % (_GOLDEN_BODY, "\u2014", ORIGIN_MAINNET, _SIG)
+_GOLDEN_POLICY = {
+    "canonical_fee": 3000,
+    "fee_per_byte": 0,
+    "fv": 12345,
+    "last_round": 12345,
+    "lv": 13345,
+    "min_fee": 1000,
+    "size_rule": "deterministic_falcon_envelope_estimate",
+    "size_version": 1,
+    "snapshot_at": 1700000000,
+}
+FLAT_HMAC_GOLDEN = (
+    "pq-anchor/2\n"
+    "canonical_fee=3000\n"
+    "checkpoint=" + _GOLDEN_CHECKPOINT + "\n"
+    "consistency=\n"
+    "fee_per_byte=0\n"
+    "fv=12345\n"
+    "last_round=12345\n"
+    "lv=13345\n"
+    "min_fee=1000\n"
+    "origin=402signal.com/pq/log/mainnet-v1\n"
+    "request_id=req-vector-mn-1\n"
+    "root=" + _GOLDEN_ROOT + "\n"
+    "size_rule=deterministic_falcon_envelope_estimate\n"
+    "size_version=1\n"
+    "snapshot_at=1700000000\n"
+    "timestamp=1700000000\n"
+    "tree_size=1\n"
+    "v=2\n"
+)
+FLAT_HMAC_FIELD_ORDER = (
+    "canonical_fee",
+    "checkpoint",
+    "consistency",
+    "fee_per_byte",
+    "fv",
+    "last_round",
+    "lv",
+    "min_fee",
+    "origin",
+    "request_id",
+    "root",
+    "size_rule",
+    "size_version",
+    "snapshot_at",
+    "timestamp",
+    "tree_size",
+    "v",
+)
+
 
 def _signed_note(size, root, origin=ORIGIN_MAINNET):
     body = ckpt.checkpoint_body(origin, int(size), bytes(root))
@@ -146,6 +202,7 @@ class PrekeyCorrectionTests(unittest.TestCase):
         self.assertEqual(policy["fv"], 1)
         self.assertEqual(policy["lv"], 1001)
         self.assertEqual(policy["size_rule"], "deterministic_falcon_envelope_estimate")
+        self.assertEqual(policy["size_version"], 1)
 
     def test_empty_params_do_not_hide_missing_snapshot(self):
         with self.assertRaises(canary.CanaryError):
@@ -178,7 +235,18 @@ class PrekeyCorrectionTests(unittest.TestCase):
             )
         self.assertFalse(store.last_authorized_checkpoint().get("signed"))
 
-    def test_pq_anchor_2_hmac_binds_policy(self):
+    def test_pq_anchor_2_hmac_flattens_policy(self):
+        policy = {
+            "last_round": 9,
+            "min_fee": 1000,
+            "fee_per_byte": 0,
+            "fv": 9,
+            "lv": 1009,
+            "canonical_fee": 3000,
+            "snapshot_at": 1_700_000_000,
+            "size_rule": "deterministic_falcon_envelope_estimate",
+            "size_version": 1,
+        }
         body = signer_mainnet.canonical_bytes(
             origin=ORIGIN_MAINNET,
             tree_size=1,
@@ -187,21 +255,27 @@ class PrekeyCorrectionTests(unittest.TestCase):
             timestamp=1_700_000_000,
             request_id="req",
             checkpoint=_signed_note(1, b"\x11" * 32),
-            policy={
-                "last_round": 9,
-                "min_fee": 1000,
-                "fee_per_byte": 0,
-                "fv": 9,
-                "lv": 1009,
-                "canonical_fee": 3000,
-                "snapshot_at": 1_700_000_000,
-                "size_rule": "deterministic_falcon_envelope_estimate",
-            },
+            policy=policy,
         )
         self.assertTrue(body.startswith(b"pq-anchor/2\n"))
-        self.assertIn(b"policy=canonical_fee=3000,", body)
+        self.assertIn(b"canonical_fee=3000\n", body)
+        self.assertIn(b"size_version=1\n", body)
+        self.assertIn(b"size_rule=deterministic_falcon_envelope_estimate\n", body)
         self.assertIn(b"v=2\n", body)
+        self.assertNotIn(b"policy=", body)
         self.assertNotIn(b"txn=", body)
+        missing = {**policy, "size_version": 2}
+        with self.assertRaises(signer_mainnet.SignerClientError):
+            signer_mainnet.canonical_bytes(
+                origin=ORIGIN_MAINNET,
+                tree_size=1,
+                root=b"\x11" * 32,
+                consistency=[],
+                timestamp=1_700_000_000,
+                request_id="req",
+                checkpoint=_signed_note(1, b"\x11" * 32),
+                policy=missing,
+            )
 
     def test_summary_is_read_only_and_does_not_block_later_prepare(self):
         signed = []
@@ -415,12 +489,38 @@ class PrekeyCorrectionTests(unittest.TestCase):
         self.assertFalse(status["confirm_falcon_compatible"])
         self.assertFalse(status["confirmation_ready"])
 
+    def test_flat_hmac_golden_vector_matches_go_signer_format(self):
+        self.assertEqual(signer_mainnet.CANONICAL_KEYS, FLAT_HMAC_FIELD_ORDER)
+        self.assertEqual(signer_mainnet.HMAC_SIZE_VERSION, 1)
+        body = signer_mainnet.canonical_bytes(
+            origin=ORIGIN_MAINNET,
+            tree_size=1,
+            root=_GOLDEN_ROOT,
+            consistency=[],
+            timestamp=1700000000,
+            request_id="req-vector-mn-1",
+            checkpoint=_GOLDEN_CHECKPOINT,
+            policy=_GOLDEN_POLICY,
+        )
+        self.assertEqual(body, FLAT_HMAC_GOLDEN.encode("utf-8"))
+        self.assertNotIn(b"policy=", body)
+        mac = signer_mainnet.mac_hex(_GOLDEN_TOKEN, body)
+        self.assertEqual(
+            mac,
+            signer_mainnet.mac_hex(_GOLDEN_TOKEN, FLAT_HMAC_GOLDEN.encode("utf-8")),
+        )
+        spec = (__import__("pathlib").Path("docs/signer-mainnet-spec.md").read_text(encoding="utf-8"))
+        self.assertIn("size_version=1", spec)
+        self.assertIn("canonical_fee=<decimal>", spec)
+        self.assertNotIn("policy=<canonical_fee=", spec)
+
     def test_ready_stays_no(self):
         text = (__import__("pathlib").Path("docs/pq-prekey-closeout.md").read_text(encoding="utf-8"))
         self.assertIn("READY_FOR_PRODUCTION_KEY_INSTALL = NO", text)
         spec = (__import__("pathlib").Path("docs/signer-mainnet-spec.md").read_text(encoding="utf-8"))
         self.assertIn("pq-anchor/2", spec)
         self.assertIn("Parallel private-signer PR checklist", spec)
+        self.assertIn("size_version", spec)
 
 
 if __name__ == "__main__":

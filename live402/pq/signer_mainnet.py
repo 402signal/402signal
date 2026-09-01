@@ -10,9 +10,10 @@ Uses ONLY:
   LIVE402_PQ_SIGNER_MAINNET_HOST  (default 402signal-pq-signer-mainnet.internal)
   LIVE402_PQ_SIGNER_MAINNET_PORT  (default 9091)
 
-pq-anchor/2 HMAC-binds the narrow frozen policy (last_round, min_fee,
-fee_per_byte, fv, lv, canonical_fee, snapshot_at, size_rule) in
-addition to the pq-anchor/1 identity fields. Never sends fee / sender /
+pq-anchor/2 HMAC-binds the narrow frozen policy by flattening those
+fields into the same sorted k=v MAC as the Go signer (last_round,
+min_fee, fee_per_byte, fv, lv, canonical_fee, snapshot_at, size_rule,
+size_version=1). Never sends fee / sender /
 receiver / amount / unsigned txn / Falcon SK as top-level keys.
 Reply is bound to tree / root / origin / checkpoint plus expected
 MainNet identity. Full SignedTxn semantic verify runs on the router
@@ -57,7 +58,10 @@ SIGNER_MERGE_SHA = "a901ef7a"
 SIGNER_REVIEWED_HEAD = "9798c38f"
 SIGNER_PROTOCOL = "pq-anchor/2"
 REQUEST_VERSION = 2
-# Narrow HMAC-bound policy. Do not add arbitrary txn fields.
+# Narrow HMAC-bound policy. Flattened into the MAC. Do not add
+# arbitrary txn fields. size_version is required and must be 1.
+HMAC_SIZE_VERSION = 1
+HMAC_SIZE_RULE = "deterministic_falcon_envelope_estimate"
 POLICY_KEYS = (
     "canonical_fee",
     "fee_per_byte",
@@ -66,19 +70,22 @@ POLICY_KEYS = (
     "lv",
     "min_fee",
     "size_rule",
+    "size_version",
     "snapshot_at",
 )
-CANONICAL_KEYS = (
+# Identity keys stay in the JSON request. Policy keys are nested in
+# the JSON `policy` object but flattened into the HMAC byte string.
+IDENTITY_CANONICAL_KEYS = (
     "checkpoint",
     "consistency",
     "origin",
-    "policy",
     "request_id",
     "root",
     "timestamp",
     "tree_size",
     "v",
 )
+CANONICAL_KEYS = tuple(sorted(IDENTITY_CANONICAL_KEYS + POLICY_KEYS))
 REQUEST_KEYS = (
     "v",
     "origin",
@@ -164,6 +171,7 @@ def narrow_policy(policy: dict | None) -> dict:
         out["canonical_fee"] = int(out["canonical_fee"])
         out["snapshot_at"] = int(out["snapshot_at"])
         out["size_rule"] = str(out["size_rule"])
+        out["size_version"] = int(out["size_version"])
     except (TypeError, ValueError) as exc:
         raise SignerClientError("policy field missing") from exc
     if out["last_round"] < 1 or out["fv"] < 1 or out["lv"] < 1:
@@ -172,15 +180,27 @@ def narrow_policy(policy: dict | None) -> dict:
         raise SignerClientError("policy field missing")
     if out["fee_per_byte"] < 0 or out["snapshot_at"] < 1:
         raise SignerClientError("policy field missing")
-    if out["size_rule"] != "deterministic_falcon_envelope_estimate":
+    if out["size_rule"] != HMAC_SIZE_RULE:
+        raise SignerClientError("policy field missing")
+    if out["size_version"] != HMAC_SIZE_VERSION:
         raise SignerClientError("policy field missing")
     return {key: out[key] for key in POLICY_KEYS}
 
 
-def policy_canonical(policy: dict) -> str:
-    """Deterministic policy encoding for HMAC. Sorted keys, decimal ints."""
+def flatten_policy_fields(policy: dict) -> dict:
+    """Policy fields as decimal/string MAC values. No nested policy= blob."""
     bound = narrow_policy(policy)
-    return ",".join("%s=%s" % (key, bound[key]) for key in POLICY_KEYS)
+    return {
+        "canonical_fee": str(int(bound["canonical_fee"])),
+        "fee_per_byte": str(int(bound["fee_per_byte"])),
+        "fv": str(int(bound["fv"])),
+        "last_round": str(int(bound["last_round"])),
+        "lv": str(int(bound["lv"])),
+        "min_fee": str(int(bound["min_fee"])),
+        "size_rule": str(bound["size_rule"]),
+        "size_version": str(int(bound["size_version"])),
+        "snapshot_at": str(int(bound["snapshot_at"])),
+    }
 
 
 def _hex_node(value) -> str:
@@ -216,24 +236,28 @@ def canonical_bytes(
     policy: dict,
     v: int = REQUEST_VERSION,
 ) -> bytes:
-    """pq-anchor/2 MAC input. Identity fields plus narrow policy."""
+    """pq-anchor/2 MAC input. Identity + flattened policy, sorted k=v.
+
+    Matches the Go signer: no nested policy=… blob. size_version=1 is
+    required. Field order is sorted(CANONICAL_KEYS).
+    """
     if int(v) != REQUEST_VERSION:
         raise SignerClientError("unsupported version")
     fields = {
         "checkpoint": checkpoint if checkpoint is not None else "",
         "consistency": _consistency_csv(consistency),
         "origin": origin if origin is not None else "",
-        "policy": policy_canonical(policy),
         "request_id": request_id if request_id is not None else "",
         "root": _hex_node(root),
         "timestamp": str(int(timestamp)),
         "tree_size": str(int(tree_size)),
         "v": "2",
     }
+    fields.update(flatten_policy_fields(policy))
+    if set(fields) != set(CANONICAL_KEYS):
+        raise SignerClientError("request keys")
     parts = [SIGNER_PROTOCOL]
-    for key in sorted(fields):
-        if key not in CANONICAL_KEYS:
-            raise SignerClientError("request keys")
+    for key in CANONICAL_KEYS:
         parts.append("%s=%s" % (key, fields[key]))
     return ("\n".join(parts) + "\n").encode("utf-8")
 
@@ -498,7 +522,8 @@ def protocol_probe(*, host: str | None = None, port: int | None = None, timeout:
         "last_round": 1,
         "lv": 1001,
         "min_fee": 1000,
-        "size_rule": "deterministic_falcon_envelope_estimate",
+        "size_rule": HMAC_SIZE_RULE,
+        "size_version": HMAC_SIZE_VERSION,
         "snapshot_at": 1,
     }
     # Valid shape, invalid HMAC: probe must not create auth.

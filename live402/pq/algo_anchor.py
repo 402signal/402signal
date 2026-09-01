@@ -327,9 +327,11 @@ HMAC_POLICY_KEYS = (
     "lv",
     "min_fee",
     "size_rule",
+    "size_version",
     "snapshot_at",
 )
 HMAC_SIZE_RULE = "deterministic_falcon_envelope_estimate"
+HMAC_SIZE_VERSION = 1
 
 
 def snapshot_last_round(params: dict | None = None, *, require: bool = False) -> int:
@@ -381,6 +383,7 @@ def fee_policy_snapshot(params: dict | None = None, *, unsigned: dict | None = N
         "snapshot_at": int(now if now is not None else _time.time()),
         "snapshot_max_age_s": SNAPSHOT_MAX_AGE_S,
         "size_rule": HMAC_SIZE_RULE,
+        "size_version": HMAC_SIZE_VERSION,
         "version": "pq-anchor/2",
         "formula": "max(fee_per_byte * deterministic_falcon_envelope_estimate, protocol_base_min * 3)",
     }
@@ -403,7 +406,10 @@ def hmac_policy(policy: dict | None) -> dict:
     out["canonical_fee"] = int(out["canonical_fee"])
     out["snapshot_at"] = int(out["snapshot_at"])
     out["size_rule"] = str(out["size_rule"])
+    out["size_version"] = int(out["size_version"])
     if out["size_rule"] != HMAC_SIZE_RULE:
+        raise AnchorError("policy field missing")
+    if out["size_version"] != HMAC_SIZE_VERSION:
         raise AnchorError("policy field missing")
     if out["last_round"] < 1 or out["fv"] < 1 or out["canonical_fee"] < 1:
         raise AnchorError("policy field missing")

@@ -48,32 +48,71 @@ The router sends exactly these JSON keys:
 produced. `policy` is the **narrow frozen snapshot object only**:
 
 ```
-canonical_fee, fee_per_byte, fv, last_round, lv, min_fee, size_rule, snapshot_at
+canonical_fee, fee_per_byte, fv, last_round, lv, min_fee,
+size_rule, size_version, snapshot_at
 ```
 
 `size_rule` is exactly `deterministic_falcon_envelope_estimate`.
+`size_version` is exactly the integer `1`. The Go signer requires
+`size_version=1` and fail-closes otherwise.
 Do **not** send an arbitrary txn, unsigned blob, fee, firstValid,
 sender, amount, pk, or sk as top-level keys. Unknown JSON keys are
 rejected.
 
-### HMAC canonical bytes
+### HMAC canonical bytes (flat; matches Go signer)
+
+The MAC does **not** nest `policy=canonical_fee=…,fee_per_byte=…`.
+Policy fields are flattened into the same sorted `k=v` lines as the
+identity fields (same algorithm as pq-anchor/1: version line, then
+sorted keys, each `k=v\\n`).
+
+Exact field order (`sorted` ASCII; `live402.pq.signer_mainnet.CANONICAL_KEYS`):
+
+```
+canonical_fee
+checkpoint
+consistency
+fee_per_byte
+fv
+last_round
+lv
+min_fee
+origin
+request_id
+root
+size_rule
+size_version
+snapshot_at
+timestamp
+tree_size
+v
+```
 
 ```
 pq-anchor/2\n
+canonical_fee=<decimal>\n
 checkpoint=<signed-note>\n
 consistency=<hex nodes joined by comma>\n
+fee_per_byte=<decimal>\n
+fv=<decimal>\n
+last_round=<decimal>\n
+lv=<decimal>\n
+min_fee=<decimal>\n
 origin=<origin>\n
-policy=<canonical_fee=…,fee_per_byte=…,fv=…,last_round=…,lv=…,min_fee=…,size_rule=…,snapshot_at=…>\n
 request_id=<id>\n
 root=<lowercase hex>\n
+size_rule=deterministic_falcon_envelope_estimate\n
+size_version=1\n
+snapshot_at=<decimal unix seconds>\n
 timestamp=<decimal>\n
 tree_size=<decimal>\n
 v=2\n
 ```
 
-Policy encoding is the eight keys in that sorted order, comma-separated
-`k=v` integers/strings (same as `live402.pq.signer_mainnet.policy_canonical`).
-`hmac` is hex(HMAC-SHA256(token, canonical)).
+Integers are decimal with no leading zeros (except the value `0`).
+`hmac` is hex(HMAC-SHA256(token, canonical)). Golden vector:
+`tests/test_pq_prekey_correction.py` (`FLAT_HMAC_GOLDEN`). Share that
+exact UTF-8 byte string with the private signer repo.
 
 Invalid HMAC must reject with **exactly**:
 
@@ -163,6 +202,7 @@ Reject (no SignedTxn) when any of these hold:
 | Reason | Detail |
 |---|---|
 | Wrong protocol | not pq-anchor/2 / `v!=2` / missing `policy` |
+| size_version | not exactly `1` |
 | Wrong origin | not `402signal.com/pq/log/mainnet-v1` |
 | Wrong genesis | not MainNet ID+hash |
 | Amount nonzero | must be 0 |
@@ -226,7 +266,7 @@ This agent cannot edit that private repo. The public router implements
 the client, protocol docs, and mocks. The signer PR must:
 
 1. Speak **pq-anchor/2** only on the MainNet app. Reject pq-anchor/1.
-2. HMAC-verify the narrow policy object using the canonical encoding above.
+2. HMAC-verify flattened policy fields (`size_version=1` required) using the canonical encoding above. Do not nest `policy=` in the MAC.
 3. Independently fetch MainNet `/v2/transactions/params` from the hardcoded allowlist.
 4. Apply freshness / lastRound slack / min-fee / required-fee-vs-frozen rules. Never rewrite fee/fv/lv.
 5. On accept, sign the **exact** HMAC-bound policy. Router verifies equality.
