@@ -37,11 +37,11 @@ GUIDANCE = (
     "GET /health is {ok:true} only. "
     "POST /validate {url} (or GET /validate?url=) is an unpaid seller probe: agent-ready? Fail-closed SSRF, not a /route paywall bypass. "
     "GET /attestation is a public sha256 of a recent 402signal_observed probe batch (not on-chain). "
-    "GET /pq/log/checkpoint and /pq/log/tile/* are an experimental C2SP transparency log "
-    "(not MainNet-anchored; LIVE402_PQ_FALCON_BROADCAST is a 402signal router env, "
-    "default unset; 402security must GO before LIVE402_PQ_FALCON_BROADCAST=1; "
-    "signer never reads BROADCAST and never POSTs; /route does not wait for chain; "
-    "Falcon authorizes a checkpoint txn, not a merchant payment). "
+    "GET /pq/log/checkpoint and /pq/log/tile/* are an experimental C2SP transparency log. "
+    "Falcon anchoring is TestNet-only. Eligible checkpoints may be broadcast to Algorand TestNet. "
+    "MainNet broadcasting is not enabled. "
+    "Signer never reads BROADCAST and never POSTs. /route does not wait for chain. "
+    "Falcon authorizes a checkpoint txn, not a merchant payment. "
     "Probe budget is under 60s; a hang returns 503 JSON with miss_reason probe_timeout. "
     "If ranked candidates remain when the budget ends, miss_reason is probe_budget_exhausted "
     "(not no_candidates). If the request probe ceiling is hit with ranked candidates still untested and "
@@ -1175,7 +1175,7 @@ HTTP 200 = live URL plus target contract. HTTP 503 = typed miss_reason.
 - GET /preview?need=weather  request-time catalog search (current upstream catalogs plus a local shadow; not a full-world RAM index) + discovery_matches + displayed + seller claims + read-only 402Signal observation (not_yet_observed when never independently probed). not_probed:true (does not probe, does not charge). Optional prefer_network=base|solana|algorand ranks across all rails; optional networks=solana restricts rails. discovery_via is a compact per-rail search|pages|error|fixture map. discovery_exhaustive is true only when the returned set is known complete. Catalog rows keep three clocks (discovery, claim, verification); a paid route also returns this request's probe time. HEAD 200 on /llms.txt /openapi.json /mcp.json /preview /rails /pulse.
 - POST /validate {"url":"https://seller.example/x402"}  unpaid seller probe (GET first, justified POST {} only, never a catalog-declared body, DNS IP-pin): is this seller agent-ready? Also GET /validate?url=. Fail-closed SSRF. Not a /route paywall bypass. Readiness + claimed vs observed + flags. Never a binary healthy flag.
 - GET /attestation  public sha256 of a recent 402signal_observed probe batch (batch_id, created_at, n, algo, hash). Not on-chain. Optional ?batch_id=.
-- GET /pq/log/checkpoint and GET /pq/log/tile/*  experimental C2SP transparency log (tlog-checkpoint + tlog-tiles). Not MainNet-anchored. TestNet-only Falcon. LIVE402_PQ_FALCON_BROADCAST is a 402signal router env, default unset; 402security must GO before it is set to 1. Signer never reads BROADCAST and never POSTs. Falcon SK must never live on 402signal. last_confirmed is persisted only after an independent TestNet fetch+verify. /route does not wait for chain. Falcon authorizes a checkpoint txn, not a merchant payment. Paid /route may include pq_trust.transparency {status: pending|unavailable}. pending means a durable leaf and a signed checkpoint, not an Algorand inclusion. unavailable means the log was down; it is not pending. payment_authorization.pq_native is always false. No /trust page. Homepage PQ card renders only when last_confirmed has a real TestNet txid. GET /transparency is the first-party read page.
+- GET /pq/log/checkpoint and GET /pq/log/tile/*  experimental C2SP transparency log (tlog-checkpoint + tlog-tiles). Falcon anchoring is TestNet-only. Eligible checkpoints may be broadcast to Algorand TestNet. MainNet broadcasting is not enabled. Signer never reads BROADCAST and never POSTs. Falcon SK must never live on 402signal. last_confirmed is persisted only after an independent TestNet fetch+verify. /route does not wait for chain. Falcon authorizes a checkpoint txn, not a merchant payment. Paid /route may include pq_trust.transparency {status: pending|unavailable}. pending means a durable leaf and a signed checkpoint, not an Algorand inclusion. unavailable means the log was down; it is not pending. payment_authorization.pq_native is always false. No /trust page. Homepage PQ card renders only when last_confirmed has a real TestNet txid. GET /transparency is the first-party read page.
 - GET /rails  three pay-in networks, asset, amountAtomic, facilitators, feePayers, maxTimeoutSeconds, per-rail up+latency
 - GET /health  {"ok":true}
 - GET /openapi.json

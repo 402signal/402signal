@@ -117,10 +117,18 @@ class C2SPHttpTests(unittest.TestCase):
 
     def test_docs_falcon_anchoring_wording(self):
         spec = json.dumps(discover.openapi_spec())
+        docs = spec + "\n" + discover.GUIDANCE + "\n" + discover.LLMS_TXT
         self.assertIn("Falcon anchoring is TestNet-only", spec)
         self.assertIn("Eligible checkpoints may be broadcast to Algorand TestNet", spec)
         self.assertIn("MainNet broadcasting is not enabled", spec)
-        self.assertNotIn("Falcon broadcast is TestNet-only and off by default", spec)
+        self.assertIn("Falcon anchoring is TestNet-only", discover.GUIDANCE)
+        self.assertIn("Falcon anchoring is TestNet-only", discover.LLMS_TXT)
+        self.assertIn("Signer never reads BROADCAST and never POSTs", docs)
+        self.assertIn("/route does not wait for chain", docs)
+        self.assertIn("Falcon authorizes a checkpoint txn, not a merchant payment", docs)
+        self.assertNotIn("off by default", docs)
+        self.assertNotIn("must GO before LIVE402_PQ_FALCON_BROADCAST=1", docs)
+        self.assertNotIn("default unset", docs)
 
     def test_head_checkpoint(self):
         status, raw, hdrs = self._get("/pq/log/checkpoint", method="HEAD")
