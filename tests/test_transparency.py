@@ -93,7 +93,9 @@ class TransparencyPageTests(unittest.TestCase):
         self.assertNotIn("See the check-first flow on the", html)
         self.assertNotIn('class="signal-flow"', html)
         self.assertIn("It is not a merchant payment.", html)
-        self.assertIn("Falcon-1024 does not make Base or Solana payments PQ-safe", html)
+        self.assertIn("native Falcon-1024 post-quantum authorization", html)
+        self.assertIn("does not make Base or Solana merchant payments post-quantum secure", html)
+        self.assertNotIn("PQ-safe", html)
         self.assertIn("Later rewriting inconsistent with published checkpoints becomes detectable.", html)
         self.assertIn("TestNet anchoring has not yet produced a confirmed checkpoint.", html)
         self.assertNotIn("id=\"pq-testnet\"", html)
@@ -163,7 +165,8 @@ class TransparencyPageTests(unittest.TestCase):
             "Later rewriting inconsistent with published checkpoints becomes detectable.",
             html,
         )
-        self.assertIn("does not make Base or Solana payments PQ-safe", html)
+        self.assertIn("does not make Base or Solana merchant payments post-quantum secure", html)
+        self.assertNotIn("PQ-safe", html)
         self.assertIn("View verification details", html)
         self.assertNotIn("Latest checkpoint · Tree", html)
         self.assertIn('href="/transparency"', html)

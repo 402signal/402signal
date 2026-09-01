@@ -489,10 +489,20 @@ a.lookup:link, a.lookup:visited { color: var(--ink); text-decoration: none; }
   padding: 10px 14px;
   min-height: 40px;
   cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
 }
-.chip:hover, .chip:focus { border-color: var(--accent); color: var(--accent); outline: none; }
-.chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.chip.active { border-color: var(--fox); color: var(--accent); background: var(--input); }
+.chip:hover { border-color: var(--muted); }
+.chip:focus { outline: none; }
+.chip:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+.chip.active,
+.chip[aria-pressed="true"] {
+  border-color: var(--fox);
+  color: var(--accent);
+  background: var(--input);
+}
 .chip.sample { border-radius: 4px; text-align: left; }
 .rail-chip { cursor: default; }
 .rail-chip.down { color: var(--dead); border-color: var(--dead); }
@@ -831,11 +841,13 @@ a.lookup:link, a.lookup:visited { color: var(--ink); text-decoration: none; }
   padding: 0 0 0 12px;
   border-left: 3px dashed var(--muted);
 }
-.lock-chips .chip.active {
+.lock-chips .chip.active,
+.lock-chips .chip[aria-pressed="true"] {
   border-color: var(--fox);
   color: var(--accent);
 }
-.prefer-chips .chip.active {
+.prefer-chips .chip.active,
+.prefer-chips .chip[aria-pressed="true"] {
   border-color: var(--teal);
   color: var(--teal);
 }

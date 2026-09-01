@@ -7,6 +7,10 @@ app = "402signal"
 primary_region = "iad"
 
 [build]
+  # Optional. Fingerprints /styles.css and /app.js as ?v=<gitsha>.
+  # If omitted, the image records SHA from copied .git/HEAD at build.
+  #   fly deploy --build-arg GIT_SHA=$(git rev-parse HEAD)
+  # Do not expose FLY_IMAGE_REF or add a public SHA/status endpoint.
 
 [http_service]
   internal_port = 8080

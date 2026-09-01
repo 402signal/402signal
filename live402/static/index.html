@@ -71,7 +71,7 @@
         <div class="trust-rail">
           <p class="trust-rail-label">TRANSPARENCY</p>
           <ol class="trust-steps">
-            <li>Commit route evidence to the append-only log. Signed checkpoints periodically anchored to Algorand TestNet.</li>
+            <li>Commit route evidence to the append-only log. Signed checkpoints are periodically anchored to Algorand TestNet.</li>
           </ol>
         </div>
         <figcaption class="sr-only" id="signal-flow-caption">Discovery, live check, policy, and result, with an append-only transparency log</figcaption>
@@ -102,10 +102,11 @@
       <section class="pq-testnet" id="pq-testnet">
         <p class="pq-badge">Currently Algorand TestNet</p>
         <h2>Verifiable routing history</h2>
-        <p>402Signal commits routing evidence to an append-only Merkle log. Signed checkpoints are authorized with Falcon-1024 on Algorand TestNet.</p>
+        <p>402Signal commits routing evidence to an append-only Merkle log.</p>
+        <p>Falcon-1024 post-quantum transaction authorization.</p>
         <!--PQ_LATEST-->
         <p>Later rewriting inconsistent with published checkpoints becomes detectable.</p>
-        <p>Falcon-1024 authorizes a checkpoint. It does not make Base or Solana payments PQ-safe.</p>
+        <p>This post-quantum authorization protects the checkpoint transaction. It does not make Base or Solana merchant payments post-quantum secure. Currently Algorand TestNet.</p>
         <p><a class="btn secondary" href="/transparency">View verification details</a></p>
       </section>
 

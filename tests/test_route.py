@@ -571,7 +571,12 @@ class PaywallTests(unittest.TestCase):
         self.assertIn("/pulse", html)
         self.assertIn('href="/transparency"', html)
         self.assertIn("/dashboard.js", html)
-        self.assertNotIn("<script>", html.replace('<script src="/dashboard.js"></script>', ""))
+        dash_scripts = re.sub(
+            r'<script src="/dashboard\.js(?:\?v=[^"]*)?"></script>',
+            "",
+            html,
+        )
+        self.assertNotIn("<script>", dash_scripts)
         js_path = os.path.join(os.path.dirname(__file__), "..", "live402", "static", "dashboard.js")
         with open(js_path, encoding="utf-8") as fh:
             dash_js = fh.read()

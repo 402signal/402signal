@@ -16,7 +16,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from live402 import catalog, discover, history, mcp, payment, pulse, rails, ready, reqctx, validate
+from live402 import asset_version, catalog, discover, history, mcp, payment, pulse, rails, ready, reqctx, validate
 from live402 import http_body
 from live402.http_body import BodyReadError
 from live402.route import handle_route
@@ -589,8 +589,8 @@ class Handler(SimpleHTTPRequestHandler):
             self.wfile.write(data)
 
     def _html(self, code: int, body: str, extra_headers: dict | None = None) -> None:
-        data = body.encode("utf-8")
-        headers = {"Cache-Control": "public, max-age=15"}
+        data = asset_version.stamp_html(body).encode("utf-8")
+        headers = {"Cache-Control": asset_version.HTML_REVALIDATE}
         headers.update(extra_headers or {})
         self.send_response(code)
         self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -601,6 +601,38 @@ class Handler(SimpleHTTPRequestHandler):
         self.end_headers()
         if not getattr(self, "_omit_body", False):
             self.wfile.write(data)
+
+    def _read_human_html(self) -> str | None:
+        parsed = urlparse(self.path)
+        if parsed.path in HUMAN_DYNAMIC_PATHS:
+            return self._transparency_html()
+        injected = self._homepage_html()
+        if injected is not None:
+            return injected
+        page = HUMAN_PAGES.get(parsed.path)
+        if not page:
+            return None
+        return (STATIC_DIR / page).read_text(encoding="utf-8")
+
+    def _serve_static_asset(self) -> None:
+        parsed = urlparse(self.path)
+        name = parsed.path.lstrip("/")
+        path = STATIC_DIR / name
+        if name not in asset_version.ASSET_FILES or not path.is_file():
+            return self._json(404, {"error": "not found"})
+        data = path.read_bytes()
+        suffix = path.suffix.lstrip(".")
+        ctype = {
+            "css": "text/css; charset=utf-8",
+            "js": "text/javascript; charset=utf-8",
+        }.get(suffix, "application/octet-stream")
+        requested = (parse_qs(parsed.query).get("v") or [""])[0]
+        cache = (
+            asset_version.ASSET_LONG_CACHE
+            if requested and requested == asset_version.asset_version()
+            else asset_version.HTML_REVALIDATE
+        )
+        return self._bytes(200, data, ctype, {"Cache-Control": cache})
 
     def _wants_html(self) -> bool:
         """Browsers send text/html. Agents, curl, and crawlers get JSON 402."""
@@ -664,17 +696,22 @@ class Handler(SimpleHTTPRequestHandler):
             "/pulse",
             "/attestation",
         }
-        if parsed.path in HUMAN_DYNAMIC_PATHS:
+        human = self._read_human_html()
+        if human is not None:
+            extra = (
+                {"Cache-Control": "no-store"}
+                if parsed.path in HUMAN_DYNAMIC_PATHS
+                else None
+            )
             self._omit_body = True
             try:
-                return self._html(200, self._transparency_html(), {"Cache-Control": "no-store"})
+                return self._html(200, human, extra)
             finally:
                 self._omit_body = False
-        injected = self._homepage_html()
-        if injected is not None:
+        if parsed.path in STATIC_FILES:
             self._omit_body = True
             try:
-                return self._html(200, injected)
+                return self._serve_static_asset()
             finally:
                 self._omit_body = False
         if self._rewrite_static_path():
@@ -722,14 +759,16 @@ class Handler(SimpleHTTPRequestHandler):
         if self._deny_private_store():
             return
         parsed = urlparse(self.path)
-        if parsed.path in HUMAN_DYNAMIC_PATHS:
-            return self._html(200, self._transparency_html(), {"Cache-Control": "no-store"})
-        if parsed.path in HUMAN_PAGES or parsed.path in STATIC_FILES:
-            injected = self._homepage_html()
-            if injected is not None:
-                return self._html(200, injected)
-            self._rewrite_static_path()
-            return SimpleHTTPRequestHandler.do_GET(self)
+        human = self._read_human_html()
+        if human is not None:
+            extra = (
+                {"Cache-Control": "no-store"}
+                if parsed.path in HUMAN_DYNAMIC_PATHS
+                else None
+            )
+            return self._html(200, human, extra)
+        if parsed.path in STATIC_FILES:
+            return self._serve_static_asset()
         if parsed.path == "/route":
             allow = {"Allow": "GET, POST, OPTIONS"}
             if self._wants_html():
