@@ -11,6 +11,7 @@ import unittest
 os.environ.setdefault("LIVE402_FIXTURE", "1")
 
 from live402 import economics, history, payment, reputation, select
+from tests.v2accept import attach_v2
 
 
 def _hist(success_7d=None, n_7d=0):
@@ -61,7 +62,7 @@ def _hit(url="https://a.example/x", rail="base", history=None, **extra):
         ],
     }
     row.update(extra)
-    return row
+    return attach_v2(row)
 
 
 class ComponentTests(unittest.TestCase):

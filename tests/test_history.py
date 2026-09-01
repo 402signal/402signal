@@ -31,6 +31,7 @@ def _complete_envelope(pay_to, amount="10000", rail="base"):
                 "asset": asset,
                 "amount": amount,
                 "payTo": pay_to,
+                "maxTimeoutSeconds": 60,
             }
         ],
     }
@@ -500,6 +501,7 @@ class HistoryDbTests(unittest.TestCase):
                     "asset": payment.USDC_BASE,
                     "amount": "10000",
                     "payTo": VALID_BASE_PAYTO,
+                    "maxTimeoutSeconds": 60,
                 }
             ],
             "inputSchema": {"type": "object", "properties": {"q": {"type": "string"}}, "required": ["q"]},
@@ -811,12 +813,27 @@ class RankPayToChangedTests(unittest.TestCase):
                 "asset": payment.USDC_BASE,
                 "accepts": [
                     {
+                        "scheme": "exact",
                         "network": payment.BASE_CAIP2,
                         "asset": payment.USDC_BASE,
                         "amount": "10000",
                         "payTo": pay_to,
+                        "maxTimeoutSeconds": 60,
                     }
                 ],
+                "envelope": {
+                    "x402Version": 2,
+                    "accepts": [
+                        {
+                            "scheme": "exact",
+                            "network": payment.BASE_CAIP2,
+                            "asset": payment.USDC_BASE,
+                            "amount": "10000",
+                            "payTo": pay_to,
+                            "maxTimeoutSeconds": 60,
+                        }
+                    ],
+                },
             }
             if "changed" in url:
                 row["risk"] = ["payTo_changed"]

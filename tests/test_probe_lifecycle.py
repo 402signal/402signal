@@ -13,6 +13,7 @@ from unittest.mock import patch
 os.environ.setdefault("LIVE402_FIXTURE", "1")
 
 from live402 import history, payment, probe
+from tests.v2accept import attach_v2
 
 
 def _usdc(rail="base"):
@@ -35,7 +36,7 @@ def _item(url, amount="10000", network="base"):
 
 
 def _live(url, amount=10000, latency=10):
-    return {
+    row = {
         "live": True,
         "url": url,
         "payTo": "0xabcabcabcabcabcabcabcabcabcabcabcabcabca",
@@ -58,6 +59,7 @@ def _live(url, amount=10000, latency=10):
             }
         ],
     }
+    return attach_v2(row)
 
 
 def _dead(url, miss="no_402_envelope"):

@@ -217,6 +217,7 @@ class SelectedPaymentTests(unittest.TestCase):
                     "asset": payment.USDC_BASE,
                     "amount": "20000",
                     "payTo": OBS_BASE_PAYTO,
+                    "maxTimeoutSeconds": 60,
                     "extra": {"facilitator": CDP, "displayAmount": "$0.02"},
                 },
                 {
@@ -225,6 +226,7 @@ class SelectedPaymentTests(unittest.TestCase):
                     "asset": payment.USDC_SOLANA_MINT,
                     "amount": "1000",
                     "payTo": SOL_PAYTO,
+                    "maxTimeoutSeconds": 60,
                     "extra": {"facilitator": PAYAI, "displayAmount": "$0.001"},
                 },
             ],

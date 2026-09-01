@@ -8,6 +8,7 @@ import unittest
 os.environ.setdefault("LIVE402_FIXTURE", "1")
 
 from live402 import policy, select
+from tests.v2accept import attach_v2
 
 
 class CompilePolicyTests(unittest.TestCase):
@@ -107,6 +108,7 @@ class EngineUsesStructuredOnlyTests(unittest.TestCase):
             ],
             "history": {"n_7d": 0, "p50_latency_ms": None},
         }
+        cheap = attach_v2(cheap)
         dear = dict(cheap)
         dear = dict(cheap)
         dear["url"] = "https://dear.example/x"
@@ -119,6 +121,7 @@ class EngineUsesStructuredOnlyTests(unittest.TestCase):
                 "amount": 50000,
             }
         ]
+        dear = attach_v2(dear)
         self.assertTrue(select.passes_constraints(cheap, cons))
         self.assertFalse(select.passes_constraints(dear, cons))
 
@@ -145,6 +148,7 @@ class EngineUsesStructuredOnlyTests(unittest.TestCase):
                 }
             ],
         }
+        hit = attach_v2(hit)
         self.assertTrue(select.passes_constraints(hit, cons))
         structured = policy.merge_constraints({"need": "weather", "min_reputation_score": 0.9})
         self.assertEqual(structured["unmeasured"], ())

@@ -8,6 +8,7 @@ import unittest
 os.environ.setdefault("LIVE402_FIXTURE", "1")
 
 from live402 import economics, payment, select
+from tests.v2accept import attach_v2, v2_accept
 
 
 def _hist(success_7d=None, n_7d=0):
@@ -31,7 +32,7 @@ def _hit(url, rail="base", amount=10000, latency=10, history=None):
     else:
         network, asset = payment.BASE_CAIP2, payment.USDC_BASE
         pay_to = "0xabcabcabcabcabcabcabcabcabcabcabcabcabca"
-    return {
+    row = {
         "url": url,
         "rail": rail,
         "live": True,
@@ -42,14 +43,10 @@ def _hit(url, rail="base", amount=10000, latency=10, history=None):
         "asset": asset,
         "history": history if history is not None else _hist(n_7d=12, success_7d=0.9),
         "accepts": [
-            {
-                "network": network,
-                "asset": asset,
-                "payTo": pay_to,
-                "amount": amount,
-            }
+            v2_accept(network, asset, amount, pay_to),
         ],
     }
+    return attach_v2(row)
 
 
 class ProvenanceTests(unittest.TestCase):

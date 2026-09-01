@@ -638,12 +638,27 @@ class CatalogIndexTests(unittest.TestCase):
                 "asset": payment.USDC_BASE,
                 "accepts": [
                     {
+                        "scheme": "exact",
                         "network": payment.BASE_CAIP2,
                         "asset": payment.USDC_BASE,
                         "amount": "10000",
                         "payTo": "0xabcabcabcabcabcabcabcabcabcabcabcabcabca",
+                        "maxTimeoutSeconds": 60,
                     }
                 ],
+                "envelope": {
+                    "x402Version": 2,
+                    "accepts": [
+                        {
+                            "scheme": "exact",
+                            "network": payment.BASE_CAIP2,
+                            "asset": payment.USDC_BASE,
+                            "amount": "10000",
+                            "payTo": "0xabcabcabcabcabcabcabcabcabcabcabcabcabca",
+                            "maxTimeoutSeconds": 60,
+                        }
+                    ],
+                },
             }
 
         with patch("live402.catalog.fixtures.fixture_mode", return_value=False), patch(
@@ -689,12 +704,27 @@ class CatalogIndexTests(unittest.TestCase):
                 "asset": payment.USDC_SOLANA_MINT,
                 "accepts": [
                     {
+                        "scheme": "exact",
                         "network": payment.SOLANA_MAINNET,
                         "asset": payment.USDC_SOLANA_MINT,
                         "amount": "10000",
                         "payTo": payment.DEFAULT_PAYTO_SOLANA,
+                        "maxTimeoutSeconds": 60,
                     }
                 ],
+                "envelope": {
+                    "x402Version": 2,
+                    "accepts": [
+                        {
+                            "scheme": "exact",
+                            "network": payment.SOLANA_MAINNET,
+                            "asset": payment.USDC_SOLANA_MINT,
+                            "amount": "10000",
+                            "payTo": payment.DEFAULT_PAYTO_SOLANA,
+                            "maxTimeoutSeconds": 60,
+                        }
+                    ],
+                },
             }
 
         cons = select.parse_constraints({"networks": ["solana"]})

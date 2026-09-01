@@ -262,19 +262,24 @@ class CheapestAssetTests(unittest.TestCase):
             "amount": 10000,
             "accepts": [
                 {
+                    "scheme": "exact",
                     "network": payment.BASE_CAIP2,
                     "asset": payment.USDC_BASE,
-                    "amount": 20000,
+                    "amount": "20000",
                     "payTo": "0xabcabcabcabcabcabcabcabcabcabcabcabcabca",
+                    "maxTimeoutSeconds": 60,
                 },
                 {
+                    "scheme": "exact",
                     "network": payment.SOLANA_MAINNET,
                     "asset": payment.USDC_SOLANA_MINT,
-                    "amount": 10000,
+                    "amount": "10000",
                     "payTo": payment.DEFAULT_PAYTO_SOLANA,
+                    "maxTimeoutSeconds": 60,
                 },
             ],
         }
+        both["envelope"] = {"x402Version": 2, "accepts": both["accepts"]}
         cons = select.parse_constraints({"networks": ["solana"]})
         self.assertTrue(select.passes_constraints(both, cons))
         winner = select.pick_winner([both], "cheapest", cons)

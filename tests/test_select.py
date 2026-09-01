@@ -11,6 +11,7 @@ from unittest.mock import patch
 os.environ.setdefault("LIVE402_FIXTURE", "1")
 
 from live402 import history, payment, probe, select
+from tests.v2accept import attach_v2, v2_accept
 
 
 def _usdc_for_rail(rail: str) -> str:
@@ -82,17 +83,17 @@ def _hit(
         row["asset"] = asset
     if accepts is None and (amount is not None or asset):
         accepts = [
-            {
-                "network": _network_for_rail(rail),
-                "asset": asset or _usdc_for_rail(rail),
-                "payTo": pay_to,
-                "amount": amount,
-            }
+            v2_accept(
+                _network_for_rail(rail),
+                asset or _usdc_for_rail(rail),
+                amount,
+                pay_to,
+            )
         ]
     if accepts is not None:
         row["accepts"] = accepts
     row.update(extra)
-    return row
+    return attach_v2(row)
 
 
 class ParseTests(unittest.TestCase):
@@ -529,12 +530,14 @@ class RouteNeedSelectTests(unittest.TestCase):
             "url": url,
             "description": description,
             "accepts": [
-                {
-                    "network": network,
-                    "payTo": pay_to,
-                    "amount": amount,
-                    "asset": _usdc_for_rail(network),
-                }
+                v2_accept(
+                    _network_for_rail(network if network in {"base", "solana", "algorand"} else "base")
+                    if network in {"base", "solana", "algorand"}
+                    else network,
+                    _usdc_for_rail(network),
+                    amount,
+                    pay_to,
+                )
             ],
         }
 
@@ -556,17 +559,17 @@ class RouteNeedSelectTests(unittest.TestCase):
             "status": 402,
             "has_402_challenge": True,
             "accepts": [
-                {
-                    "network": _network_for_rail(rail),
-                    "asset": _usdc_for_rail(rail),
-                    "payTo": pay_to,
-                    "amount": amount,
-                }
+                v2_accept(
+                    _network_for_rail(rail),
+                    _usdc_for_rail(rail),
+                    amount,
+                    pay_to,
+                )
             ],
         }
         if changed:
             row["risk"] = ["payTo_changed"]
-        return row
+        return attach_v2(row)
 
     def _dead(self, url, miss="no_402_envelope"):
         return {
