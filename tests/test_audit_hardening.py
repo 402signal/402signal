@@ -227,6 +227,56 @@ class SignedTxnVerifyTests(unittest.TestCase):
 
 
 class ReadyAndHeaderTests(unittest.TestCase):
+    def test_ready_503_when_local_log_smaller_than_confirmed(self):
+        tmp = tempfile.TemporaryDirectory()
+        os.environ["LIVE402_PQ_LOG_DB"] = os.path.join(tmp.name, "pq-log.sqlite")
+        store.reset()
+        httpd, port = _serve()
+        try:
+            for i in range(9):
+                store.append(("leaf-%s" % i).encode())
+            self.assertEqual(store.size(), 9)
+            store.save_confirmed_checkpoint(
+                tree_size=10,
+                origin=ORIGIN,
+                root=bytes(range(32)),
+                txid=_txid("B"),
+                confirmed_round=99,
+                at=100,
+            )
+            from live402.pq.transparency import log_integrity_error
+            from live402 import ready as ready_mod
+
+            self.assertTrue(
+                log_integrity_error(store.size(), store.last_confirmed_checkpoint())
+            )
+            payload = ready_mod.readiness()
+            self.assertFalse(payload["ok"])
+            self.assertFalse(payload["checks"]["pq_log"])
+            conn = HTTPConnection("127.0.0.1", port, timeout=5)
+            conn.request("GET", "/ready")
+            res = conn.getresponse()
+            raw = res.read()
+            conn.close()
+            self.assertEqual(res.status, 503)
+            body = json.loads(raw.decode("utf-8"))
+            self.assertFalse(body["ok"])
+            self.assertFalse(body["checks"]["pq_log"])
+            blob = raw.decode("utf-8").lower()
+            self.assertNotIn("/data", blob)
+            self.assertNotIn("sqlite", blob)
+            self.assertNotIn(tmp.name.lower(), blob)
+            self.assertNotIn("live402_pq_log_sk", blob)
+            self.assertNotIn("live402_pq_falcon_sk", blob)
+            self.assertNotIn("private", blob)
+            self.assertNotIn("inconsistent", blob)
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+            store.reset()
+            os.environ.pop("LIVE402_PQ_LOG_DB", None)
+            tmp.cleanup()
+
     def test_ready_and_server_header(self):
         httpd, port = _serve()
         try:
