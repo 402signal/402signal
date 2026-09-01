@@ -37,6 +37,7 @@ class CloseoutImportTests(unittest.TestCase):
         self.assertTrue(callable(netcfg.confirm_host_allowlisted))
         self.assertTrue(callable(netcfg.runtime_confirmation_independent))
         self.assertTrue(callable(netcfg.confirmation_status))
+        self.assertTrue(callable(netcfg.computed_confirmation_policy))
         self.assertTrue(callable(algo_anchor.required_fee))
         self.assertTrue(callable(algo_anchor.canonical_validity))
         self.assertTrue(callable(canary.send_durable))
@@ -60,6 +61,7 @@ class CloseoutImportTests(unittest.TestCase):
             "runtime_confirmation_independent",
             "confirmation_status",
             "configured_confirm_provider",
+            "computed_confirmation_policy",
         ):
             self.assertEqual(names.count(target), 1, target)
 

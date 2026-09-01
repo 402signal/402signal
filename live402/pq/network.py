@@ -9,14 +9,23 @@ decode + semantic verify) are separate allowlists. Confirmation is
 never HTTP 200 or a returned txid alone.
 
 Independence is an organization check, not a hostname check.
-AlgoNode (*.algonode.cloud) and Nodely (*.nodely.dev / *.nodely.io)
-are the same operator. Their public indexers report the same Nodely
-build. That pair is not independent confirmation.
-AlgoExplorer public indexer hosts return HTML landing pages, not
-JSON. Algorand Foundation does not publish a no-key public indexer.
-Before MainNet GO, confirmation must use a 402Signal-operated node
-or a different-organization public API. Fetch+decode+verify stays
-required even after that.
+Excluded as independent (same org / AlgoNode-backed, from public
+records, not a legal audit):
+  AlgoNode (*.algonode.*)
+  Nodely (*.4160.nodely.dev, *.4160.nodely.io, *.nodely.dev/.io)
+  Allo explorer (allo.info; AlgoNode-developed, Algorand Foundation)
+  Oanor (*.oanor.com; documents live reads from public AlgoNode APIs)
+A different Nodely hostname is not a different org.
+
+Production confirm path (option B):
+  PRIMARY  tatum     algorand-mainnet-indexer.gateway.tatum.io
+  FAILOVER nownodes  algo-index.nownodes.io
+  FUTURE   blockdaemon svc.blockdaemon.com (org map + host allowlist
+           only; not an env-selectable production provider. Documented
+           indexer base is /algorand/mainnet/native/indexer, so a
+           host-root /v2/transactions/{txid} URL is not wired.)
+Fetch+decode+semantic verify stays required. HTTP 200 or a returned
+txid is never confirmation. Submit-host pending is never independent.
 """
 
 from __future__ import annotations
@@ -61,6 +70,10 @@ ORG_NODELY = "nodely"
 ORG_SIGNAL = "402signal"
 ORG_TATUM = "tatum"
 ORG_NOWNODES = "nownodes"
+ORG_BLOCKDAEMON = "blockdaemon"
+# Exact hosts. Suffix rules in provider_org cover *.algonode.*,
+# *.4160.nodely.*, Allo, and Oanor so a new Nodely hostname stays
+# the same org.
 PROVIDER_ORGS = {
     "testnet-api.algonode.cloud": ORG_NODELY,
     "testnet-idx.algonode.cloud": ORG_NODELY,
@@ -72,8 +85,14 @@ PROVIDER_ORGS = {
     "mainnet-idx.4160.nodely.io": ORG_NODELY,
     "testnet-api.4160.nodely.dev": ORG_NODELY,
     "testnet-idx.4160.nodely.dev": ORG_NODELY,
+    "allo.info": ORG_NODELY,
+    "status.allo.info": ORG_NODELY,
+    "oanor.com": ORG_NODELY,
+    "www.oanor.com": ORG_NODELY,
+    "api.oanor.com": ORG_NODELY,
     "algorand-mainnet-indexer.gateway.tatum.io": ORG_TATUM,
     "algo-index.nownodes.io": ORG_NOWNODES,
+    "svc.blockdaemon.com": ORG_BLOCKDAEMON,
 }
 
 # Second MainNet confirm hostname (Nodely current public indexer).
@@ -94,8 +113,13 @@ class ConfirmProvider:
     secret_env: str
 
 
-# Do not add Blockdaemon. Only providers with a verified Algorand
-# indexer GET /v2/transactions/{txid} path.
+# Option B production confirm path. Env selects the name only.
+# PRIMARY tatum; OPTIONAL failover nownodes. Blockdaemon is not here:
+# docs.blockdaemon.com documents
+# https://svc.blockdaemon.com/algorand/mainnet/native/indexer
+# plus /v2/transactions/{txid}. A host-root /v2 path would be invented.
+CONFIRM_PROVIDER_PRIMARY = "tatum"
+CONFIRM_PROVIDER_FAILOVER = "nownodes"
 CONFIRM_PROVIDERS = {
     "tatum": ConfirmProvider(
         name="tatum",
@@ -114,6 +138,10 @@ CONFIRM_PROVIDERS = {
         secret_env="LIVE402_PQ_CONFIRM_NOWNODES_API_KEY",
     ),
 }
+# Future host allowlist only. Not env-selectable. Not required.
+FUTURE_CONFIRM_HOSTS = frozenset({"svc.blockdaemon.com"})
+# Optional alias for the primary (Tatum) key. Fly secret later.
+PRIMARY_INDEXER_TOKEN_ENV = "LIVE402_PQ_CONFIRM_INDEXER_TOKEN"
 # Falcon pqsig on the production endpoint is not proven in this
 # environment (no API key; no public MainNet f1 txn retrieved).
 # confirmation_ready stays false until a redacted fixture exists.
@@ -210,10 +238,14 @@ PENDING_HOST_ALLOWLIST = {
 CONFIRM_INDEPENDENT_OF_SUBMIT = False
 CONFIRM_INDEPENDENCE_STATUS = "not_met_same_org_nodely"
 CONFIRM_INDEPENDENCE_REQUIREMENT = (
-    "Before MainNet GO, confirmation must use a 402Signal-operated "
-    "Algorand node or a public API from a different organization than "
-    "the submit host. AlgoNode and Nodely are the same operator. "
-    "AlgoExplorer public indexer hosts return HTML, not JSON. "
+    "Production MainNet GO requires LIVE402_PQ_CONFIRM_PROVIDER=tatum "
+    "(primary) or nownodes (failover) so confirm is a different org "
+    "than AlgoNode/Nodely submit, plus the matching API key as a Fly "
+    "secret later (LIVE402_PQ_CONFIRM_TATUM_API_KEY or "
+    "LIVE402_PQ_CONFIRM_INDEXER_TOKEN; LIVE402_PQ_CONFIRM_NOWNODES_API_KEY "
+    "for failover). Do not set those secrets in this PR. AlgoNode, "
+    "Nodely, Allo, and Oanor are the same trust domain. Org labels "
+    "come from public company records, not a legal audit. "
     "Fetched txn is still decoded and semantically verified locally."
 )
 
@@ -248,14 +280,36 @@ def pending_host_allowlisted(network: str, host: str) -> bool:
     return (host or "").strip().lower() in allowed
 
 
+def _org_from_suffix(host: str) -> str:
+    """Same-org / AlgoNode-backed suffixes. Public records, not a legal audit."""
+    key = (host or "").strip().lower()
+    if ".algonode." in key:
+        return ORG_NODELY
+    if ".4160.nodely." in key or key.endswith(".nodely.dev") or key.endswith(".nodely.io"):
+        return ORG_NODELY
+    if key == "allo.info" or key.endswith(".allo.info"):
+        return ORG_NODELY
+    if key == "oanor.com" or key.endswith(".oanor.com"):
+        return ORG_NODELY
+    if key == "svc.blockdaemon.com" or key.endswith(".svc.blockdaemon.com"):
+        return ORG_BLOCKDAEMON
+    return ""
+
+
 def provider_org(host: str, orgs: dict | None = None) -> str:
     """Hardcoded organization for an allowlisted host. Empty if unknown.
 
     Unknown host => empty => not independent. A different Nodely
-    hostname is still Nodely.
+    hostname is still Nodely. Allo and Oanor are AlgoNode-backed.
+    Custom `orgs` maps are exact-only (tests).
     """
+    key = (host or "").strip().lower()
     mapping = PROVIDER_ORGS if orgs is None else orgs
-    return mapping.get((host or "").strip().lower(), "")
+    if key in mapping:
+        return mapping[key]
+    if orgs is not None:
+        return ""
+    return _org_from_suffix(key)
 
 
 def confirmation_independent(
@@ -282,6 +336,8 @@ def confirm_host_allowlisted(network: str, host: str) -> bool:
     key = (host or "").strip().lower()
     allowed = CONFIRM_HOST_ALLOWLIST.get((network or "").strip().lower(), frozenset())
     if key in allowed:
+        return True
+    if key in FUTURE_CONFIRM_HOSTS:
         return True
     return any(p.host == key for p in CONFIRM_PROVIDERS.values())
 
@@ -328,6 +384,8 @@ def confirm_auth_header() -> tuple[str, str] | None:
     if provider is None:
         return None
     secret = (os.environ.get(provider.secret_env) or "").strip()
+    if not secret and provider.name == CONFIRM_PROVIDER_PRIMARY:
+        secret = (os.environ.get(PRIMARY_INDEXER_TOKEN_ENV) or "").strip()
     if not secret:
         return None
     return provider.auth_header, secret
@@ -368,7 +426,7 @@ def confirmation_status(network: str | None = None) -> dict:
     host = provider.host if provider else cfg.confirm_host
     org = provider.org if provider else provider_org(host)
     org_indep = confirmation_independent(cfg.submit_host, host) if known else False
-    creds = bool(provider and (os.environ.get(provider.secret_env) or "").strip())
+    creds = bool(provider and confirm_auth_header())
     falcon_ok = bool(provider and CONFIRM_FALCON_COMPATIBLE.get(provider.name))
     reachable = False
     ready = bool(known and org_indep and creds and reachable and falcon_ok)
@@ -396,10 +454,10 @@ def confirmation_status(network: str | None = None) -> dict:
 
 
 def mainnet_confirmation_policy(cfg: NetworkConfig | None = None) -> dict:
-    """Descriptor fields for trust v2 and monitor. No secrets.
+    """Static default-host policy. Matches committed trust_root.v2.
 
-    Default independent_provider is false. Runtime independence is
-    computed separately when an allowlisted different-org host is set.
+    Default submit+confirm are both Nodely. independent_provider is
+    false. Runtime independence is computed_confirmation_policy.
     """
     net = cfg or MAINNET
     submit_org = provider_org(net.submit_host)
@@ -419,9 +477,42 @@ def mainnet_confirmation_policy(cfg: NetworkConfig | None = None) -> dict:
         "second_confirm_org": provider_org(NODELY_MAINNET_CONFIRM_HOST),
         "algonode_and_nodely_same_org": True,
         "algoexplorer_public_indexer": "retired_html_landing",
+        "allo_and_oanor_algonode_backed": True,
         "default_submit_and_confirm": "nodely_same_org",
+        "org_independence_source": "public_company_records_not_legal_audit",
         "before_mainnet_go": (
-            "402Signal-operated node or different-org provider; "
-            "fetch+decode+verify still required"
+            "Tatum primary or NowNodes failover plus API key as a "
+            "Fly secret later; fetch+decode+verify still required"
         ),
     }
+
+
+def computed_confirmation_policy(network: str | None = None) -> dict:
+    """Runtime confirmation_policy for the configured confirm provider.
+
+    When confirm is Tatum or NowNodes and submit is AlgoNode/Nodely,
+    independent_provider is true. Default AlgoNode/Nodely confirm
+    stays false. Does not rewrite committed trust_root.v2.
+    """
+    name = (network or MAINNET_NAME).strip().lower()
+    cfg = get_network(name)
+    try:
+        confirm_host = configured_confirm_host(cfg.name)
+    except UnknownNetwork:
+        confirm_host = cfg.confirm_host
+    submit_org = provider_org(cfg.submit_host)
+    confirm_org = provider_org(confirm_host)
+    independent = confirmation_independent(cfg.submit_host, confirm_host)
+    out = mainnet_confirmation_policy(cfg)
+    out["independent_provider"] = independent
+    out["confirm_host"] = confirm_host
+    out["confirm_org"] = confirm_org
+    out["submit_host"] = cfg.submit_host
+    out["submit_org"] = submit_org
+    out["confirm_provider"] = ""
+    try:
+        provider = configured_confirm_provider() if cfg.name == MAINNET_NAME else None
+        out["confirm_provider"] = provider.name if provider else ""
+    except UnknownNetwork:
+        out["independent_provider"] = False
+    return out

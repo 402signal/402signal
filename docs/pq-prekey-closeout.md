@@ -101,22 +101,49 @@ is still open. Validity expired and unresolved: stop for the
 operator. Provider txid must equal the local expected txid.
 Mismatch is a SECURITY FAILURE.
 
-## F. Static confirm providers
+## F / item 6. Independent confirm (option B)
 
 `LIVE402_PQ_CONFIRM_PROVIDER=tatum|nownodes`. Env chooses the enum
 and the secret only. No env-chosen scheme, hostname, path, query, or
 auth-header-name.
 
-| name | org | host | path | auth header | secret env |
-|---|---|---|---|---|---|
-| tatum | tatum | algorand-mainnet-indexer.gateway.tatum.io | /v2/transactions/{txid} | x-api-key | LIVE402_PQ_CONFIRM_TATUM_API_KEY |
-| nownodes | nownodes | algo-index.nownodes.io | /v2/transactions/{txid} | api-key | LIVE402_PQ_CONFIRM_NOWNODES_API_KEY |
+| role | name | org | host | path | auth header | secret env |
+|---|---|---|---|---|---|---|
+| PRIMARY | tatum | tatum | algorand-mainnet-indexer.gateway.tatum.io | /v2/transactions/{txid} | x-api-key | LIVE402_PQ_CONFIRM_TATUM_API_KEY (alias LIVE402_PQ_CONFIRM_INDEXER_TOKEN) |
+| FAILOVER | nownodes | nownodes | algo-index.nownodes.io | /v2/transactions/{txid} | api-key | LIVE402_PQ_CONFIRM_NOWNODES_API_KEY |
+| FUTURE | (not env-selectable) | blockdaemon | svc.blockdaemon.com | not wired | n/a | n/a |
 
 NowNodes host is the documented Algorand Indexer base
-(`https://docs.nownodes.io/algo/indexer.html`). Always HTTPS, no
-redirects, bounded response, credentials only in headers. Never in
-URL, query, logs, monitor snapshot, exception text, trust root, or
-public response. No Blockdaemon.
+(`https://docs.nownodes.io/algo/indexer.html`). Blockdaemon host is
+allowlisted for a later PR only. docs.blockdaemon.com documents
+`https://svc.blockdaemon.com/algorand/mainnet/native/indexer` plus
+`/v2/transactions/{txid}`; a host-root `/v2` path is not invented
+here, so Blockdaemon is not a production confirm enum.
+
+Always HTTPS, no redirects, bounded response, credentials only in
+headers. Never in URL, query, logs, monitor snapshot, exception
+text, trust root, or public response.
+
+Excluded as independent (same org / AlgoNode-backed): AlgoNode
+(`*.algonode.*`), Nodely (`*.4160.nodely.dev` / `.io`), Allo
+explorer (`allo.info`; AlgoNode-developed per Algorand Foundation),
+Oanor (`*.oanor.com`; documents live reads from public AlgoNode
+APIs). A different Nodely hostname is not a different org.
+
+Computed `confirmation_policy.independent_provider` is true when
+confirm is Tatum or NowNodes and submit is AlgoNode/Nodely. Default
+repo / committed `trust_root.v2` still has both hosts Nodely, so
+`independent_provider` stays false there.
+
+Production MainNet GO requires the Tatum (or NowNodes) allowlisted
+confirm host plus the API key as a **Fly secret later**. Do not set
+those secrets in this PR.
+
+Org labels come from public company records, not a legal audit.
+
+Confirm semantics unchanged: GET actual txn, decode locally,
+semantic verify. Never HTTP 200 == confirmed. Never returned txid
+alone. Never submit-provider pending as independent confirm.
 
 ## G. Split independence vs readiness
 
@@ -175,4 +202,7 @@ import those final functions.
 - Tatum/NowNodes Falcon pqsig unproven
 - `confirmation_ready=false`
 - `trust_root.v2.not_mainnet_go=true`
+- `trust_root.v2.confirmation_policy.independent_provider=false` (default hosts still Nodely)
+- Confirm API keys are Fly secrets later, not in this PR
+- Org independence is from public company records, not a legal audit
 - `READY_FOR_PRODUCTION_KEY_INSTALL=NO`

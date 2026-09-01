@@ -162,6 +162,9 @@ def snapshot() -> dict:
             "confirm_reachable": bool(confirm.get("confirm_reachable")),
             "confirm_falcon_compatible": bool(confirm.get("confirm_falcon_compatible")),
             "confirmation_ready": bool(confirm.get("confirmation_ready")),
+            "computed_independent_provider": bool(
+                (confirm.get("confirmation_policy") or {}).get("independent_provider")
+            ),
         },
         "submit_provider": {
             "host": submit.get("host") or "",

@@ -30,8 +30,15 @@ class ConfirmOrgMappingTests(unittest.TestCase):
                 "mainnet-api.algonode.cloud", "mainnet-idx.4160.nodely.dev"
             )
         )
+        self.assertFalse(
+            netcfg.confirmation_independent(
+                "mainnet-api.algonode.cloud", "xna-mainnet-api.4160.nodely.dev"
+            )
+        )
         self.assertEqual(netcfg.provider_org("mainnet-idx.4160.nodely.dev"), "nodely")
         self.assertEqual(netcfg.provider_org("mainnet-api.algonode.cloud"), "nodely")
+        policy = netcfg.computed_confirmation_policy("mainnet")
+        self.assertFalse(policy["independent_provider"])
 
     def test_unknown_org_false(self):
         self.assertEqual(netcfg.provider_org("unknown.example"), "")
@@ -40,7 +47,25 @@ class ConfirmOrgMappingTests(unittest.TestCase):
         )
         self.assertFalse(netcfg.confirmation_independent("mystery.a", "mystery.b"))
 
+    def test_allo_and_oanor_are_algonode_backed(self):
+        for host in ("allo.info", "status.allo.info", "oanor.com", "www.oanor.com", "api.oanor.com"):
+            self.assertEqual(netcfg.provider_org(host), "nodely", host)
+            self.assertFalse(
+                netcfg.confirmation_independent("mainnet-api.algonode.cloud", host), host
+            )
+
     def test_different_known_org_true(self):
+        self.assertTrue(
+            netcfg.confirmation_independent(
+                "mainnet-api.algonode.cloud",
+                "algorand-mainnet-indexer.gateway.tatum.io",
+            )
+        )
+        self.assertTrue(
+            netcfg.confirmation_independent(
+                "mainnet-idx.4160.nodely.dev", "algo-index.nownodes.io"
+            )
+        )
         orgs = {
             "mainnet-api.algonode.cloud": netcfg.ORG_NODELY,
             "algod.example-signal": netcfg.ORG_SIGNAL,
@@ -135,6 +160,11 @@ class ConfirmOrgMappingTests(unittest.TestCase):
         confirm = algo_anchor.confirm_provider("mainnet")
         self.assertTrue(confirm["independent_of_submit"])
         self.assertFalse(confirm["confirmation_ready"])
+        computed = netcfg.computed_confirmation_policy("mainnet")
+        self.assertTrue(computed["independent_provider"])
+        self.assertEqual(computed["confirm_org"], "tatum")
+        self.assertEqual(computed["submit_org"], "nodely")
+        self.assertEqual(confirm["confirmation_policy"]["independent_provider"], True)
         v2 = trust.trust_root_v2()
         self.assertFalse(v2["confirmation_policy"]["independent_provider"])
         self.assertTrue(v2["not_mainnet_go"])
@@ -155,10 +185,27 @@ class ConfirmOrgMappingTests(unittest.TestCase):
         blob = str(status) + str(monitor.snapshot())
         self.assertNotIn("named-not-logged", blob)
 
-    def test_no_blockdaemon_and_singular_defs(self):
+    def test_indexer_token_alias_for_primary(self):
+        os.environ["LIVE402_PQ_CONFIRM_PROVIDER"] = "tatum"
+        os.environ["LIVE402_PQ_CONFIRM_INDEXER_TOKEN"] = "alias-not-logged"
+        header = netcfg.confirm_auth_header()
+        self.assertEqual(header[0], "x-api-key")
+        self.assertTrue(netcfg.credentials_configured())
+        status = netcfg.confirmation_status("mainnet")
+        self.assertTrue(status["confirm_credentials_configured"])
+        self.assertNotIn("alias-not-logged", str(status) + str(monitor.snapshot()))
+
+    def test_blockdaemon_future_org_only_and_singular_defs(self):
         src = Path(netcfg.__file__).read_text(encoding="utf-8")
         self.assertNotIn("blockdaemon", netcfg.CONFIRM_PROVIDERS)
-        self.assertNotIn("blockdaemon", netcfg.PROVIDER_ORGS.values())
+        self.assertEqual(netcfg.provider_org("svc.blockdaemon.com"), "blockdaemon")
+        self.assertTrue(
+            netcfg.confirmation_independent(
+                "mainnet-api.algonode.cloud", "svc.blockdaemon.com"
+            )
+        )
+        self.assertTrue(netcfg.confirm_host_allowlisted("mainnet", "svc.blockdaemon.com"))
+        self.assertIn("svc.blockdaemon.com", netcfg.FUTURE_CONFIRM_HOSTS)
         tree = ast.parse(src)
         names = [n.name for n in tree.body if isinstance(n, ast.FunctionDef)]
         for target in (
@@ -167,6 +214,7 @@ class ConfirmOrgMappingTests(unittest.TestCase):
             "confirm_host_allowlisted",
             "runtime_confirmation_independent",
             "confirmation_status",
+            "computed_confirmation_policy",
         ):
             self.assertEqual(names.count(target), 1, target)
         self.assertFalse(netcfg.CONFIRM_FALCON_COMPATIBLE["tatum"])

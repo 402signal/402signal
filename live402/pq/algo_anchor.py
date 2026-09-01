@@ -1142,6 +1142,10 @@ def confirm_provider(network: str) -> dict:
             "confirmation_ready": False,
         }
     independent = netcfg.confirmation_independent(cfg.submit_host, host)
+    try:
+        computed = netcfg.computed_confirmation_policy(cfg.name)
+    except netcfg.UnknownNetwork:
+        computed = {"independent_provider": False}
     out = {
         "network": cfg.name,
         "kind": "confirm",
@@ -1164,6 +1168,7 @@ def confirm_provider(network: str) -> dict:
         "confirm_reachable": bool(status.get("confirm_reachable")),
         "confirm_falcon_compatible": bool(status.get("confirm_falcon_compatible")),
         "confirmation_ready": bool(status.get("confirmation_ready")),
+        "confirmation_policy": computed,
     }
     return out
 

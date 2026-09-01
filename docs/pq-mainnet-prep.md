@@ -94,12 +94,16 @@ Unchanged live path: `LIVE402_PQ_LOG_DB=/data/pq-log.sqlite`,
   confirm is `mainnet-idx.algonode.cloud`. A second confirm host
   `mainnet-idx.4160.nodely.dev` is allowlisted. AlgoNode and Nodely
   are the same organization (legacy brand plus current hostname).
-  `confirmation_policy.independent_provider` stays false. AlgoExplorer
-  public indexer hosts return HTML landing pages, not JSON. Algorand
-  Foundation does not publish a no-key public indexer. Before MainNet
-  GO, confirmation must use a 402Signal-operated node or a public API
-  from a different organization. Fetch+decode+semantic verify is still
-  required. MainNet never treats submit-host pending as confirmation.
+  `confirmation_policy.independent_provider` stays false on the
+  committed default (both hosts Nodely). Computed policy is true only
+  when `LIVE402_PQ_CONFIRM_PROVIDER=tatum` (primary) or `nownodes`
+  (failover). AlgoNode, Nodely, Allo, and Oanor are the same trust
+  domain. Org labels are from public company records, not a legal
+  audit. AlgoExplorer public indexer hosts return HTML landing pages,
+  not JSON. Production MainNet GO requires the Tatum/NowNodes
+  allowlist plus the API key as a Fly secret later (not in this PR).
+  Fetch+decode+semantic verify is still required. MainNet never
+  treats submit-host pending as confirmation.
 - Recovery drills A-F run as fixture tests (`tests/test_pq_recovery_drills.py`).
   Backup identity drill: `scripts/pq_log_restore_drill.py`.
 - Monitoring: `live402/pq/monitor.py` `snapshot()` is the operator
