@@ -5,7 +5,8 @@ from __future__ import annotations
 import sys
 import time
 
-from live402 import facilitator, fixtures, payment, probe, select
+from live402 import deadline as deadline_mod
+from live402 import facilitator, fixtures, payment, probe, replay, reqctx, select
 from live402 import policy as policy_mod
 
 
@@ -20,11 +21,48 @@ def _invalid_need(error: str) -> tuple[int, dict]:
     return 400, {"error": error, "miss_reason": "invalid_need", "live": False, "invocable": False}
 
 
+def _lookup_claimed(url: str) -> dict | None:
+    item = fixtures.lookup_url(url)
+    if item:
+        return item
+    try:
+        from live402 import catalog as catalog_mod
+
+        return catalog_mod.item_for_url(url)
+    except Exception:
+        return None
+
+
 def _direct_url_result(body: dict, url: str, need: str, deadline: float) -> tuple[int, dict]:
     """Same constraint engine as need-routing. Catalog item is claimed metadata only."""
     objective = select.parse_objective(body.get("objective"))
     constraints = policy_mod.merge_constraints(body)
-    item = fixtures.lookup_url(url)
+    item = _lookup_claimed(url)
+    if not probe.direct_url_allowed(url, item):
+        result = {
+            "url": url,
+            "need": need or None,
+            "live": False,
+            "invocable": False,
+            "payable": False,
+            "selected_payment": None,
+            "miss_reason": "ssrf",
+            "stop_reason": "candidate_set_exhausted",
+            "tried": 0,
+            "source": "url",
+            "discovery_matches": 0,
+            "candidates_discovered": 0,
+            "candidates_considered": 1,
+            "candidates_probed": 0,
+            "probe_ceiling": 1,
+            "probe_budget_exhausted": False,
+            "candidate_evaluation_complete": True,
+            "payTo": None,
+            "traction": "unknown",
+            "objective": objective,
+        }
+        policy_mod.attach_policy(result, body)
+        return 503, result
     result = probe.probe_url(url, catalog_item=item, deadline=deadline)
     result = probe.attach_catalog_fields(result, item)
     try:
@@ -79,7 +117,7 @@ def _direct_url_result(body: dict, url: str, need: str, deadline: float) -> tupl
     return 503, result
 
 
-def run_probe(body: dict) -> tuple[int, dict]:
+def run_probe(body: dict, deadline: float | None = None) -> tuple[int, dict]:
     need = body.get("need")
     url = body.get("url")
     if need is not None and not isinstance(need, str):
@@ -95,7 +133,8 @@ def run_probe(body: dict) -> tuple[int, dict]:
     except select.ConstraintError as exc:
         return _invalid_need(str(exc))
 
-    deadline = time.monotonic() + probe.PROBE_BUDGET_SECONDS
+    if deadline is None:
+        deadline = time.monotonic() + probe.PROBE_BUDGET_SECONDS
     if url:
         if not url.lower().startswith("https://"):
             return _invalid_need("url must be https")
@@ -154,16 +193,12 @@ def _bad_request(body: dict) -> tuple[int, dict] | None:
     return None
 
 
-def _log_settle(body: dict | None) -> None:
-    """Log settlement, network, tx from PAYMENT-RESPONSE. No secrets."""
-    if not isinstance(body, dict):
-        return
-    tx = body.get("transaction") or body.get("txHash") or body.get("tx") or body.get("hash")
-    network = body.get("network")
-    success = body.get("success")
+def _log_settle(ok: bool, rail: str) -> None:
+    """Coarse settlement log. No txid, no payment payload."""
+    rid = reqctx.request_id.get()
     sys.stderr.write(
-        "settle ok=%s network=%s tx=%s\n"
-        % (success, network, tx)
+        "settlement_success=%s rail=%s request_id=%s\n"
+        % ("true" if ok else "false", rail or "unknown", rid or "-")
     )
 
 
@@ -188,6 +223,55 @@ def _attach_pq_trust(code: int, result: dict, body: dict) -> dict:
             }
         }
         return result
+
+
+def _paid_execute(
+    body: dict,
+    parsed: dict,
+    accept: dict,
+    resource_url: str,
+    bazaar: dict | None,
+    paid_deadline: float,
+) -> tuple[int, dict, dict | None]:
+    verify_t = deadline_mod.verify_timeout(paid_deadline)
+    if verify_t <= 0:
+        required, extra = _required_pair(
+            resource_url, "Payment verification failed", bazaar=bazaar
+        )
+        return 402, required, extra
+
+    verify = facilitator.verify(parsed, accept, timeout=verify_t)
+    if not verify.ok:
+        required, extra = _required_pair(
+            resource_url, verify.error or "Payment verification failed", bazaar=bazaar
+        )
+        return 402, required, extra
+
+    # Paid: reject bad/empty body with 400 and skip settle.
+    bad = _bad_request(body if isinstance(body, dict) else {})
+    if bad:
+        return bad[0], bad[1], None
+
+    probe_until = deadline_mod.probe_deadline(paid_deadline)
+    code, result = run_probe(body, deadline=probe_until)
+    if code == 400:
+        return 400, result, None
+
+    settle_t = deadline_mod.settle_timeout(paid_deadline)
+    settle = facilitator.settle(parsed, accept, timeout=settle_t)
+    extra: dict = {}
+    rail = payment.rail_of_accept(accept)
+    if settle.body:
+        extra["PAYMENT-RESPONSE"] = payment.payment_response_header(settle.body)
+    if not settle.ok:
+        required, pay_extra = _required_pair(
+            resource_url, settle.error or "Payment settlement failed", bazaar=bazaar
+        )
+        extra.update(pay_extra)
+        _log_settle(False, rail)
+        return 402, required, extra
+    _log_settle(True, rail)
+    return code, _attach_pq_trust(code, result, body if isinstance(body, dict) else {}), extra or None
 
 
 def handle_route(body: dict, headers, resource_url: str, bazaar: dict | None = None) -> tuple[int, dict, dict | None]:
@@ -215,33 +299,27 @@ def handle_route(body: dict, headers, resource_url: str, bazaar: dict | None = N
         )
         return 402, required, extra
 
-    verify = facilitator.verify(parsed, accept)
-    if not verify.ok:
+    paid_deadline = deadline_mod.payment_deadline(accept)
+    fp = replay.canonical_fingerprint(parsed, accept)
+    kind, token = replay.begin(fp)
+    if kind == "cached" and isinstance(token, tuple) and len(token) == 3:
+        return token[0], token[1], token[2]
+    if kind == "wait":
+        waited = replay.wait_result(token, paid_deadline)
+        if isinstance(waited, tuple) and len(waited) == 3:
+            return waited[0], waited[1], waited[2]
         required, extra = _required_pair(
-            resource_url, verify.error or "Payment verification failed", bazaar=bazaar
+            resource_url, "Payment verification failed", bazaar=bazaar
         )
         return 402, required, extra
 
-    # Paid: reject bad/empty body with 400 and skip settle.
-    bad = _bad_request(body if isinstance(body, dict) else {})
-    if bad:
-        return bad[0], bad[1], None
-
-    code, result = run_probe(body)
-    if code == 400:
-        return 400, result, None
-
-    # Official authorization flow: verify → resource → settle → respond.
-    # Product: settle after an honest miss too (they paid for the probe).
-    settle = facilitator.settle(parsed, accept)
-    extra: dict = {}
-    if settle.body:
-        extra["PAYMENT-RESPONSE"] = payment.payment_response_header(settle.body)
-    if not settle.ok:
-        required, pay_extra = _required_pair(
-            resource_url, settle.error or "Payment settlement failed", bazaar=bazaar
-        )
-        extra.update(pay_extra)
-        return 402, required, extra
-    _log_settle(settle.body)
-    return code, _attach_pq_trust(code, result, body if isinstance(body, dict) else {}), extra or None
+    cache = False
+    try:
+        out = _paid_execute(body, parsed, accept, resource_url, bazaar, paid_deadline)
+        # Cache settled and rejected payment outcomes. Do not cache 400 body errors.
+        cache = out[0] != 400
+        replay.finish(fp, out, cache=cache)
+        return out
+    except Exception:
+        replay.abandon(fp)
+        raise

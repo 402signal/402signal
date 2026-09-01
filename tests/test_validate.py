@@ -239,6 +239,7 @@ class ValidateRateLimitTests(unittest.TestCase):
     def setUpClass(cls):
         os.environ.pop("LOCAL_FREE", None)
         os.environ["LIVE402_VALIDATE_RPM"] = "2"
+        os.environ["FLY_APP_NAME"] = "402signal-test"
         cls.httpd, cls.host, cls.port = _serve()
 
     @classmethod
@@ -246,6 +247,7 @@ class ValidateRateLimitTests(unittest.TestCase):
         cls.httpd.shutdown()
         cls.httpd.server_close()
         os.environ.pop("LIVE402_VALIDATE_RPM", None)
+        os.environ.pop("FLY_APP_NAME", None)
 
     def test_validate_rate_limit_429(self):
         ip_headers = {"Fly-Client-IP": "203.0.113.90"}

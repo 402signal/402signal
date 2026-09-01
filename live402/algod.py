@@ -2,18 +2,19 @@
 
 Browser does not call a public algod. Host is hardcoded. No redirects.
 Not a general HTTP client. rails.py / probe.py SSRF rules are untouched.
+
+Payment-rail MainNet genesis only. This is not Falcon PQ broadcast.
 """
 
 from __future__ import annotations
 
 import json
 import threading
-import time
 import urllib.error
 import urllib.request
 from urllib.parse import urlparse
 
-from live402 import fixtures
+from live402 import clock, fixtures
 
 # Pinned. Never take this URL from a request, 402 body, or env.
 ALGOD_PARAMS_URL = "https://mainnet-api.algonode.cloud/v2/transactions/params"
@@ -24,10 +25,18 @@ MIN_FEE = 1000
 VALID_WINDOW = 1000
 TIMEOUT = 2.0
 CACHE_TTL = 15.0
+FAILURE_TTL = 5.0
+STALE_TTL = 120.0
 USER_AGENT = "402Signal/0.1 (algod params; no payment keys)"
 
 _lock = threading.Lock()
-_cache: dict = {"at": 0.0, "payload": None}
+_cv = threading.Condition(_lock)
+_cache: dict = {
+    "at": 0.0,
+    "payload": None,
+    "fail_at": 0.0,
+    "inflight": False,
+}
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -39,6 +48,9 @@ def reset_cache() -> None:
     with _lock:
         _cache["at"] = 0.0
         _cache["payload"] = None
+        _cache["fail_at"] = 0.0
+        _cache["inflight"] = False
+        _cv.notify_all()
 
 
 def _fixture_params() -> dict:
@@ -63,6 +75,10 @@ def _constants() -> dict:
         "genesisHash": GENESIS_HASH,
         "genesisID": GENESIS_ID,
     }
+
+
+def _genesis_exact(gid: str, gh: str) -> bool:
+    return gid == GENESIS_ID and gh == GENESIS_HASH
 
 
 def _fetch() -> dict | None:
@@ -100,9 +116,10 @@ def _fetch() -> dict | None:
         return None
     if last < 1:
         return None
-    gh = str(body.get("genesis-hash") or body.get("genesisHash") or GENESIS_HASH).strip()
-    gid = str(body.get("genesis-id") or body.get("genesisID") or GENESIS_ID).strip()
-    if not gh or not gid:
+    gh = str(body.get("genesis-hash") or body.get("genesisHash") or "").strip()
+    gid = str(body.get("genesis-id") or body.get("genesisID") or "").strip()
+    # Exact MainNet pin. A pinned host returning another genesis must not alter the challenge.
+    if not _genesis_exact(gid, gh):
         return None
     if min_fee < 1:
         min_fee = MIN_FEE
@@ -114,24 +131,74 @@ def _fetch() -> dict | None:
         "lastRound": last + VALID_WINDOW,
         "firstValid": last,
         "lastValid": last + VALID_WINDOW,
-        "genesisHash": gh,
-        "genesisID": gid,
+        "genesisHash": GENESIS_HASH,
+        "genesisID": GENESIS_ID,
     }
+
+
+def _refresh() -> dict | None:
+    fetched = _fetch()
+    now = clock.monotonic()
+    with _lock:
+        if fetched is not None:
+            _cache["at"] = now
+            _cache["payload"] = dict(fetched)
+            _cache["fail_at"] = 0.0
+        else:
+            _cache["fail_at"] = now
+        _cache["inflight"] = False
+        _cv.notify_all()
+        payload = _cache.get("payload")
+        return dict(payload) if isinstance(payload, dict) else None
+
+
+def _background_refresh() -> None:
+    try:
+        _refresh()
+    except Exception:
+        with _lock:
+            _cache["inflight"] = False
+            _cache["fail_at"] = clock.monotonic()
+            _cv.notify_all()
 
 
 def suggested_params() -> dict:
     """Return suggestedParams for the Algorand accept extra. Never raises."""
     if fixtures.fixture_mode():
         return _fixture_params()
-    now = time.monotonic()
+    now = clock.monotonic()
     with _lock:
         payload = _cache.get("payload")
-        if payload is not None and (now - _cache["at"]) < CACHE_TTL:
+        at = float(_cache.get("at") or 0.0)
+        fail_at = float(_cache.get("fail_at") or 0.0)
+        if payload is not None and (now - at) < CACHE_TTL:
             return dict(payload)
-    fetched = _fetch()
-    out = fetched or _constants()
+        if fail_at and (now - fail_at) < FAILURE_TTL:
+            if payload is not None:
+                return dict(payload)
+            return _constants()
+        if _cache.get("inflight"):
+            if payload is not None and (now - at) < STALE_TTL:
+                return dict(payload)
+            while _cache.get("inflight"):
+                _cv.wait(timeout=0.2)
+                if not _cache.get("inflight"):
+                    break
+            cached = _cache.get("payload")
+            if cached is not None:
+                return dict(cached)
+            return _constants()
+        stale_ok = payload is not None and (now - at) < STALE_TTL
+        _cache["inflight"] = True
+        if stale_ok:
+            threading.Thread(
+                target=_background_refresh,
+                name="algod-refresh",
+                daemon=True,
+            ).start()
+            return dict(payload)
+
+    fetched = _refresh()
     if fetched is not None:
-        with _lock:
-            _cache["at"] = time.monotonic()
-            _cache["payload"] = dict(out)
-    return dict(out)
+        return fetched
+    return _constants()

@@ -6,16 +6,17 @@ import argparse
 import ipaddress
 import json
 import os
-import re
 import socket
 import sys
 import threading
 import time
+import uuid
+from collections import OrderedDict
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from live402 import catalog, discover, history, mcp, payment, pulse, rails, validate
+from live402 import catalog, discover, history, mcp, payment, pulse, rails, reqctx, validate
 from live402 import http_body
 from live402.http_body import BodyReadError
 from live402.route import handle_route
@@ -67,7 +68,7 @@ DEFAULT_ROUTE_RPM = 60
 DEFAULT_PREVIEW_RPM = 180
 DEFAULT_PUBLIC_RPM = 180
 DEFAULT_VALIDATE_RPM = 60
-FACILITATOR_ROUTE_RPM = 180
+RATE_LIMIT_MAX_KEYS = 4096
 HSTS = "max-age=31536000"
 # script-src 'self' only (no vendor wallet scripts, no CDN).
 # connect-src is 'self' only. Homepage Base pay POSTs /route; no WalletConnect.
@@ -77,26 +78,33 @@ CSP = (
     "style-src 'self'; img-src 'self' data:; base-uri 'self'; "
     "frame-ancestors 'none'"
 )
-FACILITATOR_UA = (
-    "coinbase",
-    "cdp",
-    "payai",
-    "goplausible",
-    "x402",
-    "bazaar",
-)
-_PAYMENT_LOG_RE = re.compile(
-    r"(?i)\b(PAYMENT-SIGNATURE|PAYMENT-PAYLOAD|X-PAYMENT(?:-SIGNATURE)?"
-    r"|PAYMENT-RESPONSE|PAYMENT-REQUIRED)\b\s*[:=]?\s*\S+"
-)
-
-
 class _RateLimiter:
-    """In-memory sliding window. Fail closed on errors."""
+    """In-memory sliding window with TTL/LRU bound. Fail closed on errors."""
 
-    def __init__(self) -> None:
-        self._hits: dict[str, list[float]] = {}
+    def __init__(self, max_keys: int = RATE_LIMIT_MAX_KEYS) -> None:
+        self._hits: OrderedDict[str, list[float]] = OrderedDict()
         self._lock = threading.Lock()
+        self._max_keys = max(16, int(max_keys))
+
+    def _prune_key(self, key: str, now: float, window: float) -> list[float]:
+        hits = [t for t in (self._hits.get(key) or []) if now - t < window]
+        if hits:
+            self._hits[key] = hits
+            self._hits.move_to_end(key)
+        else:
+            self._hits.pop(key, None)
+        return hits
+
+    def _evict(self, now: float, window: float) -> None:
+        for key in list(self._hits.keys()):
+            self._prune_key(key, now, window)
+            if len(self._hits) < self._max_keys:
+                return
+        while len(self._hits) >= self._max_keys:
+            try:
+                self._hits.popitem(last=False)
+            except KeyError:
+                break
 
     def allow(self, key: str, limit: int, window: float = 60.0) -> bool:
         try:
@@ -105,15 +113,21 @@ class _RateLimiter:
                 return False
             now = time.monotonic()
             with self._lock:
-                hits = [t for t in (self._hits.get(key) or []) if now - t < window]
+                hits = self._prune_key(key, now, window)
+                if len(self._hits) >= self._max_keys and key not in self._hits:
+                    self._evict(now, window)
                 if len(hits) >= cap:
-                    self._hits[key] = hits
                     return False
                 hits.append(now)
                 self._hits[key] = hits
+                self._hits.move_to_end(key)
                 return True
         except Exception:
             return False
+
+    def key_count(self) -> int:
+        with self._lock:
+            return len(self._hits)
 
 
 _ROUTE_LIMITER = _RateLimiter()
@@ -195,16 +209,6 @@ def route_rpm() -> int:
     return DEFAULT_ROUTE_RPM
 
 
-def facilitator_rpm() -> int:
-    raw = (os.environ.get("LIVE402_ROUTE_RPM_FACILITATOR") or "").strip()
-    if raw:
-        try:
-            return max(1, int(raw))
-        except ValueError:
-            return FACILITATOR_ROUTE_RPM
-    return max(FACILITATOR_ROUTE_RPM, route_rpm())
-
-
 def preview_rpm() -> int:
     raw = (os.environ.get("LIVE402_PREVIEW_RPM") or "").strip()
     if raw:
@@ -237,19 +241,23 @@ def validate_rpm() -> int:
     return DEFAULT_VALIDATE_RPM
 
 
-def _is_facilitator_ua(ua: str) -> bool:
-    low = (ua or "").lower()
-    return any(marker in low for marker in FACILITATOR_UA)
+def on_fly() -> bool:
+    """True only when this process is a Fly machine. Never inferred from client headers."""
+    for name in ("FLY_APP_NAME", "FLY_ALLOC_ID", "FLY_MACHINE_ID"):
+        if (os.environ.get(name) or "").strip():
+            return True
+    return False
 
 
 def client_ip(handler: SimpleHTTPRequestHandler) -> str:
-    fly = (handler.headers.get("Fly-Client-IP") or "").split(",")[0].strip()
-    if fly:
-        return fly
-    xff = (handler.headers.get("X-Forwarded-For") or "").split(",")[0].strip()
-    if xff:
-        return xff
-    return handler.client_address[0] if handler.client_address else "unknown"
+    """On Fly, trust Fly-Client-IP. Otherwise the socket peer. Never X-Forwarded-For."""
+    if on_fly():
+        fly = (handler.headers.get("Fly-Client-IP") or "").split(",")[0].strip()
+        if fly:
+            return fly
+    if handler.client_address:
+        return handler.client_address[0]
+    return "unknown"
 
 
 def is_private_store_path(path: str) -> bool:
@@ -365,13 +373,71 @@ class Handler(SimpleHTTPRequestHandler):
         self._json(404, {"error": "not found"})
         return True
 
+    def _coarse_endpoint(self) -> str:
+        path = urlparse(self.path or "").path or "/"
+        if path in {"/route", "/route/"}:
+            return "route"
+        if path == "/preview":
+            return "preview"
+        if path == "/validate":
+            return "validate"
+        if path == "/pulse":
+            return "pulse"
+        if path == "/rails":
+            return "rails"
+        if path == "/health":
+            return "health"
+        if path in {"/mcp", "/mcp.json"}:
+            return "mcp"
+        if path.startswith("/pq/log"):
+            return "pq_log"
+        if path == "/attestation":
+            return "attestation"
+        if path in HUMAN_PAGES or path in STATIC_FILES or path in HUMAN_DYNAMIC_PATHS:
+            return "human"
+        return "other"
+
+    def _access_path(self) -> str:
+        return urlparse(self.path or "").path or "/"
+
+    def log_request(self, code="-", size="-"):
+        self._write_access_log(code)
+
     def log_message(self, fmt: str, *args) -> None:
+        # Do not emit the default request line (query string, headers, body).
+        if getattr(self, "_logged_access", False):
+            return
+        self._write_access_log("-")
+
+    def _write_access_log(self, code) -> None:
+        self._logged_access = True
+        started = getattr(self, "_req_started", None)
+        latency = "-"
+        if started is not None:
+            try:
+                latency = str(int(max(0.0, (time.monotonic() - started) * 1000)))
+            except Exception:
+                latency = "-"
+        rid = getattr(self, "_request_id", None) or reqctx.request_id.get()
+        line = "request_id=%s method=%s path=%s status=%s latency_ms=%s endpoint=%s\n" % (
+            rid or "-",
+            getattr(self, "command", None) or "-",
+            self._access_path(),
+            code,
+            latency,
+            self._coarse_endpoint(),
+        )
+        sys.stderr.write(line)
+
+    def handle_one_request(self) -> None:
+        self._request_id = uuid.uuid4().hex[:16]
+        self._req_started = time.monotonic()
+        self._logged_access = False
+        token = reqctx.request_id.set(self._request_id)
         try:
-            text = fmt % args
-        except Exception:
-            text = "%s %s" % (fmt, " ".join(str(a) for a in args))
-        text = _PAYMENT_LOG_RE.sub(r"\1=[redacted]", text)
-        sys.stderr.write("%s - %s\n" % (self.address_string(), text))
+            super().handle_one_request()
+        finally:
+            reqctx.request_id.reset(token)
 
     def end_headers(self) -> None:
         self.send_header("X-Content-Type-Options", "nosniff")
@@ -467,9 +533,7 @@ class Handler(SimpleHTTPRequestHandler):
 
     def _route_allowed(self) -> bool:
         ip = client_ip(self)
-        ua = self.headers.get("User-Agent") or ""
-        limit = facilitator_rpm() if _is_facilitator_ua(ua) else route_rpm()
-        return _ROUTE_LIMITER.allow(ip, limit)
+        return _ROUTE_LIMITER.allow(ip, route_rpm())
 
     def _preview_allowed(self) -> bool:
         ip = client_ip(self)

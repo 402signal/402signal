@@ -14,11 +14,12 @@ import time
 import uuid
 import urllib.error
 import urllib.request
-from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from collections import OrderedDict
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, TimeoutError as FuturesTimeout, wait
 from datetime import datetime, timezone
 from urllib.parse import urljoin, urlparse
 
-from live402 import fixtures, payment, select
+from live402 import clock, fixtures, payment, select
 
 USER_AGENT = "402Signal/0.1 (fail-closed probe; no payment)"
 DISCOVERY_URL = "https://api.cdp.coinbase.com/platform/v2/x402/discovery/resources"
@@ -44,6 +45,8 @@ THOROUGH_PROBE_CAP = 15
 MAX_IN_FLIGHT = 3
 MAX_PROCESS_PROBES = 10
 MAX_PER_HOST = 2
+MAX_HOST_SLOT_KEYS = 256
+MAX_DNS_WORKERS = 8
 READ_LIMIT = 65536
 MAX_REDIRECTS = 2
 MISS_REASONS = (
@@ -157,7 +160,7 @@ def remaining_timeout(deadline: float | None) -> float | None:
     """Seconds left before the <60s probe budget. None if no deadline."""
     if deadline is None:
         return None
-    left = float(deadline) - time.monotonic()
+    left = float(deadline) - clock.monotonic()
     return left
 
 
@@ -214,11 +217,14 @@ def next_tranche_size(probed_n: int, remaining: int, ceiling: int, first: bool) 
 _pool_lock = threading.Lock()
 _shared_pool: ThreadPoolExecutor | None = None
 _global_slots = threading.Semaphore(MAX_PROCESS_PROBES)
-_host_slots: dict[str, threading.Semaphore] = {}
+_host_slots: OrderedDict[str, threading.Semaphore] = OrderedDict()
 _host_slots_lock = threading.Lock()
+_overflow_host_sem = threading.Semaphore(1)
 _inflight_lock = threading.Lock()
 _inflight = 0
 _inflight_peak = 0
+_dns_lock = threading.Lock()
+_dns_pool: ThreadPoolExecutor | None = None
 
 
 def _shared_probe_pool() -> ThreadPoolExecutor:
@@ -240,15 +246,38 @@ def _probe_host(url: str | None) -> str | None:
     return host or None
 
 
+def _host_slot_released(sem: threading.Semaphore) -> bool:
+    value = getattr(sem, "_value", None)
+    if isinstance(value, int):
+        return value >= MAX_PER_HOST
+    return False
+
+
 def _host_semaphore(host: str | None) -> threading.Semaphore | None:
     if not host:
         return None
     with _host_slots_lock:
         sem = _host_slots.get(host)
-        if sem is None:
-            sem = threading.Semaphore(MAX_PER_HOST)
-            _host_slots[host] = sem
+        if sem is not None:
+            _host_slots.move_to_end(host)
+            return sem
+        while len(_host_slots) >= MAX_HOST_SLOT_KEYS:
+            evicted = False
+            for key, old in list(_host_slots.items()):
+                if _host_slot_released(old):
+                    del _host_slots[key]
+                    evicted = True
+                    break
+            if not evicted:
+                return _overflow_host_sem
+        sem = threading.Semaphore(MAX_PER_HOST)
+        _host_slots[host] = sem
         return sem
+
+
+def host_slot_cache_size() -> int:
+    with _host_slots_lock:
+        return len(_host_slots)
 
 
 def process_probe_inflight() -> int:
@@ -275,12 +304,12 @@ def acquire_probe_slot(host: str | None, deadline: float | None) -> bool:
     waits, so one slow merchant cannot deadlock unrelated probes.
     """
     global _inflight, _inflight_peak
-    started = time.monotonic()
+    started = clock.monotonic()
     while True:
         left = remaining_timeout(deadline)
         if left is not None and left <= 0:
             return False
-        if deadline is None and (time.monotonic() - started) >= 5.0:
+        if deadline is None and (clock.monotonic() - started) >= 5.0:
             return False
         if not _global_slots.acquire(blocking=False):
             wait = 0.02 if left is None else min(0.02, max(0.0, left))
@@ -580,6 +609,44 @@ class ProbeBlocked(Exception):
     """SSRF fail-closed. Must not be treated as a live upstream HTTP response."""
 
 
+def catalog_known_item(url: str, catalog_item: dict | None = None) -> bool:
+    """True when the URL is a catalog/fixture listing. Claims stay claimed."""
+    if isinstance(catalog_item, dict) and catalog_item:
+        return True
+    raw = (url or "").strip()
+    if not raw:
+        return False
+    try:
+        if fixtures.lookup_url(raw):
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def direct_url_allowed(url: str, catalog_item: dict | None = None) -> bool:
+    """Direct URL probe gate. Prefer 443 and catalog-known endpoints.
+
+    Unknown public URLs stay supported only on https:443 with existing SSRF
+    rules: no credentials, no non-HTTPS, no unusual ports.
+    """
+    raw = (url or "").strip()
+    if not raw:
+        return False
+    parsed = urlparse(raw)
+    if parsed.scheme != "https" or not parsed.netloc:
+        return False
+    if parsed.username or parsed.password:
+        return False
+    port = url_port(parsed)
+    if port is None:
+        return False
+    known = catalog_known_item(raw, catalog_item)
+    if port != 443 and not known:
+        return False
+    return True
+
+
 def url_port(parsed) -> int | None:
     """Destination port or None if invalid/out of range. Never raise ValueError."""
     try:
@@ -646,8 +713,23 @@ def _try_ip(host: str):
         return None
 
 
+def _dns_executor() -> ThreadPoolExecutor:
+    global _dns_pool
+    with _dns_lock:
+        if _dns_pool is None:
+            _dns_pool = ThreadPoolExecutor(
+                max_workers=MAX_DNS_WORKERS,
+                thread_name_prefix="dns",
+            )
+        return _dns_pool
+
+
+def dns_worker_cap() -> int:
+    return MAX_DNS_WORKERS
+
+
 def _getaddrinfo_timed(host: str, timeout: float | None = None, port: int = 443):
-    """socket.getaddrinfo with a join timeout. Fail closed on hang."""
+    """Bounded getaddrinfo. Timed-out lookups do not spawn extra threads."""
     cap = DNS_TIMEOUT if timeout is None else float(timeout)
     if cap <= 0:
         raise TimeoutError("getaddrinfo timed out")
@@ -657,25 +739,15 @@ def _getaddrinfo_timed(host: str, timeout: float | None = None, port: int = 443)
         dest_port = 443
     if dest_port <= 0 or dest_port > 65535:
         dest_port = 443
-    box: list = []
-
-    def run() -> None:
-        try:
-            box.append(
-                ("ok", socket.getaddrinfo(host, dest_port, type=socket.SOCK_STREAM))
-            )
-        except Exception as exc:
-            box.append(("err", exc))
-
-    t = threading.Thread(target=run, daemon=True)
-    t.start()
-    t.join(cap)
-    if not box:
-        raise TimeoutError("getaddrinfo timed out")
-    kind, payload = box[0]
-    if kind == "err":
-        raise payload
-    return payload
+    fut = _dns_executor().submit(
+        socket.getaddrinfo, host, dest_port, 0, socket.SOCK_STREAM
+    )
+    try:
+        return fut.result(timeout=cap)
+    except FuturesTimeout:
+        raise TimeoutError("getaddrinfo timed out") from None
+    except Exception:
+        raise
 
 
 def _checked_addrs(host: str, port: int = 443) -> list[tuple] | None:
@@ -1145,18 +1217,38 @@ def _catalog_requires_body(item: dict | None) -> bool:
     return _declared_input_body(item) is not None
 
 
-def _post_empty_justified(get_snap: dict | None) -> bool:
-    """POST {} only if GET was not a live 402 and POST is justified."""
+def _catalog_declares_post(item: dict | None) -> bool:
+    """True only when the catalog explicitly declares POST. extract_method defaults are ignored."""
+    if not isinstance(item, dict) or not item:
+        return False
+    raw = item.get("method")
+    if isinstance(raw, str) and raw.strip().upper() == "POST":
+        return True
+    for bazaar in _bazaar_blobs(item, None):
+        info = bazaar.get("info") or {}
+        inp = info.get("input") or {}
+        if isinstance(inp, dict):
+            method = str(inp.get("method") or "").strip().upper()
+            if method == "POST":
+                return True
+    return False
+
+
+def _post_empty_justified(get_snap: dict | None, catalog_item: dict | None = None) -> bool:
+    """POST {} only with strong method justification. Never after arbitrary 200/400/404."""
     if not get_snap or get_snap.get("live"):
         return False
-    if get_snap.get("miss_reason") == "ssrf":
+    miss = get_snap.get("miss_reason")
+    if miss in {"ssrf", "probe_timeout"}:
         return False
     status = get_snap.get("status")
-    if status in {405, 501}:
-        return True
     if get_snap.get("has_402_challenge") or status == 402:
         return False
-    if status is not None:
+    if status in {405, 501}:
+        return True
+    if _catalog_requires_body(catalog_item):
+        return False
+    if _catalog_declares_post(catalog_item):
         return True
     return False
 
@@ -1604,7 +1696,7 @@ def _fixture_probe(url: str, catalog_item: dict | None = None, batch_id: str | N
 def probe_url(url: str, catalog_item: dict | None = None, deadline: float | None = None, batch_id: str | None = None, record: bool = True) -> dict:
     """Unpaid dual probe. Live = HTTP 402 with a parseable payment envelope."""
     if deadline is None:
-        deadline = time.monotonic() + PROBE_BUDGET_SECONDS
+        deadline = clock.monotonic() + PROBE_BUDGET_SECONDS
     bid = batch_id or uuid.uuid4().hex
     if fixtures.fixture_mode():
         return _fixture_probe(url, catalog_item, batch_id=bid, record=record)
@@ -1658,7 +1750,7 @@ def probe_url(url: str, catalog_item: dict | None = None, deadline: float | None
         return _finalize_probe(attach_invocable_target(result, catalog_item), batch_id=bid, record=record)
 
     post_snap = None
-    if not get_snap.get("live") and _post_empty_justified(get_snap):
+    if not get_snap.get("live") and _post_empty_justified(get_snap, catalog_item):
         post_snap = _one_request(safe, "POST", data=b"{}", deadline=deadline, pinned_addrs=addrs)
         if get_snap.get("status") in {405, 501} and not post_snap.get("live"):
             post_snap["miss_reason"] = "no_402_envelope"
@@ -1677,7 +1769,12 @@ def probe_url(url: str, catalog_item: dict | None = None, deadline: float | None
     live = bool(unpaid_live and winner and winner.get("live"))
     miss_reason = None
     if not live:
-        if _catalog_requires_body(catalog_item):
+        get_miss = get_snap.get("miss_reason")
+        if get_miss == "ssrf":
+            miss_reason = "ssrf"
+        elif get_miss == "probe_timeout" and post_snap is None:
+            miss_reason = "probe_timeout"
+        elif _catalog_requires_body(catalog_item):
             miss_reason = "unsafe_to_probe"
         elif get_snap.get("status") in {405, 501} and not (post_snap and post_snap.get("live")):
             miss_reason = "no_402_envelope"
@@ -2345,7 +2442,7 @@ def route_need(
     Candidate #6 is reachable when 1–5 fail without every request doing 20.
     """
     if deadline is None:
-        deadline = time.monotonic() + PROBE_BUDGET_SECONDS
+        deadline = clock.monotonic() + PROBE_BUDGET_SECONDS
     prefer = normalize_prefer_network(prefer_network)
     obj = select.parse_objective(objective)
     cons = constraints if isinstance(constraints, dict) else {}

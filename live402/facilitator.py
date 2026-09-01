@@ -28,8 +28,29 @@ GOPLAUSIBLE_VERIFY_URL = payment.ALGORAND_FACILITATOR.rstrip("/") + "/verify"
 GOPLAUSIBLE_SETTLE_URL = payment.ALGORAND_FACILITATOR.rstrip("/") + "/settle"
 
 USER_AGENT = "402Signal/0.1 (x402 resource server; no payment keys)"
-VERIFY_TIMEOUT = 20.0
-SETTLE_TIMEOUT = 45.0
+# Caps only. Paid /route uses remaining deadline, not these as sequential budgets.
+VERIFY_TIMEOUT = 8.0
+SETTLE_TIMEOUT = 10.0
+MAX_BODY = 64 * 1024
+
+ALLOWLISTED_URLS = frozenset(
+    {
+        CDP_VERIFY_URL,
+        CDP_SETTLE_URL,
+        PAYAI_VERIFY_URL,
+        PAYAI_SETTLE_URL,
+        GOPLAUSIBLE_VERIFY_URL,
+        GOPLAUSIBLE_SETTLE_URL,
+    }
+)
+ALLOWLISTED_HOSTS = frozenset(
+    {
+        "api.cdp.coinbase.com",
+        "facilitator.payai.network",
+        "facilitator.goplausible.xyz",
+    }
+)
+EXPECTED_PATHS = frozenset({"/platform/v2/x402/verify", "/platform/v2/x402/settle", "/verify", "/settle"})
 
 
 @dataclass
@@ -40,12 +61,45 @@ class FacilitatorResult:
     url: str = ""
 
 
+class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Explicit no-redirect. Never follow, never forward Authorization."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
 def endpoints_for(rail: str) -> tuple[str, str]:
     if rail == "solana":
         return PAYAI_VERIFY_URL, PAYAI_SETTLE_URL
     if rail == "algorand":
         return GOPLAUSIBLE_VERIFY_URL, GOPLAUSIBLE_SETTLE_URL
     return CDP_VERIFY_URL, CDP_SETTLE_URL
+
+
+def facilitator_url_allowed(url: str) -> bool:
+    """Exact HTTPS allowlisted host + fixed endpoint. No credentials. No caller URL."""
+    raw = (url or "").strip()
+    if not raw:
+        return False
+    parsed = urlparse(raw)
+    if parsed.scheme != "https" or not parsed.netloc:
+        return False
+    if parsed.username or parsed.password:
+        return False
+    host = (parsed.hostname or "").strip().lower()
+    if host not in ALLOWLISTED_HOSTS:
+        return False
+    path = parsed.path or ""
+    if path.endswith("/") and len(path) > 1:
+        path = path.rstrip("/")
+    if path not in EXPECTED_PATHS:
+        return False
+    if parsed.query or parsed.fragment:
+        return False
+    canonical = "%s://%s%s" % (parsed.scheme, host, path)
+    if parsed.port and parsed.port != 443:
+        return False
+    return canonical in ALLOWLISTED_URLS
 
 
 def _auth_headers(rail: str, method: str, url: str) -> dict[str, str] | None:
@@ -66,8 +120,36 @@ def _auth_headers(rail: str, method: str, url: str) -> dict[str, str] | None:
     return {}
 
 
-def post_json(url: str, body: dict, headers: dict | None = None, timeout: float = 20.0):
-    """POST JSON. Tests patch this. Returns (status, payload_dict)."""
+def _read_capped(fp) -> bytes:
+    if fp is None:
+        return b""
+    try:
+        raw = fp.read(MAX_BODY + 1)
+    except Exception:
+        return b""
+    if raw is None:
+        return b""
+    if len(raw) > MAX_BODY:
+        return raw[:MAX_BODY]
+    return raw
+
+
+def _payload_from_bytes(raw: bytes) -> dict:
+    if not raw:
+        return {}
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError, TypeError):
+        return {"error": "invalid_facilitator_response"}
+    if not isinstance(payload, dict):
+        return {"error": "invalid_facilitator_response"}
+    return payload
+
+
+def post_json(url: str, body: dict, headers: dict | None = None, timeout: float = 8.0):
+    """POST JSON to an allowlisted facilitator. Tests patch this. Returns (status, payload_dict)."""
+    if not facilitator_url_allowed(url):
+        return None, {"error": "invalid_facilitator_url"}
     raw = json.dumps(body).encode("utf-8")
     hdrs = {
         "Content-Type": "application/json",
@@ -78,30 +160,25 @@ def post_json(url: str, body: dict, headers: dict | None = None, timeout: float 
         if val:
             hdrs[key] = val
     req = urllib.request.Request(url, data=raw, method="POST", headers=hdrs)
+    opener = urllib.request.build_opener(NoRedirectHandler)
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with opener.open(req, timeout=timeout) as resp:
             status = getattr(resp, "status", None) or resp.getcode()
-            text = resp.read().decode("utf-8") or "{}"
+            text_bytes = _read_capped(resp)
     except urllib.error.HTTPError as err:
         status = err.code
         try:
-            text = err.read().decode("utf-8") or "{}"
+            text_bytes = _read_capped(err)
         except Exception:
-            text = "{}"
+            text_bytes = b""
     except Exception:
         return None, {"error": "facilitator_unavailable"}
-    try:
-        payload = json.loads(text)
-    except json.JSONDecodeError:
-        payload = {"error": "invalid_facilitator_response", "raw": text[:200]}
-    if not isinstance(payload, dict):
-        payload = {"error": "invalid_facilitator_response"}
+    payload = _payload_from_bytes(text_bytes)
     return status, payload
 
 
 def _call(rail: str, url: str, body: dict, timeout: float) -> FacilitatorResult:
-    parsed = urlparse(url)
-    if parsed.scheme != "https" or not parsed.netloc:
+    if not facilitator_url_allowed(url):
         return FacilitatorResult(ok=False, error="invalid_facilitator_url", url=url)
     headers = _auth_headers(rail, "POST", url)
     if headers is None:
@@ -130,10 +207,11 @@ def _request_body(payload: dict, accept: dict) -> dict:
     }
 
 
-def verify(payload: dict, accept: dict) -> FacilitatorResult:
+def verify(payload: dict, accept: dict, timeout: float | None = None) -> FacilitatorResult:
     rail = payment.rail_of_accept(accept)
     verify_url, _ = endpoints_for(rail)
-    result = _call(rail, verify_url, _request_body(payload, accept), VERIFY_TIMEOUT)
+    cap = VERIFY_TIMEOUT if timeout is None else max(0.05, float(timeout))
+    result = _call(rail, verify_url, _request_body(payload, accept), cap)
     if not result.ok:
         return result
     body = result.body
@@ -149,10 +227,11 @@ def verify(payload: dict, accept: dict) -> FacilitatorResult:
     return FacilitatorResult(ok=False, body=body, error=str(reason), url=verify_url)
 
 
-def settle(payload: dict, accept: dict) -> FacilitatorResult:
+def settle(payload: dict, accept: dict, timeout: float | None = None) -> FacilitatorResult:
     rail = payment.rail_of_accept(accept)
     _, settle_url = endpoints_for(rail)
-    result = _call(rail, settle_url, _request_body(payload, accept), SETTLE_TIMEOUT)
+    cap = SETTLE_TIMEOUT if timeout is None else max(0.05, float(timeout))
+    result = _call(rail, settle_url, _request_body(payload, accept), cap)
     if not result.ok:
         return result
     body = result.body

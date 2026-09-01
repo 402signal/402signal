@@ -17,7 +17,7 @@ os.environ.setdefault("LIVE402_FIXTURE", "1")
 os.environ.pop("LOCAL_FREE", None)
 
 from live402.server import Handler
-from live402 import facilitator, payment, probe, fixtures
+from live402 import facilitator, payment, probe, fixtures, replay
 
 
 def _serve():
@@ -1385,6 +1385,12 @@ class PaidFacilitatorTests(unittest.TestCase):
         cls.httpd.server_close()
         os.environ.pop("CDP_ACCESS_TOKEN", None)
 
+    def setUp(self):
+        replay.reset()
+
+    def tearDown(self):
+        replay.reset()
+
     def test_mocked_verify_settle_opens_gate(self):
         with patch("live402.facilitator.post_json", side_effect=_fake_facilitator) as mock_post:
             status, body = _json_post(
@@ -1582,7 +1588,7 @@ class RateLimitTests(unittest.TestCase):
     def setUpClass(cls):
         os.environ.pop("LOCAL_FREE", None)
         os.environ["LIVE402_ROUTE_RPM"] = "2"
-        os.environ["LIVE402_ROUTE_RPM_FACILITATOR"] = "8"
+        os.environ["FLY_APP_NAME"] = "402signal-test"
         cls.httpd, cls.host, cls.port = _serve()
 
     @classmethod
@@ -1590,7 +1596,7 @@ class RateLimitTests(unittest.TestCase):
         cls.httpd.shutdown()
         cls.httpd.server_close()
         os.environ.pop("LIVE402_ROUTE_RPM", None)
-        os.environ.pop("LIVE402_ROUTE_RPM_FACILITATOR", None)
+        os.environ.pop("FLY_APP_NAME", None)
 
     def test_route_rate_limit_429(self):
         ip_headers = {"Fly-Client-IP": "203.0.113.50"}
@@ -1604,7 +1610,7 @@ class RateLimitTests(unittest.TestCase):
         self.assertEqual(statuses[1], 402)
         self.assertEqual(statuses[2], 429)
 
-    def test_facilitator_ua_gets_higher_burst(self):
+    def test_coinbase_ua_gets_no_extra_quota(self):
         headers = {
             "Fly-Client-IP": "203.0.113.51",
             "User-Agent": "Coinbase-CDP-x402-crawler/1.0",
@@ -1615,7 +1621,7 @@ class RateLimitTests(unittest.TestCase):
                 self.port, "/route", {}, extra_headers=headers
             )
             statuses.append(status)
-        self.assertEqual(statuses, [402, 402, 402])
+        self.assertEqual(statuses, [402, 402, 429])
 
     def test_preview_uses_separate_looser_limiter(self):
         ip_headers = {"Fly-Client-IP": "203.0.113.52"}
@@ -1652,6 +1658,7 @@ class PreviewRateLimitTests(unittest.TestCase):
     def setUpClass(cls):
         os.environ.pop("LOCAL_FREE", None)
         os.environ["LIVE402_PREVIEW_RPM"] = "2"
+        os.environ["FLY_APP_NAME"] = "402signal-test"
         cls.httpd, cls.host, cls.port = _serve()
 
     @classmethod
@@ -1659,6 +1666,7 @@ class PreviewRateLimitTests(unittest.TestCase):
         cls.httpd.shutdown()
         cls.httpd.server_close()
         os.environ.pop("LIVE402_PREVIEW_RPM", None)
+        os.environ.pop("FLY_APP_NAME", None)
 
     def test_preview_rate_limit_429(self):
         ip_headers = {"Fly-Client-IP": "203.0.113.60"}
@@ -2112,6 +2120,7 @@ class PublicRateLimitTests(unittest.TestCase):
     def setUpClass(cls):
         os.environ.pop("LOCAL_FREE", None)
         os.environ["LIVE402_PUBLIC_RPM"] = "2"
+        os.environ["FLY_APP_NAME"] = "402signal-test"
         cls.httpd, cls.host, cls.port = _serve()
 
     @classmethod
@@ -2119,6 +2128,7 @@ class PublicRateLimitTests(unittest.TestCase):
         cls.httpd.shutdown()
         cls.httpd.server_close()
         os.environ.pop("LIVE402_PUBLIC_RPM", None)
+        os.environ.pop("FLY_APP_NAME", None)
 
     def test_pulse_rate_limit_429(self):
         ip_headers = {"Fly-Client-IP": "203.0.113.70"}

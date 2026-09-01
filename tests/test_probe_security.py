@@ -116,8 +116,11 @@ class SellerBodyTighteningTests(unittest.TestCase):
         self.assertFalse(probe._post_empty_justified(_snap(402, live=False, miss="no_payto")))
         self.assertTrue(probe._post_empty_justified(_snap(405)))
         self.assertTrue(probe._post_empty_justified(_snap(501)))
-        self.assertTrue(probe._post_empty_justified(_snap(200, miss="reachable_200")))
-        self.assertTrue(probe._post_empty_justified(_snap(404)))
+        self.assertFalse(probe._post_empty_justified(_snap(200, miss="reachable_200")))
+        self.assertFalse(probe._post_empty_justified(_snap(400)))
+        self.assertFalse(probe._post_empty_justified(_snap(401)))
+        self.assertFalse(probe._post_empty_justified(_snap(403)))
+        self.assertFalse(probe._post_empty_justified(_snap(404)))
         self.assertFalse(
             probe._post_empty_justified(
                 {"live": False, "status": None, "has_402_challenge": False, "miss_reason": "probe_timeout"}
@@ -127,6 +130,11 @@ class SellerBodyTighteningTests(unittest.TestCase):
             probe._post_empty_justified(
                 {"live": False, "status": None, "has_402_challenge": False, "miss_reason": "ssrf"}
             )
+        )
+        post_item = {"url": SELLER_URL, "method": "POST"}
+        self.assertTrue(probe._post_empty_justified(_snap(200, miss="reachable_200"), post_item))
+        self.assertFalse(
+            probe._post_empty_justified(_snap(200, miss="reachable_200"), _declared_item())
         )
 
         calls = []
@@ -168,6 +176,84 @@ class SellerBodyTighteningTests(unittest.TestCase):
         self.assertEqual(post_payloads, [b"{}"])
         self.assertTrue(any(c["method"] == "GET" for c in calls))
         self.assertNotIn(b"exfiltrate-me", b"".join(p or b"" for p in post_payloads))
+
+
+class UnpaidPostProbeMatrixTests(unittest.TestCase):
+    def _run(self, get_snap, catalog_item=None):
+        calls = []
+
+        def fake_one(url, method, data=None, deadline=None, pinned_addrs=None):
+            calls.append({"method": method, "data": data})
+            if method == "GET":
+                return get_snap
+            return _snap(400)
+
+        with patch("live402.probe.fixtures.fixture_mode", return_value=False), patch(
+            "live402.probe._pin_https_target",
+            return_value=(SELLER_URL, [(PUBLIC_IP, 443)]),
+        ), patch("live402.probe._one_request", side_effect=fake_one):
+            result = probe.probe_url(SELLER_URL, catalog_item=catalog_item)
+        return result, calls
+
+    def test_get_200_does_not_post(self):
+        result, calls = self._run(_snap(200, miss="reachable_200"))
+        self.assertEqual([c["method"] for c in calls], ["GET"])
+        self.assertEqual(result.get("miss_reason"), "reachable_200")
+
+    def test_get_400_does_not_post(self):
+        result, calls = self._run(_snap(400))
+        self.assertEqual([c["method"] for c in calls], ["GET"])
+        self.assertEqual(result.get("miss_reason"), "no_402_envelope")
+
+    def test_get_401_does_not_post(self):
+        result, calls = self._run(_snap(401))
+        self.assertEqual([c["method"] for c in calls], ["GET"])
+        self.assertFalse(result.get("live"))
+
+    def test_get_403_does_not_post(self):
+        result, calls = self._run(_snap(403))
+        self.assertEqual([c["method"] for c in calls], ["GET"])
+        self.assertFalse(result.get("live"))
+
+    def test_get_404_does_not_post(self):
+        result, calls = self._run(_snap(404))
+        self.assertEqual([c["method"] for c in calls], ["GET"])
+        self.assertEqual(result.get("miss_reason"), "no_402_envelope")
+
+    def test_get_405_posts_empty(self):
+        result, calls = self._run(_snap(405))
+        self.assertEqual([c["method"] for c in calls], ["GET", "POST"])
+        self.assertEqual(calls[1]["data"], b"{}")
+        self.assertFalse(result.get("live"))
+
+    def test_get_402_malformed_does_not_post(self):
+        result, calls = self._run(_snap(402, live=False, miss="no_payto"))
+        self.assertEqual([c["method"] for c in calls], ["GET"])
+        self.assertEqual(result.get("miss_reason"), "no_payto")
+
+    def test_get_501_posts_empty(self):
+        result, calls = self._run(_snap(501))
+        self.assertEqual([c["method"] for c in calls], ["GET", "POST"])
+        self.assertEqual(calls[1]["data"], b"{}")
+
+    def test_get_timeout_does_not_post(self):
+        result, calls = self._run(
+            {
+                "live": False,
+                "status": None,
+                "has_402_challenge": False,
+                "payTo": None,
+                "miss_reason": "probe_timeout",
+                "envelope": None,
+            }
+        )
+        self.assertEqual([c["method"] for c in calls], ["GET"])
+        self.assertEqual(result.get("miss_reason"), "probe_timeout")
+
+    def test_required_body_is_unsafe_to_probe(self):
+        result, calls = self._run(_snap(200, miss="reachable_200"), _declared_item())
+        self.assertEqual([c["method"] for c in calls], ["GET"])
+        self.assertEqual(result.get("miss_reason"), "unsafe_to_probe")
 
 
 class DnsIpPinTests(unittest.TestCase):

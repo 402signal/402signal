@@ -51,11 +51,12 @@ GUIDANCE = (
     "Typical probe plan is a first tranche of 3, then 2–4 more if no winner. Hard ceiling is 20. "
     "GET /preview adds discovery_matches, displayed, and a read-only "
     "observation from 402signal_observed history (not_yet_observed when never probed). "
-    "Upstream probe is GET first, then POST {} only if GET was not a live 402 and "
-    "POST is justified (GET 405/501, or GET is clearly not an x402 challenge). "
-    "Never POST seller-declared or catalog-declared input bodies. If the catalog "
-    "says a body is required and GET+POST {} cannot establish a live 402, miss_reason "
-    "is unsafe_to_probe. DNS is resolved once (getaddrinfo, 2s) and the TCP/TLS "
+    "Upstream probe is GET first, then POST {} only with strong method justification "
+    "(GET 405/501, or the catalog explicitly declares POST and does not require a "
+    "request body). Never POST {} after an arbitrary 200/400/404. "
+    "Never POST seller-declared or catalog-declared input bodies. If a required body "
+    "means a valid unpaid probe cannot be constructed, miss_reason is unsafe_to_probe. "
+    "DNS uses a bounded getaddrinfo pool (2s) and the TCP/TLS "
     "connection is pinned to those SSRF-checked public IPs with TLS SNI and HTTP Host "
     "set to the original hostname (re-pinned on each redirect hop)."
 )
@@ -1153,7 +1154,7 @@ HTTP 200 = live URL plus target contract. HTTP 503 = typed miss_reason.
 - Unpaid → HTTP 402 (amount 10000 atomic = $0.01, 6 decimals)
 - Paid live hit → HTTP 200 + URL that 402s with a payment envelope + target {method,inputSchema,outputSchema,accepts,facilitator,amountAtomic,displayAmount,timeoutSeconds} + selected_payment {rail,network,asset,amount_atomic,display_amount,normalized_usd,payTo,facilitator}. target.accepts and selected_payment are CURRENT observed 402 options only. Catalog rails stay on claimed.payment_options and are never selected.
 - 402Signal settles the $0.01 routing payment; it does not pay the selected merchant.
-- Upstream probe is GET first, then POST {} only if GET was not a live 402 and POST is justified (GET 405/501, or GET is clearly not an x402 challenge). Never POST seller-declared or catalog-declared input bodies. If the catalog says a body is required and GET+POST {} cannot establish a live 402, miss_reason is unsafe_to_probe. DNS is resolved once (getaddrinfo, 2s); TCP/TLS is pinned to those SSRF-checked public IPs with TLS SNI and HTTP Host set to the original hostname (re-pinned on redirects).
+- Upstream probe is GET first, then POST {} only with strong method justification (GET 405/501, or the catalog explicitly declares POST and does not require a request body). Never POST {} after an arbitrary 200/400/404. Never POST seller-declared or catalog-declared input bodies. If a required body means a valid unpaid probe cannot be constructed, miss_reason is unsafe_to_probe. DNS uses a bounded getaddrinfo pool (2s); TCP/TLS is pinned to those SSRF-checked public IPs with TLS SNI and HTTP Host set to the original hostname (re-pinned on redirects).
 - payable requires a complete observed option (rail/network, amount, asset, payTo). invocable is payable + input schema. challenge_observed is HTTP 402 + parseable x402.
 - If inputSchema is missing: live may be true, invocable false, miss_reason no_input_schema
 - Paid miss → HTTP 503 {live:false, miss_reason}
