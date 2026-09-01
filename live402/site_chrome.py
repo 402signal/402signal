@@ -128,7 +128,7 @@ def signal_flow_html(*, variant: str = "product") -> str:
         '    <div class="flow-conn gold" aria-hidden="true"></div>\n'
         '    <div class="flow-box flow-emphasis">\n'
         '      <p class="flow-kicker">LIVE CHECK</p>\n'
-        '      <p class="flow-title">Probe candidate endpoints and parse current HTTP 402 payment requirements</p>\n'
+        '      <p class="flow-title">Probe candidates and parse current HTTP 402 payment requirements</p>\n'
         "    </div>\n"
         '    <div class="flow-conn gold" aria-hidden="true"></div>\n'
         '    <div class="flow-box">\n'
@@ -138,7 +138,7 @@ def signal_flow_html(*, variant: str = "product") -> str:
         '    <div class="flow-conn gold" aria-hidden="true"></div>\n'
         '    <div class="flow-box">\n'
         '      <p class="flow-kicker">RESULT</p>\n'
-        '      <p class="flow-title">Return selected route + selected_payment, or a typed miss</p>\n'
+        '      <p class="flow-title">Return selected route and selected_payment, or a typed miss</p>\n'
         "    </div>\n"
         "  </div>\n"
         '  <div class="trust-rail">\n'
