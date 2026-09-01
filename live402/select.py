@@ -259,6 +259,10 @@ def validate_explicit_constraints(body: dict) -> None:
             _reject("max_candidates_to_probe must be at least 1")
     if _explicit_present(src, "require_invocable"):
         _require_bool(src.get("require_invocable"), "require_invocable")
+    if _explicit_present(src, "accept_payTo_change"):
+        _require_bool(src.get("accept_payTo_change"), "accept_payTo_change")
+    if _explicit_present(src, "require_transparency"):
+        _require_bool(src.get("require_transparency"), "require_transparency")
     if _explicit_present(src, "max_price_usd"):
         _require_nonneg_number(src.get("max_price_usd"), "max_price_usd")
     if _explicit_present(src, "max_total_cost_usd"):
@@ -855,10 +859,13 @@ _CMP = {
 
 
 def _payto_selectable(result: dict, constraints: dict | None = None) -> bool:
-    """First unexpected payTo change is not selectable unless accept_payTo_change."""
+    """First unexpected last_payTo rotation is not selectable unless accept_payTo_change.
+
+    Catalog claimed vs observed mismatch (payTo_changed) stays selectable.
+    """
     if not isinstance(result, dict):
         return False
-    if not result.get("payTo_changed"):
+    if not result.get("payTo_pending"):
         return True
     cons = constraints if isinstance(constraints, dict) else {}
     return bool(cons.get("accept_payTo_change"))
@@ -868,8 +875,10 @@ def enough_evidence(results: list[dict], objective: str, constraints: dict | Non
     """True when a completed tranche has a selectable winner; do not start another.
 
     Call only after already-running candidates have finished. Does not cancel
-    in-flight work. First unexpected payTo change is not enough evidence
-    unless accept_payTo_change. Fail-closed: no viable → False.
+    in-flight work. First last_payTo rotation (payTo_pending) is not enough
+    evidence unless accept_payTo_change. best keeps looking when every
+    remaining viable hit is payTo_changed (claimed vs observed). Fail-closed:
+    no viable → False.
     """
     if not isinstance(results, list) or not results:
         return False
@@ -882,20 +891,27 @@ def enough_evidence(results: list[dict], objective: str, constraints: dict | Non
     ]
     if not viable:
         return False
+    stable = [r for r in viable if not r.get("payTo_changed")]
+    if obj == "best":
+        return bool(stable)
     if obj == "cheapest":
-        return bool(_cheapest_comparable_subset(viable, cons))
+        pool = stable or viable
+        return bool(_cheapest_comparable_subset(pool, cons))
     if obj == "lowest_total_cost":
-        return any(_total_cost(r) is not None for r in viable)
+        pool = stable or viable
+        return any(_total_cost(r) is not None for r in pool)
     if obj == "fastest_settlement":
-        return any(_settlement_ms(r) is not None for r in viable)
+        pool = stable or viable
+        return any(_settlement_ms(r) is not None for r in pool)
     return True
 
 
 def pick_winner(results: list[dict], objective: str, constraints: dict | None = None) -> dict | None:
     """Filter fail-closed, then pick. None means caller keeps the current miss.
 
-    First unexpected payTo change is dropped unless accept_payTo_change.
-    All-changed windows do not silently pick a flipped dest.
+    First last_payTo rotation (payTo_pending) is dropped unless
+    accept_payTo_change. Claimed vs observed (payTo_changed) stays
+    pickable so catalog mismatch does not brick a live dest.
     """
     if not isinstance(results, list) or not results:
         return None

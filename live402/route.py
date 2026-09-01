@@ -71,7 +71,11 @@ def _direct_url_result(body: dict, url: str, need: str, deadline: float) -> tupl
         bid = result.get("batch_id")
         metas = history_mod.persist_route_batch(bid, [result]) if bid else {}
         meta = metas.get(url) if isinstance(metas, dict) else None
-        if meta and meta.get("payTo_flipped"):
+        if meta and meta.get("payTo_pending"):
+            result["payTo_pending"] = True
+            result["payTo_changed"] = True
+            result.setdefault("risk", ["payTo_changed"])
+        elif meta and meta.get("payTo_flipped"):
             result["payTo_changed"] = True
             result.setdefault("risk", ["payTo_changed"])
     except Exception:

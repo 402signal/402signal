@@ -588,8 +588,8 @@ def _write_probe_row(dest: str, snap: dict, meta: dict) -> None:
     if claimed_pay and pay_to and not payment.payto_equal(
         claimed_pay, pay_to, claimed_rail or rail
     ):
-        if not meta.get("payTo_established"):
-            meta["payTo_flipped"] = True
+        # Claimed vs observed mismatch is a risk flag, not a last_payTo rotation.
+        meta["claimed_payTo_mismatch"] = True
     if prev_amt is not None and amount is not None and _price_flipped(prev_amt, amount, snap, rail):
         price_changed_at = ts
         meta["price_flipped"] = True
@@ -753,7 +753,10 @@ def persist_route_batch(batch_id: str | None, results: list | None) -> dict:
                 meta = {"payTo_flipped": False, "price_flipped": False, "schema_flipped": False}
                 _write_probe_row(dest, snap, meta)
                 metas[dest] = meta
-                if meta.get("payTo_flipped"):
+                if meta.get("payTo_pending"):
+                    raw["payTo_pending"] = True
+                    raw["payTo_changed"] = True
+                elif meta.get("payTo_flipped"):
                     raw["payTo_changed"] = True
             _seal_unlocked(bid)
             conn = _connect()
@@ -1141,7 +1144,10 @@ def attach_to_result(result: dict | None, meta: dict | None = None) -> dict:
         probed_at = result.get("probed_at")
         result["verified_at"] = probed_at
         result["verified_seconds_ago"] = 0
-        if meta.get("payTo_flipped"):
+        if meta.get("payTo_pending"):
+            result["payTo_pending"] = True
+            result["payTo_changed"] = True
+        elif meta.get("payTo_flipped"):
             result["payTo_changed"] = True
         url = _text(result.get("url")) or ""
         summ = summary(url) if url else _empty_summary()

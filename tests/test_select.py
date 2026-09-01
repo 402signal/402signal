@@ -335,17 +335,19 @@ class ConstraintTests(unittest.TestCase):
         )
 
     def test_payto_changed_is_not_selectable_without_opt_in(self):
-        flipped = _hit(url="https://flip.example/x", payTo_changed=True, risk=["payTo_changed"])
+        flipped = _hit(url="https://flip.example/x", payTo_pending=True, payTo_changed=True, risk=["payTo_changed"])
         self.assertTrue(select.passes_constraints(flipped, {}))
         self.assertIsNone(select.pick_winner([flipped], "best", None))
         self.assertIs(
             select.pick_winner([flipped], "best", {"accept_payTo_change": True}),
             flipped,
         )
+        claimed_mismatch = _hit(url="https://claim.example/x", payTo_changed=True)
+        self.assertIs(select.pick_winner([claimed_mismatch], "best", None), claimed_mismatch)
 
     def test_all_changed_window_empty_unless_opt_in(self):
-        a = _hit(url="https://a.example/x", payTo_changed=True)
-        b = _hit(url="https://b.example/x", payTo_changed=True)
+        a = _hit(url="https://a.example/x", payTo_pending=True)
+        b = _hit(url="https://b.example/x", payTo_pending=True)
         stable = _hit(url="https://stable.example/x")
         self.assertIsNone(select.pick_winner([a, b], "best", None))
         self.assertIs(select.pick_winner([a, b, stable], "best", None), stable)

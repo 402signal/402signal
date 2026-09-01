@@ -214,4 +214,6 @@ Dockerfile          Python 3.12.11-slim, 0.0.0.0:$PORT (root; see docs/docker.md
 fly.toml            app 402signal, internal_port 8080, one machine
 docs/backup.md      sqlite backup tooling + Fly human checklist (backups not claimed active)
 docs/github-protection.md  branch protection human checklist (not enabled by this PR)
+docs/docker.md      non-root /data blocker (USER not added)
+docs/merkle-bench.md  honest 10k/100k/1m frontier timings; SQLite commit is the bottleneck
 ```

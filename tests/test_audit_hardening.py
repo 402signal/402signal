@@ -282,7 +282,7 @@ class SchemaAndTrustSyncTests(unittest.TestCase):
         shared = list(schema_fields.NEED_OR_URL_ANYOF)
         self.assertEqual(mcp.INPUT_SCHEMA["anyOf"], shared)
         self.assertEqual(schema_fields.route_body_schema()["anyOf"], shared)
-        body = payment.BAZAAR["schema"]["properties"]["input"]["properties"]["body"]
+        body = payment.BAZAAR_EXTENSION["schema"]["properties"]["input"]["properties"]["body"]
         self.assertEqual(body["anyOf"], shared)
         self.assertEqual(payment.BAZAAR_MCP["info"]["input"]["inputSchema"]["anyOf"], shared)
         spec = discover.openapi_spec("https://402signal.com")

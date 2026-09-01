@@ -121,6 +121,9 @@ def _bounded_schema(obj) -> tuple[dict | None, int, bool]:
     """
     if not isinstance(obj, dict) or not obj:
         return None, 0, False
+    original = _json_bytes(obj)
+    if original is not None and len(original) > SCHEMA_MAX_BYTES:
+        return None, len(original), True
     cleaned = sanitize_untrusted_schema(obj)
     if not isinstance(cleaned, dict) or not cleaned:
         return None, 0, False
