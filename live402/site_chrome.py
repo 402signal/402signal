@@ -13,9 +13,10 @@ FOOTER = (
     ("https://github.com/402signal/402signal", "GitHub", True),
     ("https://x.com/402Signal", "@402Signal", True),
     ("/openapi.json", "OpenAPI", False),
+    ("/mcp.json", "MCP", False),
     ("/transparency", "Transparency", False),
     ("/catalog", "Catalog", False),
-    ("mailto:ross@402signal.com", "Contact", False),
+    ("mailto:ross@402signal.com", "ross@402signal.com", False),
 )
 
 LISTED_ON = (
@@ -69,20 +70,25 @@ def footer_html(current: str = "") -> str:
     )
 
 
-def listed_on_html() -> str:
+def listed_on_html(*, title: str = "Listed on", note: str = "") -> str:
     items = []
     for href, label in LISTED_ON:
         items.append(
             '        <a href="%s" rel="noopener noreferrer">%s</a>'
             % (esc(href), esc(label))
         )
+    extra = ""
+    if note:
+        extra = '        <p class="note">%s</p>\n' % esc(note)
     return (
         '      <details class="ecosystem">\n'
-        "        <summary>Listed on</summary>\n"
+        "        <summary>%s</summary>\n"
         '        <p class="listed-on">\n'
+        % esc(title)
         + "\n".join(items)
         + "\n        </p>\n"
-        "      </details>\n"
+        + extra
+        + "      </details>\n"
     )
 
 
