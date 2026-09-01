@@ -995,7 +995,7 @@ class HomepageProductTests(unittest.TestCase):
         self.assertIn(">No preference<", html)
         self.assertIn("Minimum prior observations", html)
         self.assertIn("Require invocation schema", html)
-        self.assertIn("require_invocable", html)
+        self.assertIn("body.require_invocable", js)
         self.assertIn(">Generated request<", html)
         self.assertNotIn("Request documentation", html)
         self.assertNotIn(">Generate<", html)

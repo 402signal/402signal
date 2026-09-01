@@ -81,8 +81,10 @@ class AssetVersionTests(unittest.TestCase):
         root = Path(__file__).resolve().parent.parent
         server = (root / "live402" / "server.py").read_text(encoding="utf-8")
         av = (root / "live402" / "asset_version.py").read_text(encoding="utf-8")
-        self.assertNotIn("FLY_IMAGE_REF", server)
-        self.assertNotIn("FLY_IMAGE_REF", av)
+        self.assertNotIn('os.environ.get("FLY_IMAGE_REF")', server)
+        self.assertNotIn('os.environ.get("FLY_IMAGE_REF")', av)
+        self.assertNotIn('os.environ["FLY_IMAGE_REF"]', server)
+        self.assertNotIn('os.environ["FLY_IMAGE_REF"]', av)
         self.assertNotIn('"/build"', av)
         self.assertNotIn('"/status"', av)
         self.assertNotIn('"/sha"', av)

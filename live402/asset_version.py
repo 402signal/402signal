@@ -91,7 +91,10 @@ def _version_files() -> list[Path]:
 
 
 def _sanitize(raw: str) -> str:
-    text = (raw or "").strip().split()[0]
+    text = (raw or "").strip()
+    if not text:
+        return ""
+    text = text.split()[0]
     if not text or "/" in text or ":" in text:
         return ""
     low = text.lower()
