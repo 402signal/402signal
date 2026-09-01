@@ -32,6 +32,8 @@ def _serve():
 class LogSkEnvTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
+        os.environ.pop("LIVE402_PQ_LOG_EPOCH", None)
+        os.environ.pop("LIVE402_PQ_FALCON_NETWORK", None)
         os.environ["LIVE402_PQ_LOG_DB"] = os.path.join(self.tmp.name, "pq-log.sqlite")
         store.reset()
         receipt.configure_signer(None)
@@ -40,17 +42,15 @@ class LogSkEnvTests(unittest.TestCase):
         os.environ.pop("LIVE402_PQ_LOG", None)
         os.environ.pop("LIVE402_PQ_LOG_VKEY", None)
         os.environ.pop("LIVE402_PQ_LOG_VKEY_MAINNET", None)
-        os.environ.pop("LIVE402_PQ_LOG_EPOCH", None)
-        os.environ.pop("LIVE402_PQ_FALCON_NETWORK", None)
         # Ephemeral test seed only. Never committed, never printed.
         self.seed = os.urandom(32)
         self.hex_sk = self.seed.hex()
         self.addCleanup(self._cleanup)
 
     def _cleanup(self):
-        receipt.configure_signer(None)
         os.environ.pop("LIVE402_PQ_LOG_EPOCH", None)
         os.environ.pop("LIVE402_PQ_FALCON_NETWORK", None)
+        receipt.configure_signer(None)
         store.reset()
         os.environ.pop("LIVE402_PQ_LOG_SK", None)
         os.environ.pop("LIVE402_PQ_LOG_SK_MAINNET", None)

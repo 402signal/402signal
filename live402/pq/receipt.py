@@ -48,6 +48,16 @@ class SignerConfigError(ValueError):
     """LIVE402_PQ_LOG_SK was set but could not be parsed. Do not generate a key."""
 
 
+def _clear_signer_memory() -> None:
+    """Drop the in-memory key without touching sqlite.
+
+    Used when MainNet identity is incomplete so we never open the
+    TestNet database as a side effect of rejecting a SK fallback.
+    """
+    global _signer
+    _signer = None
+
+
 def configure_signer(private_key: Any = None) -> str:
     """Install an in-memory Ed25519 log key. Never log or serialize the private key."""
     global _signer
@@ -154,19 +164,19 @@ def _load_mainnet_signer_from_env() -> str:
     desc = trust.trust_root_v2()
     sig = desc.get("log_signature") if isinstance(desc.get("log_signature"), dict) else {}
     if sig.get("reuse_testnet_sk") is not False:
-        configure_signer(None)
+        _clear_signer_memory()
         raise SignerConfigError("reuse_testnet_sk forbidden")
     testnet_raw = os.environ.get(_SK_ENV)
     mainnet_raw = os.environ.get(_SK_ENV_MAINNET)
     if mainnet_raw is None or not str(mainnet_raw).strip():
-        configure_signer(None)
+        _clear_signer_memory()
         if testnet_raw and str(testnet_raw).strip():
             raise SignerConfigError("reuse_testnet_sk forbidden")
         return ""
     try:
         main_fp, key = _public_fingerprint(mainnet_raw)
     except Exception:
-        configure_signer(None)
+        _clear_signer_memory()
         sys.stderr.write("%s malformed; log signing disabled\n" % _SK_ENV_MAINNET)
         return ""
     if testnet_raw and str(testnet_raw).strip():
@@ -175,7 +185,7 @@ def _load_mainnet_signer_from_env() -> str:
         except Exception:
             test_fp = b""
         if test_fp and test_fp == main_fp:
-            configure_signer(None)
+            _clear_signer_memory()
             raise SignerConfigError("reuse_testnet_sk forbidden")
     vkey = configure_signer(key)
     if vkey:

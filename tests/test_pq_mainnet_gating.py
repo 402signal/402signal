@@ -24,6 +24,12 @@ class MainNetGatingTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.testnet_db = os.path.join(self.tmp.name, "pq-log.sqlite")
         self.mainnet_db = os.path.join(self.tmp.name, "pq-log-mainnet.sqlite")
+        for key in (
+            "LIVE402_PQ_FALCON_NETWORK",
+            "LIVE402_PQ_LOG_EPOCH",
+            "LIVE402_PQ_LOG_ORIGIN",
+        ):
+            os.environ.pop(key, None)
         os.environ["LIVE402_PQ_LOG_DB"] = self.testnet_db
         store.reset()
         worker.clear_queue()
@@ -325,6 +331,12 @@ class FreshLogTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.testnet_db = os.path.join(self.tmp.name, "pq-log.sqlite")
         self.mainnet_db = os.path.join(self.tmp.name, "pq-log-mainnet.sqlite")
+        for key in (
+            "LIVE402_PQ_LOG_EPOCH",
+            "LIVE402_PQ_LOG_ORIGIN",
+            "LIVE402_PQ_FALCON_NETWORK",
+        ):
+            os.environ.pop(key, None)
         self.addCleanup(self._cleanup)
 
     def _cleanup(self):
