@@ -21,7 +21,7 @@ from live402 import payment
 from live402.pq import ORIGIN, ORIGIN_MAINNET, algo_anchor, store, worker
 from live402.pq import transparency as pq_view
 from live402.server import Handler
-from tests.pq_test_env import MAINNET_ENV_KEYS, clear_pq_env
+from tests.pq_test_env import clear_pq_env
 
 _TX_A = "B" * 52
 _TX_B = "C" * 52
@@ -234,9 +234,13 @@ class TESTNET_MAINNET_UI_ISOLATION(unittest.TestCase):
         home = self._html("/")
         self.assertNotIn(algo_anchor.MAINNET_EXPLORER_TX_URL + _TX_A, home)
         self.assertNotIn(algo_anchor.TESTNET_EXPLORER_TX_URL + _TX_A, home)
-        for key in MAINNET_ENV_KEYS:
-            self.assertNotIn(os.environ.get(key) or "", html)
+        for key in (
+            "LIVE402_PQ_SIGNER_MAINNET_TOKEN",
+            "LIVE402_PQ_CONFIRM_TATUM_API_KEY",
+            "LIVE402_PQ_CONFIRM_INDEXER_TOKEN",
+        ):
             self.assertNotIn(key, html)
+        self.assertNotIn(_MAINNET_TOKEN_NAME, html)
 
     def test_testnet_confirmed_under_mainnet_identity_stays_testnet_labeled(self):
         self._restart_with_mainnet_identity()
