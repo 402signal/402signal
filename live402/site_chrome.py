@@ -7,6 +7,7 @@ import html as html_mod
 NAV = (
     ("/how", "How it works"),
     ("/developers", "Developers"),
+    ("/catalog", "Try it"),
 )
 
 FOOTER = (
@@ -15,7 +16,7 @@ FOOTER = (
     ("/openapi.json", "OpenAPI", False),
     ("/mcp.json", "MCP", False),
     ("/transparency", "Transparency", False),
-    ("/catalog", "Catalog", False),
+    ("/catalog", "Explore", False),
     ("mailto:ross@402signal.com", "ross@402signal.com", False),
 )
 

@@ -19,7 +19,8 @@ from live402.server import Handler
 
 STATIC = Path(__file__).resolve().parent.parent / "live402" / "static"
 
-NAV_LABELS = ("How it works", "Developers")
+NAV_LABELS = ("How it works", "Developers", "Try it")
+NAV_HREFS = ("/how", "/developers", "/catalog")
 LISTED_ON = (
     ("Glama", "https://glama.ai/mcp/servers/402signal/402signal"),
     ("MCP Registry", "https://registry.modelcontextprotocol.io/?q=402signal"),
@@ -280,15 +281,16 @@ class HomepageProductTests(unittest.TestCase):
         for snippet in OLD_HOME_SECTIONS:
             self.assertNotIn(snippet, html, snippet)
         self.assertNotIn(">Product<", html)
-        self.assertNotIn(">Try it<", html)
         self.assertNotIn(">Integrate<", html)
+        self.assertIn(">Try it<", html)
+        self.assertIn('href="/catalog">Try it<', html)
         self.assertNotIn(">Pulse<", html)
         self.assertNotIn('href="/pulse"', html)
 
     def test_exactly_one_h1_per_human_page(self):
         expected = {
             "/": "Find a paid API that works right now.",
-            "/catalog": "Browse x402 services",
+            "/catalog": "Build the decision your agent would make.",
             "/how": "Why check an API that's already listed?",
             "/developers": "Use 402Signal from an agent",
             "/transparency": "Verify 402Signal’s history.",
@@ -303,15 +305,9 @@ class HomepageProductTests(unittest.TestCase):
             labels = [text for text, _href in parsed.nav_links]
             self.assertEqual(labels, list(NAV_LABELS), path)
             hrefs = [href for _text, href in parsed.nav_links]
-            self.assertEqual(
-                hrefs,
-                [
-                    "/how",
-                    "/developers",
-                ],
-                path,
-            )
+            self.assertEqual(hrefs, list(NAV_HREFS), path)
             self.assertNotIn("Catalog", labels)
+            self.assertIn("Try it", labels)
             self.assertNotIn("GitHub", labels)
             self.assertNotIn("Transparency", labels)
             self.assertIn('class="mark"', html)
@@ -328,44 +324,52 @@ class HomepageProductTests(unittest.TestCase):
 
     def test_catalog_page_search_uses_preview(self):
         html = self.catalog
-        self.assertIn("Browse x402 services", html)
-        self.assertIn("Search discovery listings across Base, Solana and Algorand.", html)
-        self.assertIn("Prior check, not this request.", html)
-        self.assertIn("Discovery listings are candidates.", html)
-        self.assertIn("OBSERVED is a prior 402Signal check, not this request.", html)
-        self.assertIn("Before spending, use paid /route.", html)
+        self.assertIn("Build the decision your agent would make.", html)
+        self.assertIn("Catalogs are candidates, not truth.", html)
+        self.assertIn("Your agent keeps the wallet.", html)
+        self.assertIn("Preview is not a live check", html)
+        self.assertIn("NOT A LIVE CHECK", html)
+        self.assertIn("Preview shows discovery + prior observations.", html)
+        self.assertIn("A paid route may differ after 402Signal checks candidates now.", html)
         self.assertNotIn("PQ", html)
         self.assertNotIn("Falcon", html)
-        self.assertIn("What does your agent need?", html)
+        self.assertIn(">Need<", html)
         self.assertIn('id="search-form"', html)
         self.assertIn('id="search-btn"', html)
-        self.assertIn(">Search<", html)
+        self.assertIn(">Preview discovery<", html)
+        self.assertIn(">Copy live route request<", html)
         self.assertIn('data-need="web search"', html)
         self.assertIn('data-need="weather"', html)
         self.assertIn('data-need="token risk"', html)
         self.assertIn('data-need="LLM inference"', html)
         self.assertIn('data-need="wallet balance"', html)
         self.assertEqual(html.lower().count("free catalog search"), 0)
-        self.assertIn("x402 API Catalog · 402Signal", html)
+        self.assertIn("Try 402Signal · 402Signal", html)
+        self.assertNotIn("window.ethereum", html)
+        self.assertNotIn("Pay $0.01 on Base", html)
         status, raw, _hdrs = _get_full(self.port, "/preview?need=weather")
         self.assertEqual(status, 200)
         body = json.loads(raw)
         self.assertTrue(body.get("not_probed"))
         self.assertIn("hits", body)
-        self.assertIn('fetch("/preview', self.js)
+        self.assertIn("/preview?need=", self.js)
+        self.assertIn("previewUrl()", self.js)
+        self.assertNotIn('fetch("/route"', self.js)
 
     def test_catalog_results_are_compact_catalog_only(self):
         js = self.js
         self.assertIn("result-row", js)
         self.assertIn("Listed price", js)
         self.assertIn("Schema listed", js)
-        self.assertIn("DISCOVERED · ", js)
+        self.assertIn("LISTED · ", js)
         self.assertIn("discovery matches", js)
         self.assertIn("matches returned by discovery", js)
         self.assertIn(" shown", js)
-        self.assertIn("DISCOVERED · catalog listing", js)
-        self.assertIn("OBSERVED · prior 402Signal check", js)
+        self.assertIn("LISTED · catalog claim", js)
+        self.assertIn("LAST OBSERVED · 402Signal history", js)
         self.assertIn("Not yet observed", js)
+        self.assertNotIn("DISCOVERED · catalog listing", js)
+        self.assertNotIn("OBSERVED · prior 402Signal check", js)
         self.assertNotIn("Catalog match", js)
         self.assertNotIn("Not live-verified", js)
         self.assertNotIn("Recommended", js)
@@ -381,8 +385,11 @@ class HomepageProductTests(unittest.TestCase):
         self.assertNotIn("target.inputSchema", js)
         self.assertNotIn("parsed.invocable === true", js)
         self.assertNotIn("success_7d", js)
-        self.assertIn("observations in 7d", js)
+        self.assertIn(" observations", js)
+        self.assertIn("obs.n_7d", js)
+        self.assertNotIn("observations in 7d", js)
         self.assertNotIn(" in 7d · ", js)
+        self.assertNotIn("7d reliability", js)
         self.assertIn("No catalog matches found. Try a broader capability.", js)
         self.assertIn("Catalog data is refreshing. Try again shortly.", js)
         self.assertNotIn("MIN_RELIABILITY_N", js)
@@ -392,6 +399,60 @@ class HomepageProductTests(unittest.TestCase):
         self.assertNotIn("trusted merchant", (self.catalog + js).lower())
         self.assertNotIn("quality verified", (self.catalog + js).lower())
         self.assertNotIn("healthy", js)
+        self.assertNotIn("Executable Now Rate", js)
+        self.assertNotIn("ENR", js)
+
+    def test_catalog_policy_builder_maps_supported_fields_only(self):
+        html = self.catalog
+        js = self.js
+        self.assertIn('id="max-price"', html)
+        self.assertIn('id="require-invocable"', html)
+        self.assertIn('id="min-observations"', html)
+        self.assertIn('data-network="any"', html)
+        self.assertIn('data-network="base"', html)
+        self.assertIn('data-network="solana"', html)
+        self.assertIn('data-network="algorand"', html)
+        self.assertIn('data-objective="best"', html)
+        self.assertIn('data-objective="cheapest"', html)
+        self.assertIn('data-objective="fastest"', html)
+        self.assertIn('data-objective="most_reliable"', html)
+        self.assertIn('data-prefer="solana"', html)
+        self.assertIn('id="max-total-cost"', html)
+        self.assertIn('id="max-service-latency"', html)
+        self.assertIn('id="max-settlement-latency"', html)
+        self.assertIn('data-depth="standard"', html)
+        self.assertIn('data-depth="thorough"', html)
+        self.assertIn('id="max-candidates"', html)
+        self.assertIn('id="route-json"', html)
+        self.assertIn('id="copy-route"', html)
+        self.assertIn("Hard policy lock", html)
+        self.assertIn("Weak preference", html)
+        self.assertIn("currently probed eligible candidates", html)
+        self.assertIn("probe RTT, not settlement latency", html)
+        self.assertIn("body.networks", js)
+        self.assertIn("body.max_price_usd", js)
+        self.assertIn("body.require_invocable", js)
+        self.assertIn("body.min_observations", js)
+        self.assertIn("body.objective", js)
+        self.assertIn("body.prefer_network", js)
+        self.assertIn("body.max_total_cost_usd", js)
+        self.assertIn("body.max_service_latency_ms", js)
+        self.assertIn("body.max_settlement_latency_ms", js)
+        self.assertIn('body.search_depth = "thorough"', js)
+        self.assertIn("body.max_candidates_to_probe", js)
+        self.assertIn("&networks=", js)
+        self.assertIn("&prefer_network=", js)
+        self.assertNotIn("body.max_latency_ms", js)
+        self.assertNotIn("body.min_observed_success", js)
+        self.assertNotIn("body.min_reputation_score", js)
+        self.assertNotIn("lowest_total_cost", html)
+        self.assertNotIn("fastest_settlement", html)
+        self.assertNotIn("healthy", html.lower())
+        self.assertNotIn("recommended", html.lower())
+        self.assertNotIn("live now", html.lower())
+        self.assertNotIn("verified now", html.lower())
+        self.assertNotIn("window.ethereum", js)
+        self.assertNotIn("Pay $0.01 on Base", html)
 
     def test_how_page_renders(self):
         html = self.how
@@ -703,7 +764,7 @@ class HomepageProductTests(unittest.TestCase):
 
     def test_seo_titles(self):
         self.assertIn("<title>402Signal: Find a paid API that works right now</title>", self.home)
-        self.assertIn("<title>x402 API Catalog · 402Signal</title>", self.catalog)
+        self.assertIn("<title>Try 402Signal · 402Signal</title>", self.catalog)
         self.assertIn("<title>How 402Signal Works</title>", self.how)
         self.assertIn("<title>402Signal Developer API</title>", self.devs)
         self.assertIn("<title>402Signal Transparency. Verify the routing history</title>", self.transparency)

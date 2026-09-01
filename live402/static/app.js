@@ -6,16 +6,40 @@
   const results = document.getElementById("search-results");
   const copyBtn = document.getElementById("copy-curl");
   const curlEl = document.getElementById("curl-route");
+  const copyRouteBtn = document.getElementById("copy-route");
+  const copyRouteJsonBtn = document.getElementById("copy-route-json");
+  const routeJsonEl = document.getElementById("route-json");
+  const maxPrice = document.getElementById("max-price");
+  const minObservations = document.getElementById("min-observations");
+  const requireInvocable = document.getElementById("require-invocable");
+  const maxTotalCost = document.getElementById("max-total-cost");
+  const maxCandidates = document.getElementById("max-candidates");
+  const maxServiceLatency = document.getElementById("max-service-latency");
+  const maxSettlementLatency = document.getElementById("max-settlement-latency");
 
   const RAIL_NAMES = { base: "Base", solana: "Solana", algorand: "Algorand" };
-  const FORBIDDEN_RESULT_LABELS = /^(recommended|verified|live|payable now|best for)$/i;
+  const FORBIDDEN_RESULT_LABELS = /^(recommended|verified|live|payable now|best for|live now|verified now|best)$/i;
+  const OBJECTIVES = { best: "best", cheapest: "cheapest", fastest: "fastest", most_reliable: "most_reliable" };
+  const RAILS = { base: "base", solana: "solana", algorand: "algorand" };
+  const DEPTHS = { standard: "standard", thorough: "thorough" };
+
+  const policy = {
+    network: "any",
+    objective: "best",
+    preferNetwork: "any",
+    searchDepth: "standard",
+  };
 
   function hasContent() {
     return Boolean(((need && need.value) || "").trim());
   }
 
   function syncSearch() {
-    if (searchBtn) searchBtn.disabled = !hasContent();
+    const ready = hasContent();
+    if (searchBtn) searchBtn.disabled = !ready;
+    if (copyRouteBtn) copyRouteBtn.disabled = !ready;
+    if (copyRouteJsonBtn) copyRouteJsonBtn.disabled = !ready;
+    renderRouteJson();
   }
 
   function hostOf(url) {
@@ -32,6 +56,70 @@
 
   function setStatus(message) {
     text(status, message || "");
+  }
+
+  function parseNonnegNumber(raw) {
+    if (raw == null || String(raw).trim() === "") return null;
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n < 0) return null;
+    return n;
+  }
+
+  function parsePositiveInt(raw, min) {
+    const n = parseNonnegNumber(raw);
+    if (n == null) return null;
+    const i = Math.floor(n);
+    if (i < min) return null;
+    return i;
+  }
+
+  function buildRouteBody() {
+    const body = {};
+    const q = ((need && need.value) || "").trim();
+    if (q) body.need = q;
+    if (policy.network !== "any" && RAILS[policy.network]) {
+      body.networks = [policy.network];
+    }
+    const price = parseNonnegNumber(maxPrice && maxPrice.value);
+    if (price != null) body.max_price_usd = price;
+    if (requireInvocable && requireInvocable.checked) body.require_invocable = true;
+    const minObs = parsePositiveInt(minObservations && minObservations.value, 0);
+    if (minObs != null) body.min_observations = minObs;
+    if (OBJECTIVES[policy.objective]) body.objective = policy.objective;
+    if (policy.preferNetwork !== "any" && RAILS[policy.preferNetwork]) {
+      body.prefer_network = policy.preferNetwork;
+    }
+    const total = parseNonnegNumber(maxTotalCost && maxTotalCost.value);
+    if (total != null) body.max_total_cost_usd = total;
+    const serviceMs = parsePositiveInt(maxServiceLatency && maxServiceLatency.value, 0);
+    if (serviceMs != null) body.max_service_latency_ms = serviceMs;
+    const settleMs = parsePositiveInt(maxSettlementLatency && maxSettlementLatency.value, 0);
+    if (settleMs != null) body.max_settlement_latency_ms = settleMs;
+    if (policy.searchDepth === "thorough") body.search_depth = "thorough";
+    const candidates = parsePositiveInt(maxCandidates && maxCandidates.value, 1);
+    if (candidates != null) body.max_candidates_to_probe = candidates;
+    return body;
+  }
+
+  function routeJsonText() {
+    return JSON.stringify(buildRouteBody(), null, 2);
+  }
+
+  function renderRouteJson() {
+    if (!routeJsonEl) return;
+    routeJsonEl.textContent = routeJsonText();
+  }
+
+  function previewUrl() {
+    const q = ((need && need.value) || "").trim();
+    let url = "/preview?need=" + encodeURIComponent(q);
+    if (policy.network !== "any" && RAILS[policy.network]) {
+      url += "&networks=" + encodeURIComponent(policy.network);
+    }
+    if (policy.preferNetwork !== "any" && RAILS[policy.preferNetwork]) {
+      url += "&prefer_network=" + encodeURIComponent(policy.preferNetwork);
+    }
+    return url;
   }
 
   function catalogHits(parsed) {
@@ -116,17 +204,17 @@
     side.className = "result-side claim";
     const label = document.createElement("p");
     label.className = "result-side-label";
-    label.textContent = "DISCOVERED · catalog listing";
+    label.textContent = "LISTED · catalog claim";
     side.appendChild(label);
     const bits = document.createElement("p");
     bits.className = "result-bits";
+    const source = catalogSource(hit);
+    if (source) appendBit(bits, source);
     appendBit(bits, railOf(hit));
     const price = listedPrice(hit);
     if (price) appendBit(bits, "Listed price " + price);
     const schema = schemaListed(hit);
     if (schema) appendBit(bits, "Schema listed: " + schema);
-    const source = catalogSource(hit);
-    if (source) appendBit(bits, source);
     if (hit && hit.method) appendBit(bits, String(hit.method));
     if (!bits.childNodes.length) appendBit(bits, "Seller fields as listed");
     side.appendChild(bits);
@@ -138,7 +226,7 @@
     side.className = "result-side observation";
     const label = document.createElement("p");
     label.className = "result-side-label";
-    label.textContent = "OBSERVED · prior 402Signal check";
+    label.textContent = "LAST OBSERVED · 402Signal history";
     side.appendChild(label);
     const bits = document.createElement("p");
     bits.className = "result-bits";
@@ -149,19 +237,20 @@
       side.appendChild(bits);
       return side;
     }
-    appendBit(bits, "observed");
     if (obs.payable === true) appendBit(bits, "payable");
     else if (obs.payable === false) appendBit(bits, "not payable");
     if (obs.invocable === true) appendBit(bits, "invocable");
+    else if (obs.invocable === false) appendBit(bits, "not invocable");
     const checked = isoOrEmpty(obs.last_checked);
     if (checked) appendBit(bits, "Last checked " + checked);
+    const n = Number(obs.n_7d);
+    if (Number.isFinite(n) && n > 0) {
+      appendBit(bits, n + (n === 1 ? " observation" : " observations"));
+    }
     if (obs.last_latency_ms != null && obs.last_latency_ms !== "") {
       appendBit(bits, String(obs.last_latency_ms) + " ms");
     }
-    const n7 = Number(obs.n_7d);
-    if (Number.isFinite(n7) && n7 > 0) {
-      appendBit(bits, n7 + (n7 === 1 ? " observation in 7d" : " observations in 7d"));
-    }
+    if (!bits.childNodes.length) appendBit(bits, "Prior observation on file");
     side.appendChild(bits);
     return side;
   }
@@ -217,13 +306,17 @@
     const shown = hits.length;
     const matches = Number(parsed && parsed.discovery_matches);
     const shownLabel = shown === 1 ? "1 shown" : shown + " shown";
-    let text = "DISCOVERED · " + shownLabel;
+    let text = "LISTED · " + shownLabel + " · not a live check";
     if (Number.isFinite(matches) && matches > shown) {
       const exhaustive = parsed && parsed.discovery_exhaustive === true;
       text += " · " + matches + (exhaustive ? " discovery matches" : " matches returned by discovery");
     }
     heading.textContent = text;
     results.appendChild(heading);
+    const note = document.createElement("p");
+    note.className = "policy-hint";
+    note.textContent = "Preview shows discovery + prior observations. A paid route may differ after 402Signal checks candidates now.";
+    results.appendChild(note);
     hits.forEach(function (hit) {
       results.appendChild(renderHit(hit));
     });
@@ -234,7 +327,7 @@
       showMessage("Enter a capability to search the catalog.");
       return;
     }
-    setStatus("Searching catalog...");
+    setStatus("Previewing discovery...");
     if (results) results.textContent = "";
     let pulse = null;
     try {
@@ -244,8 +337,7 @@
       pulse = null;
     }
     try {
-      const q = ((need && need.value) || "").trim();
-      const res = await fetch("/preview?need=" + encodeURIComponent(q), { cache: "no-store" });
+      const res = await fetch(previewUrl(), { cache: "no-store" });
       const raw = await res.text();
       let parsed = null;
       try { parsed = JSON.parse(raw); } catch (e) { parsed = null; }
@@ -267,28 +359,54 @@
     }
   }
 
-  async function copyCurl() {
-    if (!curlEl) return;
-    const value = curlEl.textContent || "";
+  async function copyText(value, button, idleLabel) {
+    const label = idleLabel || "Copy";
     try {
       if (navigator.clipboard && navigator.clipboard.writeText) {
         await navigator.clipboard.writeText(value);
       } else {
-        const range = document.createRange();
-        range.selectNodeContents(curlEl);
-        const sel = window.getSelection();
-        if (sel) {
-          sel.removeAllRanges();
-          sel.addRange(range);
-        }
+        const ta = document.createElement("textarea");
+        ta.value = value;
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand("copy");
+        document.body.removeChild(ta);
       }
-      if (copyBtn) {
-        copyBtn.textContent = "Copied";
-        window.setTimeout(function () { copyBtn.textContent = "Copy"; }, 1500);
+      if (button) {
+        button.textContent = "Copied";
+        window.setTimeout(function () { button.textContent = label; }, 1500);
       }
     } catch (e) {
-      if (copyBtn) copyBtn.textContent = "Copy failed";
+      if (button) button.textContent = "Copy failed";
     }
+  }
+
+  async function copyCurl() {
+    if (!curlEl) return;
+    await copyText(curlEl.textContent || "", copyBtn, "Copy");
+  }
+
+  async function copyRouteRequest(button) {
+    if (!hasContent()) return;
+    await copyText(routeJsonText(), button, button === copyRouteBtn ? "Copy live route request" : "Copy");
+  }
+
+  function bindChipGroup(id, attr, key, allowed) {
+    const root = document.getElementById(id);
+    if (!root) return;
+    root.addEventListener("click", function (ev) {
+      const btn = ev.target.closest("[" + attr + "]");
+      if (!btn) return;
+      const value = btn.getAttribute(attr) || "";
+      if (allowed && !allowed[value] && value !== "any") return;
+      policy[key] = value;
+      root.querySelectorAll(".chip").forEach(function (c) {
+        const on = c === btn;
+        c.classList.toggle("active", on);
+        c.setAttribute("aria-pressed", on ? "true" : "false");
+      });
+      syncSearch();
+    });
   }
 
   function bindTabs() {
@@ -324,6 +442,11 @@
     need.addEventListener("input", syncSearch);
     need.addEventListener("change", syncSearch);
   }
+  [maxPrice, minObservations, requireInvocable, maxTotalCost, maxCandidates, maxServiceLatency, maxSettlementLatency].forEach(function (el) {
+    if (!el) return;
+    el.addEventListener("input", syncSearch);
+    el.addEventListener("change", syncSearch);
+  });
   const chips = document.getElementById("need-chips");
   if (chips) {
     chips.addEventListener("click", function (ev) {
@@ -335,10 +458,26 @@
       syncSearch();
     });
   }
+  bindChipGroup("network-chips", "data-network", "network", RAILS);
+  bindChipGroup("objective-chips", "data-objective", "objective", OBJECTIVES);
+  bindChipGroup("prefer-chips", "data-prefer", "preferNetwork", RAILS);
+  bindChipGroup("depth-chips", "data-depth", "searchDepth", DEPTHS);
   if (copyBtn) {
     copyBtn.addEventListener("click", function (ev) {
       ev.preventDefault();
       copyCurl();
+    });
+  }
+  if (copyRouteBtn) {
+    copyRouteBtn.addEventListener("click", function (ev) {
+      ev.preventDefault();
+      copyRouteRequest(copyRouteBtn);
+    });
+  }
+  if (copyRouteJsonBtn) {
+    copyRouteJsonBtn.addEventListener("click", function (ev) {
+      ev.preventDefault();
+      copyRouteRequest(copyRouteJsonBtn);
     });
   }
   bindTabs();

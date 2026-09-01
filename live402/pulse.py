@@ -1168,6 +1168,7 @@ def dashboard_html(payload: dict | None = None) -> str:
       <nav class="nav" aria-label="Primary">
         <a href="/how">How it works</a>
         <a href="/developers">Developers</a>
+        <a href="/catalog">Try it</a>
       </nav>
     </header>
     <main>
@@ -1188,7 +1189,7 @@ def dashboard_html(payload: dict | None = None) -> str:
         <a href="/openapi.json">OpenAPI</a>
         <a href="/mcp.json">MCP</a>
         <a href="/transparency">Transparency</a>
-        <a href="/catalog" class="muted">Catalog</a>
+        <a href="/catalog" class="muted">Explore</a>
         <a href="mailto:ross@402signal.com">ross@402signal.com</a>
       </p>
     </footer>
