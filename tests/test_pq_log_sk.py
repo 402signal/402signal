@@ -20,6 +20,7 @@ from cryptography.hazmat.primitives.serialization import Encoding, NoEncryption,
 from live402 import server
 from live402.pq import events, receipt, store
 from live402.route import handle_route
+from tests.pq_test_env import clear_pq_env
 
 
 def _serve():
@@ -32,8 +33,7 @@ def _serve():
 class LogSkEnvTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        os.environ.pop("LIVE402_PQ_LOG_EPOCH", None)
-        os.environ.pop("LIVE402_PQ_FALCON_NETWORK", None)
+        clear_pq_env()
         os.environ["LIVE402_PQ_LOG_DB"] = os.path.join(self.tmp.name, "pq-log.sqlite")
         store.reset()
         receipt.configure_signer(None)
@@ -48,16 +48,10 @@ class LogSkEnvTests(unittest.TestCase):
         self.addCleanup(self._cleanup)
 
     def _cleanup(self):
-        os.environ.pop("LIVE402_PQ_LOG_EPOCH", None)
-        os.environ.pop("LIVE402_PQ_FALCON_NETWORK", None)
+        clear_pq_env()
         receipt.configure_signer(None)
         store.reset()
-        os.environ.pop("LIVE402_PQ_LOG_SK", None)
-        os.environ.pop("LIVE402_PQ_LOG_SK_MAINNET", None)
         os.environ.pop("LIVE402_PQ_LOG", None)
-        os.environ.pop("LIVE402_PQ_LOG_VKEY", None)
-        os.environ.pop("LIVE402_PQ_LOG_VKEY_MAINNET", None)
-        os.environ.pop("LIVE402_PQ_LOG_DB", None)
         os.environ.pop("LOCAL_FREE", None)
         self.tmp.cleanup()
 

@@ -14,6 +14,7 @@ from live402.pq import log_identity
 from live402.pq import monitor
 from live402.pq import network as netcfg
 from live402.pq import trust
+from tests.pq_test_env import MAINNET_ENV_KEYS, clear_pq_env
 
 
 _TXID = "B" * 52
@@ -24,30 +25,11 @@ class MainNetGatingTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.testnet_db = os.path.join(self.tmp.name, "pq-log.sqlite")
         self.mainnet_db = os.path.join(self.tmp.name, "pq-log-mainnet.sqlite")
-        for key in (
-            "LIVE402_PQ_FALCON_NETWORK",
-            "LIVE402_PQ_LOG_EPOCH",
-            "LIVE402_PQ_LOG_ORIGIN",
-        ):
-            os.environ.pop(key, None)
+        clear_pq_env()
         os.environ["LIVE402_PQ_LOG_DB"] = self.testnet_db
         store.reset()
         worker.clear_queue()
-        self._env_keys = (
-            "LIVE402_PQ_FALCON_NETWORK",
-            "LIVE402_PQ_FALCON_BROADCAST",
-            "LIVE402_PQ_FALCON_MAINNET_BROADCAST",
-            "LIVE402_PQ_FALCON_ADDRESS",
-            "LIVE402_PQ_FALCON_MAINNET_ADDRESS",
-            "LIVE402_PQ_SIGNER_TOKEN",
-            "LIVE402_PQ_SIGNER_MAINNET_TOKEN",
-            "LIVE402_PQ_LOG_EPOCH",
-            "LIVE402_PQ_LOG_ORIGIN",
-            "LIVE402_PQ_LOG_SK",
-            "LIVE402_PQ_LOG_SK_MAINNET",
-        )
-        for key in self._env_keys:
-            os.environ.pop(key, None)
+        self._env_keys = MAINNET_ENV_KEYS
         self.addCleanup(self._cleanup)
 
     def _cleanup(self):
@@ -331,23 +313,12 @@ class FreshLogTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.testnet_db = os.path.join(self.tmp.name, "pq-log.sqlite")
         self.mainnet_db = os.path.join(self.tmp.name, "pq-log-mainnet.sqlite")
-        for key in (
-            "LIVE402_PQ_LOG_EPOCH",
-            "LIVE402_PQ_LOG_ORIGIN",
-            "LIVE402_PQ_FALCON_NETWORK",
-        ):
-            os.environ.pop(key, None)
+        clear_pq_env()
         self.addCleanup(self._cleanup)
 
     def _cleanup(self):
-        for key in (
-            "LIVE402_PQ_LOG_EPOCH",
-            "LIVE402_PQ_LOG_ORIGIN",
-            "LIVE402_PQ_FALCON_NETWORK",
-        ):
-            os.environ.pop(key, None)
+        clear_pq_env()
         store.reset()
-        os.environ.pop("LIVE402_PQ_LOG_DB", None)
         self.tmp.cleanup()
 
     def test_testnet_tree_untouched_production_tree_zero(self):
@@ -392,6 +363,33 @@ class FreshLogTests(unittest.TestCase):
         self.assertTrue(v2["not_mainnet_go"])
         self.assertEqual(v2["log_signature"]["reuse_testnet_sk"], False)
 
+    def test_mainnet_ed25519_vkey_must_not_equal_testnet_public(self):
+        from live402.pq import checkpoint as ckpt
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+
+        def _vk(name, key):
+            pk = key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+            return ckpt.vkey_encode(name, pk)
+
+        same = Ed25519PrivateKey.generate()
+        other = Ed25519PrivateKey.generate()
+        test_v = _vk(ORIGIN, same)
+        reused = _vk(ORIGIN_MAINNET, same)
+        fresh = _vk(ORIGIN_MAINNET, other)
+        with self.assertRaises(log_identity.ConfigError) as ctx:
+            log_identity.reject_reused_ed25519_vkey(test_v, reused)
+        self.assertIn("reuses testnet", str(ctx.exception))
+        log_identity.reject_reused_ed25519_vkey(test_v, fresh)
+
+    def test_env_cleanup_does_not_leak_mainnet_epoch(self):
+        os.environ["LIVE402_PQ_LOG_EPOCH"] = "mainnet-v1"
+        os.environ["LIVE402_PQ_FALCON_NETWORK"] = "mainnet"
+        self.assertEqual(log_identity.configured_epoch(), "mainnet-v1")
+        clear_pq_env()
+        self.assertEqual(log_identity.configured_epoch(), "testnet-v1")
+        self.assertEqual(log_identity.configured_network(), "")
+
     def test_trust_v2_rejects_reuse_testnet_sk(self):
         import copy
 
@@ -410,6 +408,7 @@ class FreshLogTests(unittest.TestCase):
 class RecoveryDrillTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
+        clear_pq_env()
         os.environ["LIVE402_PQ_LOG_DB"] = os.path.join(self.tmp.name, "pq-log.sqlite")
         store.reset()
         worker.clear_queue()
@@ -417,11 +416,8 @@ class RecoveryDrillTests(unittest.TestCase):
 
     def _cleanup(self):
         worker.clear_queue()
+        clear_pq_env()
         store.reset()
-        os.environ.pop("LIVE402_PQ_LOG_DB", None)
-        os.environ.pop("LIVE402_PQ_FALCON_BROADCAST", None)
-        os.environ.pop("LIVE402_PQ_FALCON_MAINNET_BROADCAST", None)
-        os.environ.pop("LIVE402_PQ_FALCON_NETWORK", None)
         self.tmp.cleanup()
 
     def test_a_isolated_testnet_backup_restore(self):

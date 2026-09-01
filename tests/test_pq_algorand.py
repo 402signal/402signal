@@ -12,6 +12,7 @@ os.environ.setdefault("LIVE402_FIXTURE", "1")
 
 from live402 import algod, payment
 from live402.pq import ORIGIN, algo_anchor, checkpoint, merkle, store, worker
+from tests.pq_test_env import clear_pq_env
 
 
 class _FakeFalconSigner:
@@ -28,8 +29,8 @@ class _FakeFalconSigner:
 def _testnet_params():
     return {
         "flatFee": True,
-        "fee": 3000,
-        "minFee": 3000,
+        "fee": 1000,
+        "minFee": 1000,
         "firstValid": 1,
         "lastValid": 1001,
         "genesisID": algo_anchor.TESTNET_GENESIS_ID,
@@ -40,6 +41,7 @@ def _testnet_params():
 class AlgorandConstructionTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
+        clear_pq_env()
         os.environ["LIVE402_PQ_LOG_DB"] = os.path.join(self.tmp.name, "pq-log.sqlite")
         store.reset()
         worker.clear_queue()
@@ -49,8 +51,7 @@ class AlgorandConstructionTests(unittest.TestCase):
     def _cleanup(self):
         worker.clear_queue()
         store.reset()
-        os.environ.pop("LIVE402_PQ_LOG_DB", None)
-        os.environ.pop("LIVE402_PQ_FALCON_ADDRESS", None)
+        clear_pq_env()
         self.tmp.cleanup()
 
     def test_note_is_84_bytes_and_round_trips_to_c2sp_body(self):
@@ -206,6 +207,7 @@ class AlgorandConstructionTests(unittest.TestCase):
 class TestNetSubmitTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
+        clear_pq_env()
         os.environ["LIVE402_PQ_LOG_DB"] = os.path.join(self.tmp.name, "pq-log.sqlite")
         store.reset()
         worker.clear_queue()
@@ -216,16 +218,12 @@ class TestNetSubmitTests(unittest.TestCase):
             "LIVE402_PQ_FALCON_ADDRESS",
             "LIVE402_PQ_SIGNER_TOKEN",
         )
-        for key in self._env_keys:
-            os.environ.pop(key, None)
         self.addCleanup(self._cleanup)
 
     def _cleanup(self):
         worker.clear_queue()
         store.reset()
-        for key in self._env_keys:
-            os.environ.pop(key, None)
-        os.environ.pop("LIVE402_PQ_LOG_DB", None)
+        clear_pq_env()
         self.tmp.cleanup()
 
     def _arm_testnet(self):

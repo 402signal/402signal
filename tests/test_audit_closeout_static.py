@@ -92,6 +92,20 @@ class CloseoutStaticTests(unittest.TestCase):
             text = _read(rel)
             self.assertNotIn(em, text, msg=rel)
 
+    def test_signer_spec_requires_durable_security_state(self):
+        spec = _read("docs/signer-mainnet-spec.md")
+        self.assertIn("durable **security** state", spec)
+        self.assertIn("must not authorize X/N/R2", spec)
+        self.assertNotIn(
+            "The signer is stateless across requests except",
+            spec,
+        )
+        ceremony = _read("docs/pq-key-ceremony.md")
+        self.assertIn("algokey pq generate --scheme f1 --keyfile", ceremony)
+        self.assertIn("algokey pq info --keyfile", ceremony)
+        self.assertIn("TWO separate offline mnemonic backups", ceremony)
+        self.assertIn("algokey pq import", ceremony)
+
     def test_v3_receipt_verify_exists(self):
         self.assertIn("def verify_route_receipt", RECEIPT)
         self.assertIn("TYPE_ROUTE_DECISION_V3", RECEIPT)

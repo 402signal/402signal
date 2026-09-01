@@ -174,6 +174,22 @@ def require_mainnet_identity(*, db_path: str, origin: str) -> None:
         raise ConfigError("mainnet signer required")
 
 
+def reject_reused_ed25519_vkey(testnet_vkey: str, mainnet_vkey: str) -> None:
+    """Public-only cutover check. Fail if MainNet vkey matches TestNet.
+
+    Compares Ed25519 public key bytes. Never takes a secret.
+    """
+    from live402.pq import checkpoint as ckpt
+
+    try:
+        test_pk = ckpt.vkey_parse(testnet_vkey)["public_key"]
+        main_pk = ckpt.vkey_parse(mainnet_vkey)["public_key"]
+    except (ValueError, KeyError, TypeError) as exc:
+        raise ConfigError("invalid ed25519 vkey") from exc
+    if test_pk == main_pk:
+        raise ConfigError("mainnet ed25519 reuses testnet public key")
+
+
 def testnet_volume_db() -> str:
     return VOLUME_DB
 

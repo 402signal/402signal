@@ -5,7 +5,9 @@ Do not fabricate history. Do not run a paid `/route` from this PR.
 The first MainNet-epoch leaf must be a controlled, real routing event
 after:
 
-1. Fresh Ed25519 ceremony (documented, not executed here)
+1. Fresh Ed25519 ceremony (documented, not executed here). New
+   MainNet public vkey must not equal the archived TestNet public
+   vkey.
 2. Empty `/data/pq-log-mainnet.sqlite` (tree size 0)
 3. `trust_root.v2.json` public vkey filled
 4. Origin `402signal.com/pq/log/mainnet-v1`

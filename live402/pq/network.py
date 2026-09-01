@@ -13,8 +13,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-MIN_FEE = 3000
+# Protocol base min (algod min-fee) is 1000 µAlgo today.
+# Falcon-1024 adds 2x that base, so the uncongested Falcon floor is 3000.
+PROTOCOL_BASE_MIN = 1000
+FALCON_EXTRA_MIN_MULT = 2
+MIN_FEE = PROTOCOL_BASE_MIN * (1 + FALCON_EXTRA_MIN_MULT)  # 3000
 MAX_FEE = 30000
+# Official Falcon-1024 sizes (Algorand consensus / docs).
+FALCON_F1_PK_LEN = 1793
+FALCON_F1_SIG_MAX = 1423
 
 TESTNET_NAME = "testnet"
 MAINNET_NAME = "mainnet"
@@ -45,7 +52,9 @@ class NetworkConfig:
     confirm_host / confirm_txn_url / pending_url: fetch+decode only
     explorer_tx_url: public lookup prefix
     address_env: public Falcon f1 address env (never a secret)
-    min_fee / max_fee: µAlgo. Required fee is current; cap is hard.
+    min_fee / max_fee: µAlgo. Falcon required fee is
+    max(fee_per_byte * signed_Falcon_txn_size, 3*protocol_base_min).
+    Cap is hard. Caller cannot select the fee.
     broadcast_env: distinct per network. TestNet flag never sends MainNet.
     """
 

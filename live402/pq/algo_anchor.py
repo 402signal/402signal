@@ -3,8 +3,14 @@
 Note 84 bytes = ASCII "402sg/pq1:b" || 0x01 || SHA-256(UTF-8 origin) ||
 uint64 BE tree_size || 32-byte RFC 6962 root.
 
-Txn = PaymentTxn amount=0, receiver=sender, fee = current required,
-hard ceiling MAX_FEE=30000 µALGO (fail closed if required > cap).
+Txn = PaymentTxn amount=0, receiver=sender. Fee is the official
+Falcon required value: max(fee_per_byte * signed_Falcon_txn_size,
+3 * protocol_base_min). Protocol base min is 1000 µAlgo today;
+Falcon-1024 adds 2x that base (uncongested floor 3000). algod
+suggested `fee` is current fee per byte, not a flat txn fee.
+Hard ceiling MAX_FEE=30000 µALGO (fail closed if required > cap).
+Caller cannot select the fee. Signer and reconstruction derive
+the same canonical fee.
 Falcon signing goes through the 6PN client (pq-anchor/1). This module
 does not load a Falcon SK. send_forbidden() always raises.
 
@@ -41,8 +47,12 @@ from live402.pq.merkle import HASH_SIZE
 
 NOTE_PREFIX = NOTE_FORMAT.encode("ascii")  # 11 bytes
 NOTE_LEN = 84
+PROTOCOL_BASE_MIN = netcfg.PROTOCOL_BASE_MIN
+FALCON_EXTRA_MIN_MULT = netcfg.FALCON_EXTRA_MIN_MULT
 MIN_FEE = netcfg.MIN_FEE
 MAX_FEE = netcfg.MAX_FEE
+FALCON_F1_PK_LEN = netcfg.FALCON_F1_PK_LEN
+FALCON_F1_SIG_MAX = netcfg.FALCON_F1_SIG_MAX
 ANCHOR_STATUSES = frozenset({"pending", "unavailable"})
 
 TESTNET_NAME = netcfg.TESTNET_NAME
@@ -168,24 +178,122 @@ def _network_cfg(expected_network: str | None = None) -> netcfg.NetworkConfig:
     return netcfg.get_network(_expected_network_name(expected_network))
 
 
-def required_fee(params: dict | None = None) -> int:
-    """Current required fee. Hard ceiling MAX_FEE. Do not raise the cap."""
+def protocol_base_min(params: dict | None = None) -> int:
+    """algod min-fee: protocol base min for an ordinary txn (1000 today)."""
     p = params if isinstance(params, dict) else {}
     raw = p.get("minFee")
     if raw is None:
-        raw = p.get("fee")
+        raw = p.get("min-fee")
     if raw is None:
-        fee = MIN_FEE
-    else:
-        try:
-            fee = int(raw)
-        except (TypeError, ValueError) as exc:
-            raise AnchorError("fee out of range") from exc
-    if fee < 1:
+        return PROTOCOL_BASE_MIN
+    try:
+        n = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise AnchorError("fee out of range") from exc
+    if n < 1:
         raise AnchorError("fee out of range")
-    if fee > MAX_FEE:
+    return n
+
+
+def falcon_min_fee(params: dict | None = None) -> int:
+    """Uncongested Falcon-1024 floor: protocol base + 2x base (3000 today)."""
+    return protocol_base_min(params) * (1 + FALCON_EXTRA_MIN_MULT)
+
+
+def fee_per_byte(params: dict | None = None) -> int:
+    """algod suggested `fee` is current fee per byte, not a flat txn fee.
+
+    Explicit feePerByte / fee_per_byte / current_fee_per_byte win.
+    flatFee=True means a legacy/fixture `fee` field is not per-byte
+    (payment-rail suggestedParams). Official algod omits flatFee.
+    """
+    p = params if isinstance(params, dict) else {}
+    for key in ("feePerByte", "fee_per_byte", "current_fee_per_byte"):
+        if key in p and p.get(key) is not None:
+            raw = p.get(key)
+            break
+    else:
+        if p.get("flatFee") is True:
+            return 0
+        raw = p.get("fee")
+        if raw is None:
+            return 0
+    try:
+        n = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise AnchorError("fee out of range") from exc
+    if n < 0:
+        raise AnchorError("fee out of range")
+    return n
+
+
+def estimate_falcon_authorized_size(unsigned: dict | None = None) -> int:
+    """Deterministic msgpack size of a Falcon-1024 authorized SignedTxn.
+
+    Uses official max pk (1793) and sig (1423) so router and signer
+    derive the same fee when the exact signed blob is not yet known.
+    """
+    if isinstance(unsigned, dict) and unsigned:
+        txn = {k: v for k, v in unsigned.items() if k != "flatFee"}
+    else:
+        txn = {
+            "type": "pay",
+            "fee": MIN_FEE,
+            "fv": 1,
+            "lv": 1001,
+            "gen": TESTNET_GENESIS_ID,
+            "gh": base64.b64decode(TESTNET_GENESIS_HASH),
+            "note": b"\x00" * NOTE_LEN,
+            "snd": b"\x00" * 32,
+            "rcv": b"\x00" * 32,
+        }
+    if "fee" not in txn:
+        txn = dict(txn)
+        txn["fee"] = MIN_FEE
+    envelope = {
+        "pqsig": {
+            "pk": b"\x00" * FALCON_F1_PK_LEN,
+            "sch": "f1",
+            "sig": b"\x00" * FALCON_F1_SIG_MAX,
+            "slt": 0,
+        },
+        "txn": txn,
+    }
+    return len(algo_tx.msgpack_encode(envelope))
+
+
+def required_fee(
+    params: dict | None = None,
+    *,
+    signed: bytes | None = None,
+    unsigned: dict | None = None,
+) -> int:
+    """Official Falcon required fee. Hard ceiling MAX_FEE. No caller fee.
+
+    required = max(fee_per_byte * signed_Falcon_txn_size, falcon_min)
+    falcon_min = protocol_base_min * (1 + 2)  # 3000 when base is 1000
+    fee_per_byte is algod suggested `fee` (0 when uncongested).
+    Size is len(signed) when the blob exists, else the deterministic
+    Falcon-1024 envelope estimate. Do not treat minFee or suggested
+    fee as a flat txn fee. Do not raise the cap.
+    """
+    floor = falcon_min_fee(params)
+    if floor > MAX_FEE:
         raise AnchorError("fee exceeds cap")
-    return fee
+    fpb = fee_per_byte(params)
+    if signed is not None:
+        blob = bytes(signed)
+        if not blob:
+            raise AnchorError("fee out of range")
+        size = len(blob)
+    else:
+        size = estimate_falcon_authorized_size(unsigned)
+    if size < 1:
+        raise AnchorError("fee out of range")
+    need = max(fpb * size, floor)
+    if need > MAX_FEE:
+        raise AnchorError("fee exceeds cap")
+    return need
 
 
 def validate_unsigned_anchor(txn: dict, expected_network: str | None = None) -> None:
@@ -230,8 +338,16 @@ def validate_unsigned_anchor(txn: dict, expected_network: str | None = None) -> 
         raise AnchorError("not pq1 construction") from exc
 
 
-def rebuild_unsigned_anchor(txn: dict, expected_network: str | None = None) -> dict:
-    """Canonical PaymentTxn from allowed fields only. Never copies extra keys."""
+def rebuild_unsigned_anchor(
+    txn: dict,
+    expected_network: str | None = None,
+    params: dict | None = None,
+) -> dict:
+    """Canonical PaymentTxn from allowed fields only. Never copies extra keys.
+
+    Fee is derived from suggested params + Falcon signed size. Inbound
+    txn.fee is ignored. Caller cannot select the fee.
+    """
     cfg = _network_cfg(expected_network)
     addr = falcon_address_for(cfg.name)
     if not addr:
@@ -240,7 +356,6 @@ def rebuild_unsigned_anchor(txn: dict, expected_network: str | None = None) -> d
     if isinstance(note, str):
         note = bytes.fromhex(note)
     note = bytes(note)
-    fee = required_fee({"fee": txn.get("fee"), "minFee": txn.get("fee")})
     first = int(txn.get("fv") or 1)
     last = int(txn.get("lv") or (first + 1000))
     gh = txn.get("gh")
@@ -255,6 +370,8 @@ def rebuild_unsigned_anchor(txn: dict, expected_network: str | None = None) -> d
         gh = base64.b64decode(cfg.genesis_hash)
     if base64.b64encode(bytes(gh)).decode("ascii") != cfg.genesis_hash:
         raise AnchorError("genesis hash mismatch")
+    draft = algo_tx.pay_txn(addr, addr, 0, falcon_min_fee(params), first, last, cfg.genesis_id, gh, note=note)
+    fee = required_fee(params, unsigned=draft)
     rebuilt = algo_tx.pay_txn(addr, addr, 0, fee, first, last, cfg.genesis_id, gh, note=note)
     extra = set(rebuilt) - {"type", "fee", "fv", "gen", "gh", "lv", "note", "rcv", "snd"}
     for key in extra:
@@ -262,10 +379,14 @@ def rebuild_unsigned_anchor(txn: dict, expected_network: str | None = None) -> d
     return rebuilt
 
 
-def canonical_unsigned_anchor(txn: dict, expected_network: str | None = None) -> dict:
+def canonical_unsigned_anchor(
+    txn: dict,
+    expected_network: str | None = None,
+    params: dict | None = None,
+) -> dict:
     """Validate inbound, then return a rebuilt pay_txn dict. Does not sign."""
     validate_unsigned_anchor(txn, expected_network=expected_network)
-    return rebuild_unsigned_anchor(txn, expected_network=expected_network)
+    return rebuild_unsigned_anchor(txn, expected_network=expected_network, params=params)
 
 
 def _genesis_hash_bytes(gen: str, gh):
@@ -286,8 +407,8 @@ def _genesis_hash_bytes(gen: str, gh):
 def build_payment_txn(sender: str, note: bytes, params: dict | None = None) -> dict:
     """Unsigned PaymentTxn. amount=0, receiver=sender. Not submitted.
 
-    Fee is the current required value from params (minFee, else fee,
-    else MIN_FEE). If required > MAX_FEE the call fails closed.
+    Fee is derived: max(fee_per_byte * Falcon signed size, falcon_min).
+    Caller cannot select the fee. If required > MAX_FEE the call fails closed.
     """
     if not sender:
         raise AnchorError("falcon address required")
@@ -296,7 +417,8 @@ def build_payment_txn(sender: str, note: bytes, params: dict | None = None) -> d
     last = int(p.get("lastValid") or p.get("lastRound") or (first + 1000))
     gen = str(p.get("genesisID") or p.get("genesis_id") or TESTNET_GENESIS_ID)
     gh = _genesis_hash_bytes(gen, p.get("genesisHash") or p.get("genesis_hash"))
-    fee = required_fee(p)
+    draft = algo_tx.pay_txn(sender, sender, 0, falcon_min_fee(p), first, last, gen, gh, note=note)
+    fee = required_fee(p, unsigned=draft)
     txn = algo_tx.pay_txn(sender, sender, 0, fee, first, last, gen, gh, note=note)
     txn["flatFee"] = True
     return txn
@@ -306,7 +428,8 @@ def build_mainnet_payment_txn(note: bytes, params: dict | None = None, *, addres
     """MainNet PaymentTxn from trusted semantic fields only. Never submitted here.
 
     amount 0, sender=receiver=configured MainNet Falcon f1. Genesis is the
-    exact MainNet ID+hash. Extra inbound keys are not copied.
+    exact MainNet ID+hash. Extra inbound keys are not copied. Fee is
+    derived; caller cannot select it.
     """
     addr = (address or falcon_address_for(MAINNET_NAME) or "").strip()
     if not addr:
@@ -318,9 +441,10 @@ def build_mainnet_payment_txn(note: bytes, params: dict | None = None, *, addres
     gh = _genesis_hash_bytes(gen, p.get("genesisHash") or p.get("genesis_hash"))
     if base64.b64encode(bytes(gh)).decode("ascii") != MAINNET_GENESIS_HASH:
         raise AnchorError("genesis hash mismatch")
-    fee = required_fee(p)
     first = int(p.get("firstValid") or p.get("firstRound") or 1)
     last = int(p.get("lastValid") or p.get("lastRound") or (first + 1000))
+    draft = algo_tx.pay_txn(addr, addr, 0, falcon_min_fee(p), first, last, MAINNET_GENESIS_ID, gh, note=bytes(note))
+    fee = required_fee(p, unsigned=draft)
     txn = algo_tx.pay_txn(addr, addr, 0, fee, first, last, MAINNET_GENESIS_ID, gh, note=bytes(note))
     extra = set(txn) - {"type", "fee", "fv", "gen", "gh", "lv", "note", "rcv", "snd"}
     for key in extra:
@@ -672,7 +796,7 @@ def validate_signed_txn(
         if have_gh and have_gh != cfg.genesis_hash:
             raise AnchorError("genesis hash mismatch")
     fee = int(txn.get("fee") or 0)
-    if fee < 1 or fee > MAX_FEE:
+    if fee < falcon_min_fee() or fee > MAX_FEE:
         raise AnchorError("fee out of range")
     addr = (expected_address or falcon_address_for(cfg.name) or "").strip()
     if not addr:
@@ -794,10 +918,14 @@ def submit_mainnet_canary(
     expected_root=None,
     send_fn=None,
 ) -> str | None:
-    """Exactly one later human-authorized MainNet submit. Not executed here.
+    """Later canary PR only. This function is not a canary executable.
 
-    Worker, tick, and send_if_allowed never call this. Automatic MainNet
-    stays off. Destroying the Falcon key is not the kill switch: unset
+    PR40 is readiness and fail-closed infrastructure. Do not POST a
+    MainNet txn from this PR. Worker, tick, and boot never call this.
+    Automatic MainNet stays off. A later human canary PR (after merge,
+    keys, independent confirm, drills, monitoring, pentest, and
+    402security GO) may authorize exactly one MainNet POST.
+    Destroying the Falcon key is not the kill switch: unset
     LIVE402_PQ_FALCON_MAINNET_BROADCAST (or do not deploy).
     """
     if authorize_human_canary is not True:
@@ -1305,7 +1433,7 @@ def verify_fetched_anchor(
     if int(decoded.get("amount") or 0) != 0:
         raise AnchorError("amount must be 0")
     fee = int(decoded.get("fee") or 0)
-    if fee < 1 or fee > MAX_FEE:
+    if fee < falcon_min_fee() or fee > MAX_FEE:
         raise AnchorError("fee out of range")
     if _nonzero_blob(decoded.get("close")):
         raise AnchorError("close forbidden")

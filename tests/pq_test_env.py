@@ -1,0 +1,30 @@
+"""Scoped cleanup for PQ / MainNet env vars. No secrets are valued here."""
+
+from __future__ import annotations
+
+import os
+
+MAINNET_ENV_KEYS = (
+    "LIVE402_PQ_FALCON_NETWORK",
+    "LIVE402_PQ_FALCON_BROADCAST",
+    "LIVE402_PQ_FALCON_MAINNET_BROADCAST",
+    "LIVE402_PQ_FALCON_ADDRESS",
+    "LIVE402_PQ_FALCON_MAINNET_ADDRESS",
+    "LIVE402_PQ_SIGNER_TOKEN",
+    "LIVE402_PQ_SIGNER_MAINNET_TOKEN",
+    "LIVE402_PQ_SIGNER_MAINNET_HOST",
+    "LIVE402_PQ_SIGNER_MAINNET_PORT",
+    "LIVE402_PQ_LOG_EPOCH",
+    "LIVE402_PQ_LOG_ORIGIN",
+    "LIVE402_PQ_LOG_SK",
+    "LIVE402_PQ_LOG_SK_MAINNET",
+    "LIVE402_PQ_LOG_VKEY",
+    "LIVE402_PQ_LOG_VKEY_MAINNET",
+    "LIVE402_PQ_LOG_DB",
+)
+
+
+def clear_pq_env() -> None:
+    """Drop MainNet/TestNet PQ identity envs so later tests stay TestNet."""
+    for key in MAINNET_ENV_KEYS:
+        os.environ.pop(key, None)

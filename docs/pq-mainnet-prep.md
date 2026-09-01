@@ -17,7 +17,7 @@ Paid `/route` never waits for chain. Public status is CONFIRMED only.
 | MainNet genesis was rejected as a leftover path | Exact genesis match for the allowed network. MainNet submit is a separate, fail-closed gate. |
 | One broadcast env | TestNet `LIVE402_PQ_FALCON_BROADCAST` cannot send MainNet. MainNet requires `LIVE402_PQ_FALCON_MAINNET_BROADCAST=1` and every other gate. |
 | One log identity | TestNet shard archived in place. Fresh MainNet identity (origin, epoch, vkey, sqlite) prepared and empty. |
-| Fee often 3000 | Current required fee, hard cap 30000 µAlgo, fail closed if required exceeds cap |
+| Fee treated minFee/suggested as flat | Official Falcon fee: max(fee_per_byte * signed size, 3*base min). Uncongested floor 3000. Cap 30000. |
 | Confirm was TestNet-shaped | Submit provider and confirm provider are separable. Confirm is fetch+decode of the actual txn. |
 | Signer was TestNet-only | Spec for `402signal-pq-signer-mainnet`. Signer still never broadcasts. |
 
@@ -40,8 +40,14 @@ account is an incident.
 10. Not fixture/CI
 
 Any mismatch fails closed. Worker `maybe_submit` / `tick` never MainNet
-send even if the env gates are later set. Manual canary is
-`submit_mainnet_canary` and is not executed in this PR.
+send even if the env gates are later set.
+
+PR40 is readiness, validation, and fail-closed infrastructure. It is
+**not** a canary executable. Do not POST a MainNet txn from this PR.
+`submit_mainnet_canary` stays unwired (not called from worker, tick, or
+boot). A later canary PR, after this merge plus keys, MainNet signer,
+independent confirm, recovery/backup drills, monitoring, pentest, and
+402security GO, may authorize exactly one human MainNet POST.
 
 Kill switch: unset the MainNet flag, or do not deploy. Do not destroy
 the Falcon key.
@@ -80,7 +86,9 @@ Unchanged live path: `LIVE402_PQ_LOG_DB=/data/pq-log.sqlite`,
 
 ## Fees, providers, recovery
 
-- Fee: current required, cap 30000, no silent cap raise
+- Fee: max(fee_per_byte * Falcon signed size, 3 * protocol base min).
+  Uncongested floor 3000, not 1000. Cap 30000. Caller cannot select
+  the fee. 402security: please review this calculation.
 - Submit and confirm endpoints are separable in config. Default MainNet
   URLs are both AlgoNode (same trust domain). That is **not** independent
   confirmation. Before MainNet GO, confirmation must use a genuinely
@@ -101,7 +109,8 @@ do not close this P1. See `docs/docker.md`.
 
 - `automatic_mainnet_enabled()` returns False
 - `send_if_allowed` returns None when NETWORK=mainnet
-- `submit_mainnet_canary` is not called from worker/tick/boot
+- `submit_mainnet_canary` is not called from worker/tick/boot. This
+  PR is not a canary executable.
 - `LIVE402_FIXTURE=1` never dials
 - fly.toml does not enable either broadcast flag
 - CI: `LIVE402_FIXTURE=1 python -m unittest discover -s tests`

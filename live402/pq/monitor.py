@@ -92,6 +92,9 @@ def snapshot() -> dict:
         "fee": {
             "max_fee": algo_anchor.MAX_FEE,
             "min_fee": algo_anchor.MIN_FEE,
+            "protocol_base_min": algo_anchor.PROTOCOL_BASE_MIN,
+            "falcon_min": algo_anchor.MIN_FEE,
+            "formula": "max(fee_per_byte * signed_falcon_size, 3 * protocol_base_min)",
             "cap_policy": "fail_closed_if_required_exceeds_max",
         },
         "broadcast": {

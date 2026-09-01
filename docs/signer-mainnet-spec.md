@@ -51,20 +51,31 @@ fields only:
 - sender = receiver = configured MainNet Falcon f1 address
 - note = PQ1 84-byte note from origin, tree_size, root
 - genesis ID + hash = MainNet exact values
-- fee = current required, hard ceiling `MAX_FEE=30000` µAlgo
+- fee = derived Falcon required value (not a router-supplied field)
 
-If required fee > 30000, reject. Do not raise the cap. Do not hardcode
-fee=3000 forever.
+Fee formula (same as the router; 402security must review):
+
+```
+required = max(fee_per_byte * signed_Falcon_txn_size, protocol_base_min * 3)
+```
+
+Protocol base min is 1000 µAlgo today. Falcon-1024 adds 2x that base
+(uncongested floor 3000). algod suggested `fee` is fee per byte. Size
+is the deterministic Falcon-1024 authorized SignedTxn estimate
+(official max pk 1793, max sig 1423) when the exact blob is not yet
+known. The signer authorizes that exact canonical txn. If required >
+30000, reject. Do not raise the cap. Do not hardcode fee=3000
+forever. Caller cannot select the fee.
 
 Do not accept router-supplied fee, firstValid, sender, amount, or an
 unsigned txn blob. Unknown JSON keys are rejected.
 
 ## Fee cap
 
-`MAX_FEE = 30000` microAlgos. Fail closed if algod required min-fee
-exceeds the cap. The signer may read suggested params from an
-allowlisted MainNet algod host to learn the current required fee. It
-still does not POST.
+`MAX_FEE = 30000` microAlgos. Fail closed if the derived Falcon
+required fee exceeds the cap. The signer may read suggested params
+from an allowlisted MainNet algod host to learn `min-fee` and
+fee-per-byte. It still does not POST.
 
 ## Rejection matrix
 
@@ -90,15 +101,37 @@ Reject (no SignedTxn) when any of these hold:
 
 ## State
 
-The signer is stateless across requests except for the loaded Falcon
-key and the HMAC token. It does not persist AUTHORIZED / SUBMITTED /
-CONFIRMED. Those live on the router log:
+The signer does **not** own AUTHORIZED / SUBMITTED / CONFIRMED. Those
+live on the router log:
 
 - AUTHORIZED: signer returned a SignedTxn (router persists)
 - SUBMITTED: router POSTed (signer never does this)
 - CONFIRMED: router fetch+decode+verify of the actual txn
 
 Public status is CONFIRMED only. Paid `/route` never waits for chain.
+
+The signer is **not** fully stateless except for the loaded Falcon key
+and HMAC token. It MUST retain durable **security** state across
+restarts:
+
+- monotonic checkpoint progression
+- last-authorized identity (origin, tree_size, root, signed-note) for
+  conflict detection
+- replay / request-ID tracking
+- freshness (timestamp window)
+- HMAC verification
+- checkpoint signature verify
+- origin / tree / root binding
+- consistency validation
+- reject a conflicting authorization for the same progression
+- safe restart: after authorizing origin=X tree=N root=R, a restart
+  must not authorize X/N/R2 or an unsafe rollback
+- bounded request body
+- rate limit
+- unknown-field reject
+
+This is a spec, a contract, and signer-repo tests only. Do not
+reimplement the private signer inside this public router.
 
 ## Tests the signer repo must have
 
@@ -109,6 +142,10 @@ Public status is CONFIRMED only. Paid `/route` never waits for chain.
 - Fixture/CI never hits live MainNet
 - Token unset: refuse to start or refuse to sign
 - Distinct token from TestNet: TestNet token must not validate
+- Durable security state survives restart: no X/N/R2, no unsafe rollback
+- Rejects conflicting auth for the same progression
+- Bounded body, rate limit, unknown-field reject
+- Fee equals derived Falcon required (not router-supplied)
 
 ## Kill switch
 
