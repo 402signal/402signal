@@ -43,7 +43,7 @@
         <p class="note">$0.01 USDC per live routing check · your agent keeps the wallet.</p>
       </section>
 
-      <div class="signal-flow" role="img" aria-label="Discovery to 402Signal to your agent, with an asynchronous teal evidence path">
+      <figure class="signal-flow" aria-labelledby="signal-flow-caption">
         <div class="signal-row">
           <div class="flow-box">
             <p class="flow-kicker">DISCOVERY</p>
@@ -54,6 +54,12 @@
           <div class="flow-box flow-emphasis">
             <p class="flow-kicker">402SIGNAL</p>
             <p class="flow-title">Check it now</p>
+            <ol class="flow-ops">
+              <li><span class="flow-op-kicker">DISCOVER</span> Find candidates</li>
+              <li><span class="flow-op-kicker">PROBE</span> Check the endpoint now</li>
+              <li><span class="flow-op-kicker">OBSERVE</span> Capture current x402 behavior</li>
+              <li><span class="flow-op-kicker">COMPARE</span> Apply constraints and rank</li>
+            </ol>
             <p class="flow-detail">Valid x402? Payment terms? Invocation info? Fresh observation?</p>
           </div>
           <div class="flow-conn gold" aria-hidden="true"></div>
@@ -72,7 +78,8 @@
           </ol>
           <p class="trust-rail-note">The route is gold and synchronous. Evidence is teal and does not delay routing.</p>
         </div>
-      </div>
+        <figcaption class="sr-only" id="signal-flow-caption">Discovery to 402Signal to your agent, with an asynchronous teal evidence path</figcaption>
+      </figure>
 
       <section class="block" id="decision">
         <h2>A decision, with evidence</h2>

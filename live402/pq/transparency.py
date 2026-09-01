@@ -481,26 +481,24 @@ def _status_strip(model: dict) -> str:
     growth = model["growth"]
     n_anchors = model["anchors_confirmed"]
     if model.get("integrity_error"):
-        since = "LOCAL LOG INCONSISTENT"
+        status = "Local log inconsistent"
     elif confirmed and growth == 0:
-        since = "Caught up"
+        status = "Caught up"
     elif confirmed and growth > 0:
-        since = "%s newer log entries since the latest confirmed anchor" % growth
-    elif current > 0 and not confirmed:
-        since = "Log exists · no confirmed checkpoint yet"
+        status = "%s newer entries" % growth
     else:
-        since = "No confirmed checkpoint yet"
+        status = "Not anchored yet"
     latest = _time(confirmed["utc"], confirmed["iso"]) if confirmed else "-"
     last_anchored = str(confirmed_size) if confirmed else "-"
     return (
         '<section class="status-grid pq-status" aria-label="Live log status">\n'
         '  <div><p class="pq-kicker">LOG SIZE</p><p class="pq-stat">%s</p></div>\n'
         '  <div><p class="pq-kicker">LAST ANCHORED</p><p class="pq-stat">%s</p></div>\n'
-        '  <div><p class="pq-kicker">SINCE ANCHOR</p><p class="pq-stat">%s</p></div>\n'
-        '  <div><p class="pq-kicker">ANCHORS CONFIRMED</p><p class="pq-stat">%s</p></div>\n'
-        '  <div><p class="pq-kicker">LATEST ANCHOR</p><p class="pq-stat">%s</p></div>\n'
+        '  <div><p class="pq-kicker">STATUS</p><p class="pq-stat">%s</p></div>\n'
+        '  <div><p class="pq-kicker">ANCHORS</p><p class="pq-stat">%s</p></div>\n'
+        '  <div><p class="pq-kicker">VERIFIED</p><p class="pq-stat">%s</p></div>\n'
         "</section>\n"
-        % (esc(current), esc(last_anchored), esc(since), esc(n_anchors), latest)
+        % (esc(current), esc(last_anchored), esc(status), esc(n_anchors), latest)
     )
 
 
@@ -545,44 +543,44 @@ def _confirmed_card(model: dict) -> str:
             "  <p>TestNet anchoring has not yet produced a confirmed checkpoint.</p>\n"
             "</section>\n"
         )
+    cta = _confirmed_checkpoint_cta(model)
+    bind_note = ""
+    if not model.get("bound_checkpoint"):
+        bind_note = (
+            '    <p class="note">The signed checkpoint for this confirmed tree could not be bound '
+            "to the confirmed origin, tree size, and Merkle root.</p>\n"
+        )
     return (
         '<section class="block" id="latest-confirmed">\n'
         "  <h2>Latest confirmed checkpoint</h2>\n"
         '  <article class="panel confirm-card">\n'
-        '    <p class="pq-kicker">Status</p>\n'
+        '    <p class="pq-kicker">STATUS</p>\n'
         "    <p>Confirmed</p>\n"
-        '    <p class="pq-kicker">Tree size</p>\n'
+        '    <p class="pq-kicker">TREE SIZE</p>\n'
         "    <p>%s</p>\n"
-        '    <p class="pq-kicker">Merkle root</p>\n'
+        '    <p class="pq-kicker">BLOCK</p>\n'
         "    <p>%s</p>\n"
-        '    <p class="pq-kicker">Origin</p>\n'
-        "    <p>402signal.com/pq/log</p>\n"
         '    <p class="pq-kicker">VERIFIED AT</p>\n'
         "    <p>%s</p>\n"
-        '    <p class="pq-kicker">Block / round</p>\n'
+        '    <p class="pq-kicker">TRANSACTION</p>\n'
         "    <p>%s</p>\n"
-        '    <p class="pq-kicker">Transaction</p>\n'
-        "    <p>%s</p>\n"
-        '    <p class="pq-kicker">Authorization</p>\n'
+        '    <p class="pq-kicker">AUTHORIZATION</p>\n'
         "    <p>Falcon-1024 (f1)</p>\n"
-        "%s"
-        '    <p class="pq-kicker">Amount</p>\n'
-        "    <p>0 ALGO</p>\n"
-        '    <p class="hero-actions">\n'
+        '    <div class="hero-actions">\n'
         '      <a class="btn" href="%s" rel="noopener noreferrer">View latest anchor on Pera</a>\n'
         "%s"
-        "    </p>\n"
+        "    </div>\n"
+        "%s"
         "  </article>\n"
         "</section>\n"
         % (
             esc(conf["size"]),
-            _mono_copy(conf["root"], abbreviate(conf["root"]), "Merkle root"),
-            _time(conf["utc"], conf["iso"]),
             esc(conf["round"]),
+            _time(conf["utc"], conf["iso"]),
             _mono_copy(conf["txid"], abbreviate(conf["txid"]), "transaction id"),
-            _falcon_account_row(model["falcon_address"]),
             esc(conf["explorer"]),
-            _confirmed_checkpoint_cta(model),
+            cta,
+            bind_note,
         )
     )
 
@@ -594,9 +592,32 @@ def _confirmed_checkpoint_cta(model: dict) -> str:
             '      <a class="btn secondary" href="%s">View signed checkpoint for tree %s</a>\n'
             % (esc(bound["href"]), esc(bound["size"]))
         )
+    return ""
+
+
+def _confirmed_detail_fields(model: dict) -> str:
+    conf = model.get("confirmed")
+    if not conf:
+        return ""
+    falcon = ""
+    addr = str(model.get("falcon_address") or "").strip()
+    if addr:
+        falcon = (
+            "  <div><dt>FALCON ACCOUNT</dt><dd>%s</dd></div>\n"
+            % _mono_copy(addr, abbreviate_falcon(addr), "Falcon account")
+        )
     return (
-        "      <p>The signed checkpoint for this confirmed tree could not be bound "
-        "to the confirmed origin, tree size, and Merkle root.</p>\n"
+        "<h3>Confirmed checkpoint fields</h3>\n"
+        '<dl class="pq-decode">\n'
+        "  <div><dt>MERKLE ROOT</dt><dd>%s</dd></div>\n"
+        "  <div><dt>ORIGIN</dt><dd>402signal.com/pq/log</dd></div>\n"
+        "%s"
+        "  <div><dt>AMOUNT</dt><dd>0 ALGO</dd></div>\n"
+        "</dl>\n"
+        % (
+            _mono_copy(conf["root"], None, "Merkle root"),
+            falcon,
+        )
     )
 
 
@@ -982,6 +1003,7 @@ def _verification_details(model: dict) -> str:
         '<details class="tech-details" id="verification-details">\n'
         "  <summary>Verification details</summary>\n"
         '  <div class="tech-body">\n'
+        + _confirmed_detail_fields(model)
         + decoder
         + _pera_views(model)
         + _technical(model)
@@ -1002,23 +1024,19 @@ def _main(model: dict) -> str:
         "        <p class=\"note\">Routing never waits for blockchain confirmation.</p>\n"
         "        <p class=\"privacy-note\">Transparent history, not public requests. This page "
         "shows 402Signal infrastructure commitments: log size, signed checkpoints, and "
-        "confirmed TestNet anchors. It does not publish agent needs, wallets, payment "
+        "confirmed TestNet anchors. It does not directly publish your wallet, raw request, "
+        "or payment credentials. It does not publish agent needs, wallets, payment "
         "signatures, or seller response bodies. It is not a claim of anonymous, unlinkable, "
         "or fully private traffic.</p>\n"
         "      </section>\n"
         '      <section class="block">\n'
         "        <h2>Why this matters</h2>\n"
-        "        <p>Imagine your shopping agent spends $3 checking whether a used car is a good buy. "
-        "Months later, you want to know which services it relied on.</p>\n"
-        "        <p>402Signal’s transparency log creates a timestamped, tamper-evident record of the "
-        "routing evidence it produced. The blockchain anchor makes it much harder for that "
-        "historical record to be silently rewritten after the fact.</p>\n"
-        "        <p>It doesn’t reveal your wallet or raw request, and it doesn’t prove an endpoint "
-        "was truthful. It gives you a way to verify the history of the decision infrastructure "
-        "your agent relied on.</p>\n"
-        "        <p>The same idea applies when an agent compares paid news, buys a report, selects "
-        "an API, purchases data, or pays for compute.</p>\n"
-        "        <p class=\"note\">What did my agent rely on when it spent my money?</p>\n"
+        "        <p>If an agent spends money on your behalf, you should be able to verify that "
+        "the routing record behind that decision was not quietly rewritten later.</p>\n"
+        "        <p>402Signal commits its evidence history to an append-only log and periodically "
+        "anchors signed checkpoints.</p>\n"
+        "        <p class=\"note\">This proves a committed history. It does not prove an endpoint "
+        "was truthful.</p>\n"
         "      </section>\n"
         + _integrity_banner(model)
         + _status_strip(model)

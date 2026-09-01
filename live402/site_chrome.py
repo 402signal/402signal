@@ -145,8 +145,9 @@ def signal_flow_html(*, variant: str = "product") -> str:
             "        <li><span class=\"trust-step-kicker\">%s</span> %s</li>"
             % (esc(kicker), esc(text))
         )
+    caption_id = "signal-flow-caption-proof" if variant == "proof" else "signal-flow-caption"
     head = (
-        '<div class="signal-flow" role="img" aria-label="%s">\n'
+        '<figure class="signal-flow" aria-labelledby="%s">\n'
         '  <div class="signal-row">\n'
         '    <div class="flow-box">\n'
         '      <p class="flow-kicker">DISCOVERY</p>\n'
@@ -170,7 +171,7 @@ def signal_flow_html(*, variant: str = "product") -> str:
         '    <p class="trust-rail-label">EVIDENCE · asynchronous</p>\n'
         '    <ol class="trust-steps">\n'
         % (
-            esc(aria),
+            esc(caption_id),
             esc(discovery_title),
             esc(discovery_detail),
             esc(check_title),
@@ -185,5 +186,6 @@ def signal_flow_html(*, variant: str = "product") -> str:
         + "\n    </ol>\n"
         + ('    <p class="trust-rail-note">%s</p>\n' % esc(note))
         + "  </div>\n"
-        + "</div>\n"
+        + ('  <figcaption class="sr-only" id="%s">%s</figcaption>\n' % (esc(caption_id), esc(aria)))
+        + "</figure>\n"
     )

@@ -240,6 +240,15 @@ class HomepageProductTests(unittest.TestCase):
         self.assertIn("$0.01 USDC per live routing check · your agent keeps the wallet.", html)
         self.assertIn("What catalogs claim", html)
         self.assertIn("Check it now", html)
+        self.assertIn("DISCOVER", html)
+        self.assertIn("Find candidates", html)
+        self.assertIn("PROBE", html)
+        self.assertIn("Check the endpoint now", html)
+        self.assertIn("OBSERVE", html)
+        self.assertIn("Capture current x402 behavior", html)
+        self.assertIn("COMPARE", html)
+        self.assertIn("Apply constraints and rank", html)
+        self.assertIn("Valid x402? Payment terms? Invocation info? Fresh observation?", html)
         self.assertIn("Decide whether to spend", html)
         self.assertIn("A decision, with evidence", html)
         self.assertIn(">ROUTE<", html)
@@ -387,7 +396,7 @@ class HomepageProductTests(unittest.TestCase):
         self.assertIn(">EVIDENCE<", html)
         self.assertIn(">Readiness<", html)
         self.assertIn('class="signal-flow"', html)
-        self.assertIn("Trust path", html)
+        self.assertNotIn("Trust path", html)
         self.assertIn("Found in supported discovery infrastructure.", html)
         self.assertIn("402Signal stops before seller execution", html)
         self.assertIn("402Signal recommends a route.", html)
@@ -507,6 +516,8 @@ class HomepageProductTests(unittest.TestCase):
         self.assertIn(".copy-btn", css)
         self.assertIn(".mobile-only", css)
         self.assertIn(".desktop-only", css)
+        self.assertIn(".sr-only", css)
+        self.assertIn(".flow-ops", css)
         self.assertIn("grid-template-columns: 1fr", css)
         for html in self.pages.values():
             self.assertIn('name="viewport"', html)
@@ -623,9 +634,39 @@ class HomepageProductTests(unittest.TestCase):
             self.assertEqual(html.count("<h1"), 1, path)
             self.assertNotIn("\N{EM DASH}", html, path)
 
+    def test_signal_flow_is_not_role_img(self):
+        for path in ("/", "/how", "/transparency"):
+            html = self.pages[path]
+            self.assertIn('<figure class="signal-flow"', html, path)
+            self.assertIn("<figcaption", html, path)
+            self.assertIn("DISCOVERY", html, path)
+            self.assertIn("402SIGNAL", html, path)
+            self.assertIn("YOUR AGENT", html, path)
+            self.assertIn("COMMIT", html, path)
+            self.assertIn("SIGN", html, path)
+            self.assertIn("ANCHOR", html, path)
+            self.assertNotIn('class="signal-flow" role="img"', html, path)
+            self.assertNotIn('role="img" aria-label=', html, path)
+            idx = 0
+            while True:
+                start = html.find('<figure class="signal-flow"', idx)
+                if start < 0:
+                    break
+                end = html.find("</figure>", start)
+                self.assertGreater(end, start, path)
+                chunk = html[start:end]
+                self.assertNotIn('role="img"', chunk, path)
+                idx = end + 1
+
     def test_transparency_privacy_copy_and_no_customer_ui(self):
         html = self.transparency
         self.assertIn("Transparent history, not public requests", html)
+        self.assertIn("It does not directly publish your wallet, raw request, or payment credentials.", html)
+        self.assertNotIn("doesn’t reveal", html)
+        self.assertNotIn("doesn't reveal", html)
+        self.assertNotIn("does not reveal", html)
+        self.assertNotIn("used car", html)
+        self.assertNotIn("What did my agent rely on when it spent my money?", html)
         self.assertNotIn("<form", html)
         self.assertNotIn("PAYMENT-SIGNATURE", html)
         self.assertNotIn("customer-search", html)

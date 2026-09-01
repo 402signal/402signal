@@ -38,7 +38,7 @@
         <p class="lede">402Signal keeps the listing and the runtime observation separate.</p>
       </section>
 
-      <div class="signal-flow" role="img" aria-label="Discovery to 402Signal to your agent, with an asynchronous teal evidence path">
+      <figure class="signal-flow" aria-labelledby="signal-flow-caption">
         <div class="signal-row">
           <div class="flow-box">
             <p class="flow-kicker">DISCOVERY</p>
@@ -67,7 +67,8 @@
           </ol>
           <p class="trust-rail-note">The route is gold and synchronous. Evidence is teal and does not delay routing.</p>
         </div>
-      </div>
+        <figcaption class="sr-only" id="signal-flow-caption">Discovery to 402Signal to your agent, with an asynchronous teal evidence path</figcaption>
+      </figure>
 
       <section class="block">
         <h2>What a live check can establish</h2>
@@ -119,21 +120,10 @@
       </section>
 
       <section class="block">
-        <h2>Trust path</h2>
-        <p>The gold path is the live check: observe, then return a route or a miss. The teal path is evidence: commit, sign, then optionally anchor on Algorand TestNet with Falcon-1024. Routing never waits for chain.</p>
-      </section>
-
-      <section class="block">
         <h2>402Signal stops before seller execution</h2>
         <p>402Signal recommends a route. The caller keeps its wallet, signs the seller payment and executes the seller request.</p>
         <p>The $0.01 routing check pays 402Signal for the check itself. It is separate from whatever the selected seller charges.</p>
-      </section>
-
-      <section class="block">
-        <h2>A check should leave a trail</h2>
-        <p>An agent may make hundreds of small spending decisions without a human watching each one. 402Signal keeps commitments to its routing evidence in an append-only history so the record behind those decisions cannot simply be rewritten later.</p>
-        <p>402Signal periodically anchors signed checkpoints of that history to Algorand TestNet.</p>
-        <p><a class="btn secondary" href="/transparency">See the transparency log</a></p>
+        <p>A check should leave a trail. <a href="/transparency">See the transparency log</a></p>
       </section>
     </main>
 
