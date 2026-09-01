@@ -38,6 +38,13 @@ HUMAN_PAGES = {
 # Server-rendered human pages. Intercept before static rewrite. Not STATIC_DIR files.
 HUMAN_DYNAMIC_PATHS = frozenset({"/transparency", "/transparency.html"})
 STATIC_FILES = {"/styles.css", "/app.js", "/dashboard.js", "/transparency.js"}
+# Constant paths only. Never join a request string onto STATIC_DIR.
+_ASSET_PATHS = {
+    "/styles.css": STATIC_DIR / "styles.css",
+    "/app.js": STATIC_DIR / "app.js",
+    "/dashboard.js": STATIC_DIR / "dashboard.js",
+    "/transparency.js": STATIC_DIR / "transparency.js",
+}
 # Process-local volume files. Never HTTP-download, never static, never OpenAPI.
 _VOLUME_DUMP_PATHS = frozenset(
     {
@@ -616,11 +623,13 @@ class Handler(SimpleHTTPRequestHandler):
 
     def _serve_static_asset(self) -> None:
         parsed = urlparse(self.path)
-        name = parsed.path.lstrip("/")
-        path = STATIC_DIR / name
-        if name not in asset_version.ASSET_FILES or not path.is_file():
+        path = _ASSET_PATHS.get(parsed.path)
+        if path is None:
             return self._json(404, {"error": "not found"})
-        data = path.read_bytes()
+        try:
+            data = path.read_bytes()
+        except OSError:
+            return self._json(404, {"error": "not found"})
         suffix = path.suffix.lstrip(".")
         ctype = {
             "css": "text/css; charset=utf-8",

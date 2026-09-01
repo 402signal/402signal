@@ -1063,6 +1063,15 @@ class HomepageProductTests(unittest.TestCase):
         self.assertEqual(health_st, 200)
         self.assertEqual(json.loads(health_raw), {"ok": True})
         self.assertNotIn(ver, health_raw)
+        for sneak in (
+            "/styles.css/../server.py",
+            "/app.js/../../README.md",
+            "/dashboard.js/%2e%2e/asset_version.py",
+        ):
+            sneak_st, sneak_raw, sneak_hdrs = _get_full(self.port, sneak)
+            self.assertEqual(sneak_st, 404, sneak)
+            self.assertIn("json", sneak_hdrs.get("content-type", ""), sneak)
+            self.assertNotIn("def ", sneak_raw, sneak)
 
     def test_post_quantum_wording_precise_not_saturated(self):
         banned = (
