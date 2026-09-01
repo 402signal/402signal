@@ -1169,13 +1169,12 @@ def dashboard_html(payload: dict | None = None) -> str:
         <a href="/catalog">Catalog</a>
         <a href="/how">How it works</a>
         <a href="/developers">Developers</a>
-        <a href="https://github.com/402signal/402signal" rel="noopener noreferrer">GitHub</a>
       </nav>
     </header>
     <main>
       <section class="hero compact">
         <h1>Lookups 402Signal can try</h1>
-        <p class="lede">These examples come from public x402 discovery sources. They are candidates, not current verification. 402Signal still probes before an agent relies on one.</p>
+        <p class="lede">Example lookups from public x402 discovery sources. They are candidates, not current verification.</p>
       </section>
       <p class="muted">Last updated <time id="updated-at">{updated}</time> · refreshes about every 20s · <a href="/pulse">/pulse JSON</a></p>
       <p class="note">The paid routing check is POST /route for $0.01 USDC. Examples on this page are not current verification.</p>
@@ -1184,16 +1183,6 @@ def dashboard_html(payload: dict | None = None) -> str:
       </div>
     </main>
     <footer class="foot">
-      <p class="listed-on">
-        Listed on
-        <a href="https://glama.ai/mcp/servers/402signal/402signal" rel="noopener noreferrer">Glama</a>
-        <a href="https://registry.modelcontextprotocol.io/?q=402signal" rel="noopener noreferrer">MCP Registry</a>
-        <a href="https://github.com/Haustorium12/gold-402/blob/main/directory/aggregators.md" rel="noopener noreferrer">Gold-402</a>
-        <a href="https://smithery.ai/servers/live402/signal" rel="noopener noreferrer">Smithery</a>
-        <a href="https://agentic.market/services/402signal-com" rel="noopener noreferrer">Agentic Market</a>
-        <a href="https://github.com/michielpost/x402-dev/blob/master/Projects.md" rel="noopener noreferrer">x402-dev</a>
-        <a href="https://facilitator.goplausible.xyz/dashboard/bazaar?q=402signal" rel="noopener noreferrer">GoPlausible</a>
-      </p>
       <p>
         <a href="https://github.com/402signal/402signal" rel="noopener noreferrer">GitHub</a>
         <a href="https://x.com/402Signal" rel="noopener noreferrer">@402Signal</a>

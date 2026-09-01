@@ -28,70 +28,76 @@
         <a href="/catalog">Catalog</a>
         <a href="/how">How it works</a>
         <a href="/developers">Developers</a>
-        <a href="https://github.com/402signal/402signal" rel="noopener noreferrer">GitHub</a>
       </nav>
     </header>
 
     <main>
       <section class="hero">
         <h1>Find a paid API that works right now.</h1>
-        <p class="lede">402Signal checks x402 services immediately before an agent uses them. It keeps catalog claims separate from what the endpoint actually returns, then gives the agent a route or a clear miss.</p>
+        <p class="lede">Independent signal an agent checks immediately before spending. Discovery listings are claims. 402Signal reports what the endpoint actually returned. Routing never waits for chain.</p>
         <p class="rails-line">Base · Solana · Algorand</p>
         <div class="hero-actions">
           <a class="btn" href="/catalog">Browse catalog</a>
           <a class="btn secondary" href="/developers">Developer docs</a>
         </div>
-        <p class="note">402Signal recommends the route. Your agent keeps the wallet.</p>
+        <p class="note">$0.01 USDC per live routing check · your agent keeps the wallet.</p>
       </section>
 
-      <div class="flow" role="img" aria-label="Discovery to 402Signal to your agent">
-        <div class="flow-box">
-          <p class="flow-kicker">DISCOVERY</p>
-          <p class="flow-title">What discovery sources say is available</p>
-          <p class="flow-detail">Catalogs / Directories / Seller metadata</p>
+      <div class="signal-flow" role="img" aria-label="Discovery to 402Signal to your agent, with an asynchronous teal evidence path">
+        <div class="signal-row">
+          <div class="flow-box">
+            <p class="flow-kicker">DISCOVERY</p>
+            <p class="flow-title">What catalogs claim</p>
+            <p class="flow-detail">Listings and seller metadata. A claim can outlive the endpoint.</p>
+          </div>
+          <div class="flow-conn gold" aria-hidden="true"></div>
+          <div class="flow-box flow-emphasis">
+            <p class="flow-kicker">402SIGNAL</p>
+            <p class="flow-title">Check it now</p>
+            <p class="flow-detail">Valid x402? Payment terms? Invocation info? Fresh observation?</p>
+          </div>
+          <div class="flow-conn gold" aria-hidden="true"></div>
+          <div class="flow-box">
+            <p class="flow-kicker">YOUR AGENT</p>
+            <p class="flow-title">Decide whether to spend</p>
+            <p class="flow-detail">Own wallet. Sign. Pay the seller. Call the API.</p>
+          </div>
         </div>
-        <div class="flow-conn" aria-hidden="true"></div>
-        <div class="flow-box flow-emphasis">
-          <p class="flow-kicker">402SIGNAL</p>
-          <p class="flow-title">Check it now</p>
-          <p class="flow-detail">Valid x402? / Payment terms? / Invocation info? / Fresh observation?</p>
-        </div>
-        <div class="flow-conn" aria-hidden="true"></div>
-        <div class="flow-box">
-          <p class="flow-kicker">YOUR AGENT</p>
-          <p class="flow-title">Decide whether to spend</p>
-          <p class="flow-detail">Own wallet / Sign / Pay seller / Call API</p>
+        <div class="trust-rail">
+          <p class="trust-rail-label">EVIDENCE · asynchronous</p>
+          <ol class="trust-steps">
+            <li><span class="trust-step-kicker">COMMIT</span> Routing evidence enters an append-only Merkle log.</li>
+            <li><span class="trust-step-kicker">SIGN</span> 402Signal signs a checkpoint with its Ed25519 log identity.</li>
+            <li><span class="trust-step-kicker">ANCHOR</span> Algorand TestNet · Falcon-1024</li>
+          </ol>
+          <p class="trust-rail-note">The route is gold and synchronous. Evidence is teal and does not delay routing.</p>
         </div>
       </div>
 
-      <p class="lede after-flow">If the check does not pass, 402Signal returns a miss instead of quietly substituting an unverified service.</p>
-      <p class="note">The live routing check costs $0.01 USDC. 402Signal does not hold your keys or pay the selected seller for you.</p>
-
-      <div class="destinations">
-        <article class="dest-card">
-          <h2>Browse the catalog</h2>
-          <p>See which x402 services are listed across the discovery sources 402Signal queries. Catalog listings are candidates, not live verification.</p>
-          <a class="btn" href="/catalog">Browse catalog</a>
-        </article>
-        <article class="dest-card">
-          <h2>Use 402Signal in an agent</h2>
-          <p>Call 402Signal through HTTP or MCP when your agent needs a fresh check before spending.</p>
-          <a class="btn secondary" href="/developers">Developer docs</a>
-        </article>
-      </div>
+      <section class="block" id="decision">
+        <h2>A decision, with evidence</h2>
+        <div class="decision-grid">
+          <article class="decision-card route">
+            <h3>ROUTE</h3>
+            <p>A live URL plus the observed payment option from this check.</p>
+          </article>
+          <article class="decision-card evidence">
+            <h3>EVIDENCE</h3>
+            <p>What the check established: 402 envelope, terms, invocation info, freshness.</p>
+          </article>
+          <article class="decision-card miss">
+            <h3>MISS</h3>
+            <p>A typed miss instead of substituting an unverified service.</p>
+          </article>
+          <article class="decision-card history">
+            <h3>HISTORY</h3>
+            <p>Commitments that can be verified later. Routing does not wait for chain.</p>
+          </article>
+        </div>
+      </section>
     </main>
 
     <footer class="foot">
-      <p class="listed-on">
-        Listed on
-        <a href="https://glama.ai/mcp/servers/402signal/402signal" rel="noopener noreferrer">Glama</a>
-        <a href="https://registry.modelcontextprotocol.io/?q=402signal" rel="noopener noreferrer">MCP Registry</a>
-        <a href="https://github.com/Haustorium12/gold-402/blob/main/directory/aggregators.md" rel="noopener noreferrer">Gold-402</a>
-        <a href="https://smithery.ai/servers/live402/signal" rel="noopener noreferrer">Smithery</a>
-        <a href="https://agentic.market/services/402signal-com" rel="noopener noreferrer">Agentic Market</a>
-        <a href="https://github.com/michielpost/x402-dev/blob/master/Projects.md" rel="noopener noreferrer">x402-dev</a>
-        <a href="https://facilitator.goplausible.xyz/dashboard/bazaar?q=402signal" rel="noopener noreferrer">GoPlausible</a>
-      </p>
       <p>
         <a href="https://github.com/402signal/402signal" rel="noopener noreferrer">GitHub</a>
         <a href="https://x.com/402Signal" rel="noopener noreferrer">@402Signal</a>

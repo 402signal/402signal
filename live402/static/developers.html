@@ -28,7 +28,6 @@
         <a href="/catalog">Catalog</a>
         <a href="/how">How it works</a>
         <a href="/developers" aria-current="page">Developers</a>
-        <a href="https://github.com/402signal/402signal" rel="noopener noreferrer">GitHub</a>
       </nav>
     </header>
 
@@ -36,7 +35,7 @@
       <section class="hero compact">
         <h1>Use 402Signal from an agent</h1>
         <p class="lede">Find a paid API that works right now. Send the capability you need. Pay $0.01 USDC for the live routing check. Get a route with evidence, or a typed miss.</p>
-        <p class="note">402Signal recommends the route. Your agent keeps the wallet. Every route includes evidence. Catalog claims stay separate from what the endpoint actually returns.</p>
+        <p class="note">Your agent keeps the wallet. Catalog claims stay separate from what the endpoint actually returns.</p>
       </section>
 
       <div class="seg" role="tablist" aria-label="Integration">
@@ -45,15 +44,22 @@
       </div>
 
       <section id="panel-http" class="block tab-panel" role="tabpanel" aria-labelledby="tab-http">
-        <p>Send <code>POST /route</code> with the capability your agent needs. Use your own <code>need</code> string, not a canned weather example. The unpaid request returns an x402 payment challenge (HTTP 402). Sign a matching $0.01 USDC option and retry the same POST with <code>PAYMENT-SIGNATURE</code> (or <code>X-PAYMENT</code>).</p>
+        <p>Send <code>POST /route</code> with the capability your agent needs. Use your own <code>need</code> string. Unpaid: HTTP 402. Sign a matching $0.01 USDC option and retry with <code>PAYMENT-SIGNATURE</code> (or <code>X-PAYMENT</code>).</p>
         <div class="code-card">
           <div class="code-toolbar">
             <span>Unpaid <code>POST /route</code></span>
-            <button type="button" class="btn secondary" id="copy-curl">Copy</button>
+            <button type="button" class="btn secondary" id="copy-curl" aria-label="Copy curl example">Copy</button>
           </div>
           <pre class="code" id="curl-route">curl -sS -D - https://402signal.com/route -H 'Content-Type: application/json' -d '{"need":"YOUR_NEED"}'</pre>
         </div>
-        <p>A paid check returns HTTP 200 with a route and evidence (<code>live</code>, <code>url</code>, <code>invocable</code>, <code>selected_payment</code>, <code>target</code>), or HTTP 503 with a typed <code>miss_reason</code>. Agents that intend to pay should POST, not GET. GET with <code>Accept: application/json</code> (or no Accept) returns the 402 challenge so crawlers can index payment; browsers that send <code>text/html</code> get a human page.</p>
+        <details class="tech-details">
+          <summary>Compact responses</summary>
+          <div class="tech-body">
+            <p>Paid check: HTTP 200 with <code>live</code>, <code>url</code>, <code>invocable</code>, <code>selected_payment</code>, <code>target</code>.</p>
+            <p>Typed miss: HTTP 503 with <code>miss_reason</code>.</p>
+            <p>Agents that intend to pay should POST, not GET. GET with <code>Accept: application/json</code> (or no Accept) returns the 402 challenge. Browsers that send <code>text/html</code> get a human page.</p>
+          </div>
+        </details>
       </section>
 
       <section id="panel-mcp" class="block tab-panel" role="tabpanel" aria-labelledby="tab-mcp" hidden>
@@ -64,170 +70,187 @@
           </div>
           <pre class="code">https://402signal.com/mcp</pre>
         </div>
-        <p>Point your MCP client at that URL. <code>initialize</code>, <code>tools/list</code>, <code>preview</code>, and <code>validate</code> need no payment. Call <code>route</code> with <code>need</code> when you want a request-time check. An unpaid <code>route</code> call returns HTTP 402; retry the same <code>tools/call</code> with a matching $0.01 USDC signature.</p>
+        <p><code>initialize</code>, <code>tools/list</code>, <code>preview</code>, and <code>validate</code> need no payment. Unpaid <code>route</code> returns HTTP 402; retry the same <code>tools/call</code> with a matching $0.01 USDC signature.</p>
       </section>
 
       <section class="block">
-        <h2>Preview, route, and validate</h2>
-        <p><code>GET /preview?need=</code> is an unpaid catalog search. <code>not_probed</code> is always true. It returns <code>discovery_matches</code> (how many listings matched) and <code>displayed</code> (how many rows are in <code>hits</code>, cap 8). If matches exceed the display cap, <code>truncated</code> is true. Hits may include a read-only observation when history exists, or <code>not_yet_observed</code>. Preview never probes and never charges.</p>
-        <p>Paid <code>POST /route</code> is the fail-closed live check: verify payment, discover, probe, then settle the $0.01 routing fee. <code>POST /validate</code> (also <code>GET /validate?url=</code>) is an unpaid seller probe: is this already-listed URL agent-ready? Fail-closed SSRF. Not a /route paywall bypass. Validate does not write observation history.</p>
-      </section>
-
-      <section class="block">
-        <h2>Payment flow</h2>
-        <p>The $0.01 USDC is a routing fee paid to 402Signal for the check itself (10000 atomic, 6 decimals). 402Signal does not pay the selected seller and does not hold your keys. After you receive a live URL, your agent signs the seller payment and calls the seller. Copy the seller facilitator from the observed option. Do not default to x402.org.</p>
-      </section>
-
-      <section class="block">
-        <h2>Need, policy, and constraints</h2>
-        <p><code>need</code> is plain English for what to find. Optional <code>policy</code> is natural language compiled into structured constraints. The engine uses the structured values only. Unresolved phrases are returned in <code>unresolved_constraints</code>, never guessed. "Established usage" / "strong observed evidence" compile to <code>min_observations=10</code>. Vague "high reputation" stays unresolved. Settlement and total-cost language compile only with a numeric bound.</p>
-        <p>Structured fields include <code>max_price_usd</code>, <code>max_amount_atomic</code>, <code>max_total_cost_usd</code>, <code>max_probe_latency_ms</code>, <code>max_service_latency_ms</code>, <code>max_settlement_latency_ms</code>, <code>require_invocable</code>, <code>networks</code>, <code>min_observations</code>, <code>min_observed_success</code>, <code>min_reputation_score</code>, and <code>min_reputation_confidence</code>. <code>max_latency_ms</code> is a probe-RTT alias. Unknown measured values fail closed when you set the bound.</p>
-      </section>
-
-      <section class="block">
-        <h2>Objectives</h2>
-        <p>Optional <code>objective</code> ranks live hits. Unknown values fall back to <code>best</code>. Same function on Base, Solana, and Algorand.</p>
-        <dl class="checks compact">
-          <div>
-            <dt>best</dt>
-            <dd>Default blend of need match, observed readiness, and available evidence. Missing metrics stay missing.</dd>
+        <h2>Advanced</h2>
+        <details class="tech-details">
+          <summary>Preview, route, and validate</summary>
+          <div class="tech-body">
+            <p><code>GET /preview?need=</code> is an unpaid catalog search. <code>not_probed</code> is always true. It returns <code>discovery_matches</code> and <code>displayed</code> (hits cap 8). Hits may include a read-only observation when history exists, or <code>not_yet_observed</code>.</p>
+            <p>Paid <code>POST /route</code> is the fail-closed live check: verify payment, discover, probe, then settle the $0.01 routing fee. <code>POST /validate</code> (also <code>GET /validate?url=</code>) is an unpaid seller probe of an already-listed URL. Fail-closed SSRF. Not a /route paywall bypass. Validate does not write observation history.</p>
           </div>
-          <div>
-            <dt>cheapest</dt>
-            <dd>Lowest known merchant price on the current observed option. Unknown price is not treated as zero.</dd>
+        </details>
+        <details class="tech-details">
+          <summary>Payment flow</summary>
+          <div class="tech-body">
+            <p>The $0.01 USDC is a routing fee paid to 402Signal for the check itself (10000 atomic, 6 decimals). 402Signal does not pay the selected seller and does not hold your keys. After you receive a live URL, your agent signs the seller payment and calls the seller. Copy the seller facilitator from the observed option. Do not default to x402.org.</p>
           </div>
-          <div>
-            <dt>fastest</dt>
-            <dd>Lowest probe RTT on this request. Not settlement, not historical p50.</dd>
+        </details>
+        <details class="tech-details">
+          <summary>Need, policy, and constraints</summary>
+          <div class="tech-body">
+            <p><code>need</code> is plain English for what to find. Optional <code>policy</code> compiles into structured constraints. The engine uses the structured values only. Unresolved phrases are returned in <code>unresolved_constraints</code>, never guessed. "Established usage" / "strong observed evidence" compile to <code>min_observations=10</code>. Vague "high reputation" stays unresolved. Settlement and total-cost language compile only with a numeric bound.</p>
+            <p>Structured fields include <code>max_price_usd</code>, <code>max_amount_atomic</code>, <code>max_total_cost_usd</code>, <code>max_probe_latency_ms</code>, <code>max_service_latency_ms</code>, <code>max_settlement_latency_ms</code>, <code>require_invocable</code>, <code>networks</code>, <code>min_observations</code>, <code>min_observed_success</code>, <code>min_reputation_score</code>, and <code>min_reputation_confidence</code>. <code>max_latency_ms</code> is a probe-RTT alias. Unknown measured values fail closed when you set the bound.</p>
           </div>
-          <div>
-            <dt>most_reliable</dt>
-            <dd>Observed success when <code>n_7d</code> is large enough. Below 3 observations the rate is unknown, never 0. Below 10 it is weak and not a public reliability percent.</dd>
+        </details>
+        <details class="tech-details">
+          <summary>Objectives</summary>
+          <div class="tech-body">
+            <p>Optional <code>objective</code> ranks live hits. Unknown values fall back to <code>best</code>. Same function on Base, Solana, and Algorand.</p>
+            <dl class="checks compact">
+              <div>
+                <dt>best</dt>
+                <dd>Default blend of need match, observed readiness, and available evidence. Missing metrics stay missing.</dd>
+              </div>
+              <div>
+                <dt>cheapest</dt>
+                <dd>Lowest known merchant price on the current observed option. Unknown price is not treated as zero.</dd>
+              </div>
+              <div>
+                <dt>fastest</dt>
+                <dd>Lowest probe RTT on this request. Not settlement, not historical p50.</dd>
+              </div>
+              <div>
+                <dt>most_reliable</dt>
+                <dd>Observed success when <code>n_7d</code> is large enough. Below 3 observations the rate is unknown, never 0. Below 10 it is weak and not a public reliability percent.</dd>
+              </div>
+              <div>
+                <dt>lowest_total_cost</dt>
+                <dd>Merchant price plus known fees. If a fee is unknown, this objective fails closed. Merchant price is not total cost.</dd>
+              </div>
+              <div>
+                <dt>fastest_settlement</dt>
+                <dd>Settlement or protocol finality, never probe RTT. Unknown finality fails closed. Do not collapse this into <code>fastest</code>.</dd>
+              </div>
+            </dl>
+            <p class="note"><code>search_depth=thorough</code> or a higher <code>max_candidates_to_probe</code> may probe deeper. Typical requests stay at the standard plan. Hard server ceiling is 20.</p>
           </div>
-          <div>
-            <dt>lowest_total_cost</dt>
-            <dd>Merchant price plus known fees. If a fee is unknown, this objective fails closed. Merchant price is not total cost.</dd>
+        </details>
+        <details class="tech-details">
+          <summary>prefer_network vs networks</summary>
+          <div class="tech-body">
+            <p><code>prefer_network=base|solana|algorand</code> ranks that rail first but still searches all three. <code>networks</code> restricts which rails are queried and selectable. They are not the same knob.</p>
           </div>
-          <div>
-            <dt>fastest_settlement</dt>
-            <dd>Settlement or protocol finality, never probe RTT. Unknown finality fails closed. Do not collapse this into <code>fastest</code>.</dd>
+        </details>
+        <details class="tech-details">
+          <summary>selected_payment</summary>
+          <div class="tech-body">
+            <p><code>selected_payment</code> is the exact current observed payment option that won this route: rail, network, asset, amount, payTo, facilitator. It is never a catalog-only rail. Catalog rails stay on claimed payment options.</p>
           </div>
-        </dl>
-        <p class="note"><code>search_depth=thorough</code> or a higher <code>max_candidates_to_probe</code> may probe deeper. Typical requests stay at the standard plan. Hard server ceiling is 20.</p>
-      </section>
-
-      <section class="block">
-        <h2>prefer_network vs networks</h2>
-        <p><code>prefer_network=base|solana|algorand</code> ranks that rail first but still searches all three. <code>networks</code> restricts which rails are queried and selectable. They are not the same knob.</p>
-      </section>
-
-      <section class="block">
-        <h2>selected_payment</h2>
-        <p><code>selected_payment</code> is the exact current observed payment option that won this route: rail, network, asset, amount, payTo, facilitator. It is never a catalog-only rail. Catalog rails stay on claimed payment options.</p>
-      </section>
-
-      <section class="block">
-        <h2>Claimed vs observed</h2>
-        <p>402Signal keeps the listing and the runtime observation separate. What sellers say is available is a claim. What the endpoint returned on this check is observed. <code>target.accepts</code> and <code>selected_payment</code> use the current HTTP 402 envelope only. Claimed schemas are not observed payment options. payable requires a complete observed option. invocable is payable plus input schema. A reachable HTTP 200 is a miss, not live.</p>
-      </section>
-
-      <section class="block">
-        <h2>Hybrid discovery</h2>
-        <p>Need-scoped search unions current upstream catalogs (Coinbase, PayAI, GoPlausible) with a process-local shadow catalog. That is not a full-world RAM index and not a published listing count. Live hits are write-through into the shadow. HTTP paths under <code>/data</code> stay 404.</p>
-        <p><code>discovery_via</code> is a compact per-rail map (<code>search</code>, <code>pages</code>, <code>error</code>, or <code>fixture</code>). <code>discovery_exhaustive</code> is true only when every queried rail was untruncated and <code>upstream_total</code> equals returned. Paid <code>/route</code> also returns <code>discovery_matches</code>, <code>candidates_discovered</code>, <code>candidates_considered</code>, and <code>candidates_probed</code>.</p>
-      </section>
-
-      <section class="block">
-        <h2>Freshness clocks</h2>
-        <p>Catalog rows keep three clocks: discovery (last seen in a catalog), claim (last fetched listing), and verification (last independent check). A paid route also returns this request's probe time. They are not one freshness field.</p>
-      </section>
-
-      <section class="block">
-        <h2>Finalist hydration</h2>
-        <p>Catalog rows stay slim. Only the top 5 to 10 finalists are hydrated with claimed method, schema, and toolName (bounded, TTL). Hydration is not payment and is not an observed 402 option.</p>
-      </section>
-
-      <section class="block">
-        <h2>Adaptive probing</h2>
-        <p>Typical plan: probe the first 3, then expand 2 to 4 more if there is no winner (standard cap 7). <code>thorough</code> may go to 15. Hard <code>probe_ceiling</code> is 20. The 55s budget can stop earlier. <code>candidate_evaluation_complete</code> is true only when every ranked candidate in this request's working set was probed, not the global catalog.</p>
-      </section>
-
-      <section class="block">
-        <h2>Stop reasons and miss reasons</h2>
-        <p><code>stop_reason</code> is why this request stopped probing: <code>winner_selected</code>, <code>candidate_set_exhausted</code>, <code>probe_limit_reached</code>, <code>probe_budget_exhausted</code>, or <code>constraints_unmet</code>. <code>probe_limit_reached</code> means the request <code>probe_ceiling</code> was hit with ranked candidates still untested and budget remaining. <code>probe_budget_exhausted</code> means ranked candidates remained when the 55s budget ended. Neither is <code>no_candidates</code>.</p>
-        <p><code>miss_reason</code> is a closed enum: <code>no_candidates</code>, <code>no_402_envelope</code>, <code>no_payto</code>, <code>reachable_200</code>, <code>probe_timeout</code>, <code>quote_expired</code>, <code>invalid_need</code>, <code>upstream_5xx</code>, <code>ssrf</code>, <code>no_input_schema</code>, <code>constraints_unmet</code>, <code>probe_budget_exhausted</code>, <code>probe_limit_reached</code>, <code>unsafe_to_probe</code>.</p>
-      </section>
-
-      <section class="block">
-        <h2>Readiness</h2>
-        <p>Readiness is a ladder, never a binary healthy flag: discovered, payable, invocable, recently_verified. Pulse may include <code>n_7d</code> and rates only when <code>n_7d &gt;= 10</code>. There is no public <code>healthy</code> and no <code>executable_now_rate</code>.</p>
-      </section>
-
-      <section class="block">
-        <h2>Reputation</h2>
-        <p>Components come first: observed, usage, tenure, stability, source_count. Then a V1 <code>reputation_score</code>, <code>reputation_confidence</code>, and <code>scoring_model_hash</code> / <code>scoring_model_id</code>. A score is never returned without components. Missing is not 0. There is no public 0-100 catalog badge. Unique payer address lists are never returned. <code>n_7d &lt; 10</code> means low confidence.</p>
-        <p>Resource reputation is endpoint observations. Provider identity is not live on this API. Do not treat a catalog host as a verified provider.</p>
-      </section>
-
-      <section class="block">
-        <h2>Rail economics and latency</h2>
-        <p>Each selected option can carry <code>economics</code> with provenance on every field: <code>402signal_observed</code>, <code>protocol_reference</code>, or <code>unknown</code>. <code>lowest_total_cost</code> fails closed when a fee is unknown.</p>
-        <p>Three different latencies exist. Probe RTT is this request's check. Service p50 is historical observed latency. Settlement / finality is chain confirmation, never probe RTT. <code>fastest</code> uses probe RTT. <code>fastest_settlement</code> uses settlement or cited finality.</p>
-      </section>
-
-      <section class="block">
-        <h2>Validate and attestation</h2>
-        <p><code>POST /validate</code> returns readiness, claimed vs observed, and flags. Never a binary healthy flag. Unpaid probes are GET first, then POST empty JSON only if GET was not a live 402 and POST is justified. Catalog-declared seller bodies are never POSTed. Required-body misses are <code>unsafe_to_probe</code>. DNS is resolved once and the TCP/TLS connection is pinned to those SSRF-checked public IPs with TLS SNI and HTTP Host set to the original hostname.</p>
-        <p><code>GET /attestation</code> is a public sha256 of a recent 402signal_observed probe batch. It is a hash of that batch, not an on-chain proof.</p>
-        <p>402Signal maintains a public append-only transparency log at <code>/pq/log/checkpoint</code> and <code>/pq/log/tile/*</code>.</p>
-        <p>Confirmed checkpoints are currently anchored to Algorand TestNet using native Falcon-1024 (f1) authorization.</p>
-        <p>The Algorand transaction authorizes a transparency-log checkpoint. It is not a merchant payment, and paid <code>/route</code> does not wait for blockchain confirmation.</p>
-        <p>The human-readable transparency view is available at <a href="/transparency">/transparency</a>.</p>
-        <p>Paid <code>/route</code> may include <code>pq_trust.transparency</code> with status <code>pending</code> or <code>unavailable</code>. <code>payment_authorization.pq_native</code> is false. There is no <code>/trust</code> page.</p>
-      </section>
-
-      <section class="block">
-        <h2>Public endpoints</h2>
-        <p>These match the OpenAPI surface. Paid paths are named as code, not links, so a browser click does not hit a paywall.</p>
-        <p><code>POST /route</code> · <code>GET /route</code> · <code>POST /mcp</code> tools/call route · <a href="/mcp.json">GET /mcp.json</a> · <a href="/preview?need=YOUR_NEED">GET /preview</a> · <a href="/rails">GET /rails</a> · <code>GET /health</code> · <a href="/pulse">GET /pulse</a> · <code>POST /validate</code> · <a href="/attestation">GET /attestation</a> · <a href="/openapi.json">GET /openapi.json</a> · <a href="/.well-known/x402.json">GET /.well-known/x402.json</a> · <a href="/llms.txt">GET /llms.txt</a></p>
-        <p>Human pages: <a href="/how">How it works</a> · <a href="/transparency">Transparency</a></p>
-        <p class="note">The human explanation lives on <a href="/how">How it works</a>. Machine log interfaces stay at <code>/pq/log/checkpoint</code> and <code>/pq/log/tile/*</code>. This page is the integration guide.</p>
-      </section>
-
-      <section class="block">
-        <h2>Docs</h2>
-        <p class="link-row">
-          <a href="/openapi.json">OpenAPI</a>
-          <a href="/llms.txt">llms.txt</a>
-          <a href="/transparency">Transparency</a>
-          <a href="https://github.com/402signal/402signal" rel="noopener noreferrer">GitHub</a>
-          <a href="/mcp.json">MCP tool definition</a>
-        </p>
+        </details>
+        <details class="tech-details">
+          <summary>Claimed vs observed</summary>
+          <div class="tech-body">
+            <p>402Signal keeps the listing and the runtime observation separate. What sellers say is available is a claim. What the endpoint returned on this check is observed. <code>target.accepts</code> and <code>selected_payment</code> use the current HTTP 402 envelope only. Claimed schemas are not observed payment options. payable requires a complete observed option. invocable is payable plus input schema. A reachable HTTP 200 is a miss, not live.</p>
+          </div>
+        </details>
+        <details class="tech-details">
+          <summary>Hybrid discovery</summary>
+          <div class="tech-body">
+            <p>Need-scoped search unions current upstream catalogs (Coinbase, PayAI, GoPlausible) with a process-local shadow catalog. That is not a full-world RAM index and not a published listing count. Live hits are write-through into the shadow. HTTP paths under <code>/data</code> stay 404.</p>
+            <p><code>discovery_via</code> is a compact per-rail map (<code>search</code>, <code>pages</code>, <code>error</code>, or <code>fixture</code>). <code>discovery_exhaustive</code> is true only when every queried rail was untruncated and <code>upstream_total</code> equals returned. Paid <code>/route</code> also returns <code>discovery_matches</code>, <code>candidates_discovered</code>, <code>candidates_considered</code>, and <code>candidates_probed</code>.</p>
+          </div>
+        </details>
+        <details class="tech-details">
+          <summary>Freshness clocks</summary>
+          <div class="tech-body">
+            <p>Catalog rows keep three clocks: discovery (last seen in a catalog), claim (last fetched listing), and verification (last independent check). A paid route also returns this request's probe time. They are not one freshness field.</p>
+          </div>
+        </details>
+        <details class="tech-details">
+          <summary>Finalist hydration</summary>
+          <div class="tech-body">
+            <p>Catalog rows stay slim. Only the top 5 to 10 finalists are hydrated with claimed method, schema, and toolName (bounded, TTL). Hydration is not payment and is not an observed 402 option.</p>
+          </div>
+        </details>
+        <details class="tech-details">
+          <summary>Adaptive probing</summary>
+          <div class="tech-body">
+            <p>Typical plan: probe the first 3, then expand 2 to 4 more if there is no winner (standard cap 7). <code>thorough</code> may go to 15. Hard <code>probe_ceiling</code> is 20. The 55s budget can stop earlier. <code>candidate_evaluation_complete</code> is true only when every ranked candidate in this request's working set was probed, not the global catalog.</p>
+          </div>
+        </details>
+        <details class="tech-details">
+          <summary>Stop reasons and miss reasons</summary>
+          <div class="tech-body">
+            <p><code>stop_reason</code> is why this request stopped probing: <code>winner_selected</code>, <code>candidate_set_exhausted</code>, <code>probe_limit_reached</code>, <code>probe_budget_exhausted</code>, or <code>constraints_unmet</code>. <code>probe_limit_reached</code> means the request <code>probe_ceiling</code> was hit with ranked candidates still untested and budget remaining. <code>probe_budget_exhausted</code> means ranked candidates remained when the 55s budget ended. Neither is <code>no_candidates</code>.</p>
+            <p><code>miss_reason</code> is a closed enum: <code>no_candidates</code>, <code>no_402_envelope</code>, <code>no_payto</code>, <code>reachable_200</code>, <code>probe_timeout</code>, <code>quote_expired</code>, <code>invalid_need</code>, <code>upstream_5xx</code>, <code>ssrf</code>, <code>no_input_schema</code>, <code>constraints_unmet</code>, <code>probe_budget_exhausted</code>, <code>probe_limit_reached</code>, <code>unsafe_to_probe</code>.</p>
+          </div>
+        </details>
+        <details class="tech-details">
+          <summary>Readiness</summary>
+          <div class="tech-body">
+            <p>Readiness is a ladder, never a binary healthy flag: discovered, payable, invocable, recently_verified. Pulse may include <code>n_7d</code> and rates only when <code>n_7d &gt;= 10</code>. There is no public <code>healthy</code> and no <code>executable_now_rate</code>.</p>
+          </div>
+        </details>
+        <details class="tech-details">
+          <summary>Reputation</summary>
+          <div class="tech-body">
+            <p>Components come first: observed, usage, tenure, stability, source_count. Then a V1 <code>reputation_score</code>, <code>reputation_confidence</code>, and <code>scoring_model_hash</code> / <code>scoring_model_id</code>. A score is never returned without components. Missing is not 0. There is no public 0-100 catalog badge. Unique payer address lists are never returned. <code>n_7d &lt; 10</code> means low confidence.</p>
+            <p>Resource reputation is endpoint observations. Provider identity is not live on this API. Do not treat a catalog host as a verified provider.</p>
+          </div>
+        </details>
+        <details class="tech-details">
+          <summary>Rail economics and latency</summary>
+          <div class="tech-body">
+            <p>Each selected option can carry <code>economics</code> with provenance on every field: <code>402signal_observed</code>, <code>protocol_reference</code>, or <code>unknown</code>. <code>lowest_total_cost</code> fails closed when a fee is unknown.</p>
+            <p>Three different latencies exist. Probe RTT is this request's check. Service p50 is historical observed latency. Settlement / finality is chain confirmation, never probe RTT. <code>fastest</code> uses probe RTT. <code>fastest_settlement</code> uses settlement or cited finality.</p>
+          </div>
+        </details>
+        <details class="tech-details">
+          <summary>Validate, attestation, and pq_trust</summary>
+          <div class="tech-body">
+            <p><code>POST /validate</code> returns readiness, claimed vs observed, and flags. Never a binary healthy flag. Unpaid probes are GET first, then POST empty JSON only if GET was not a live 402 and POST is justified. Catalog-declared seller bodies are never POSTed. Required-body misses are <code>unsafe_to_probe</code>. DNS is resolved once and the TCP/TLS connection is pinned to those SSRF-checked public IPs with TLS SNI and HTTP Host set to the original hostname.</p>
+            <p><code>GET /attestation</code> is a public sha256 of a recent 402signal_observed probe batch. It is a hash of that batch, not an on-chain proof.</p>
+            <p>402Signal maintains a public append-only transparency log at <code>/pq/log/checkpoint</code> and <code>/pq/log/tile/*</code>.</p>
+            <p>Confirmed checkpoints are currently anchored to Algorand TestNet using native Falcon-1024 (f1) authorization.</p>
+            <p>The Algorand transaction authorizes a transparency-log checkpoint. It is not a merchant payment, and paid <code>/route</code> does not wait for blockchain confirmation.</p>
+            <p>The human-readable transparency view is available at <a href="/transparency">/transparency</a>.</p>
+            <p>Paid <code>/route</code> may include <code>pq_trust.transparency</code> with status <code>pending</code> or <code>unavailable</code>. <code>pending</code> means a durable leaf plus a signed checkpoint. It is not a confirmed TestNet anchor. <code>payment_authorization.pq_native</code> is false. There is no <code>/trust</code> page.</p>
+          </div>
+        </details>
+        <details class="tech-details">
+          <summary>Public endpoints</summary>
+          <div class="tech-body">
+            <p>These match the OpenAPI surface. Paid paths are named as code, not links, so a browser click does not hit a paywall.</p>
+            <p><code>POST /route</code> · <code>GET /route</code> · <code>POST /mcp</code> tools/call route · <a href="/mcp.json">GET /mcp.json</a> · <a href="/preview?need=YOUR_NEED">GET /preview</a> · <a href="/rails">GET /rails</a> · <code>GET /health</code> · <a href="/pulse">GET /pulse</a> · <code>POST /validate</code> · <a href="/attestation">GET /attestation</a> · <a href="/openapi.json">GET /openapi.json</a> · <a href="/.well-known/x402.json">GET /.well-known/x402.json</a> · <a href="/llms.txt">GET /llms.txt</a></p>
+            <p>Human pages: <a href="/how">How it works</a> · <a href="/transparency">Transparency</a></p>
+            <p class="note">The human explanation lives on <a href="/how">How it works</a>. Machine log interfaces stay at <code>/pq/log/checkpoint</code> and <code>/pq/log/tile/*</code>.</p>
+          </div>
+        </details>
       </section>
 
       <section class="block quiet">
         <h2>Reference</h2>
         <p class="link-row">
+          <a href="/openapi.json">OpenAPI</a>
+          <a href="/llms.txt">llms.txt</a>
+          <a href="/mcp.json">MCP</a>
           <a href="/.well-known/x402.json">/.well-known/x402.json</a>
           <a href="/rails">/rails</a>
           <a href="/attestation">/attestation</a>
           <a href="/pulse">/pulse</a>
-          <a href="/transparency">/transparency</a>
+          <a href="/transparency">Transparency</a>
+          <a href="https://github.com/402signal/402signal" rel="noopener noreferrer">GitHub</a>
         </p>
       </section>
+
+      <details class="ecosystem">
+        <summary>Listed on</summary>
+        <p class="listed-on">
+          <a href="https://glama.ai/mcp/servers/402signal/402signal" rel="noopener noreferrer">Glama</a>
+          <a href="https://registry.modelcontextprotocol.io/?q=402signal" rel="noopener noreferrer">MCP Registry</a>
+          <a href="https://github.com/Haustorium12/gold-402/blob/main/directory/aggregators.md" rel="noopener noreferrer">Gold-402</a>
+          <a href="https://smithery.ai/servers/live402/signal" rel="noopener noreferrer">Smithery</a>
+          <a href="https://agentic.market/services/402signal-com" rel="noopener noreferrer">Agentic Market</a>
+          <a href="https://github.com/michielpost/x402-dev/blob/master/Projects.md" rel="noopener noreferrer">x402-dev</a>
+          <a href="https://facilitator.goplausible.xyz/dashboard/bazaar?q=402signal" rel="noopener noreferrer">GoPlausible</a>
+        </p>
+      </details>
     </main>
 
     <footer class="foot">
-      <p class="listed-on">
-        Listed on
-        <a href="https://glama.ai/mcp/servers/402signal/402signal" rel="noopener noreferrer">Glama</a>
-        <a href="https://registry.modelcontextprotocol.io/?q=402signal" rel="noopener noreferrer">MCP Registry</a>
-        <a href="https://github.com/Haustorium12/gold-402/blob/main/directory/aggregators.md" rel="noopener noreferrer">Gold-402</a>
-        <a href="https://smithery.ai/servers/live402/signal" rel="noopener noreferrer">Smithery</a>
-        <a href="https://agentic.market/services/402signal-com" rel="noopener noreferrer">Agentic Market</a>
-        <a href="https://github.com/michielpost/x402-dev/blob/master/Projects.md" rel="noopener noreferrer">x402-dev</a>
-        <a href="https://facilitator.goplausible.xyz/dashboard/bazaar?q=402signal" rel="noopener noreferrer">GoPlausible</a>
-      </p>
       <p>
         <a href="https://github.com/402signal/402signal" rel="noopener noreferrer">GitHub</a>
         <a href="https://x.com/402Signal" rel="noopener noreferrer">@402Signal</a>

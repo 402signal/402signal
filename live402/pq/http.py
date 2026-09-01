@@ -16,19 +16,40 @@ from live402.pq import tiles as tilemod
 
 CHECKPOINT_TYPE = "text/plain; charset=utf-8"
 TILE_TYPE = "application/octet-stream"
+# Inclusive C2SP / SQLite INTEGER range. 1 <= n <= 2^63-1.
+MAX_TREE_SIZE = 9223372036854775807
+_MAX_TREE_DIGITS = 19
+
+
+def parse_checkpoint_tree_size(rel: str) -> tuple[bool, int | None]:
+    """Parse checkpoint/{tree_size}.
+
+    Returns (is_sized_path, n). n is None when the path is a sized checkpoint
+    request that must 404 without touching the checkpoint table: 0, leading
+    zero, sign, whitespace, junk, overflow, or more than 19 digits.
+    """
+    prefix = "checkpoint/"
+    if not rel.startswith(prefix):
+        return False, None
+    rest = rel[len(prefix) :]
+    if not rest or "/" in rest:
+        return True, None
+    if not rest.isdigit() or rest.startswith("0"):
+        return True, None
+    if len(rest) > _MAX_TREE_DIGITS:
+        return True, None
+    n = int(rest)
+    if n < 1 or n > MAX_TREE_SIZE:
+        return True, None
+    return True, n
 
 
 def _checkpoint_tree_size(rel: str) -> int | None:
-    """Parse checkpoint/{tree_size}. None if not that path. Reject junk."""
-    prefix = "checkpoint/"
-    if not rel.startswith(prefix):
+    """Parse checkpoint/{tree_size}. None if not a valid sized path."""
+    is_sized, n = parse_checkpoint_tree_size(rel)
+    if not is_sized:
         return None
-    rest = rel[len(prefix) :]
-    if not rest or "/" in rest:
-        return None
-    if not rest.isdigit() or (rest.startswith("0") and rest != "0"):
-        return None
-    return int(rest)
+    return n
 
 
 def is_log_path(path: str) -> bool:
@@ -50,13 +71,18 @@ def handle(path: str) -> tuple[int, bytes, str, dict]:
             }
         data = note.encode("utf-8")
         return 200, data, CHECKPOINT_TYPE, {"Cache-Control": "no-store"}
-    sized = _checkpoint_tree_size(rel)
-    if sized is not None:
+    is_sized, sized = parse_checkpoint_tree_size(rel)
+    if is_sized:
+        missing = {"Cache-Control": "no-store"}
+        not_found = (404, b'{"error": "no_checkpoint"}', "application/json; charset=utf-8", missing)
+        if sized is None:
+            return not_found
+        current = int(store.size() or 0)
+        if sized > current:
+            return not_found
         note = store.checkpoint_at(sized)
         if not note:
-            return 404, b'{"error": "no_checkpoint"}', "application/json; charset=utf-8", {
-                "Cache-Control": "no-store"
-            }
+            return not_found
         data = note.encode("utf-8")
         return 200, data, CHECKPOINT_TYPE, {"Cache-Control": "no-store"}
     if rel.startswith("tile/"):

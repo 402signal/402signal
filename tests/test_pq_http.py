@@ -94,6 +94,34 @@ class C2SPHttpTests(unittest.TestCase):
         status, _raw, _hdrs = self._get("/pq/log/checkpoint/999999")
         self.assertEqual(status, 404)
 
+    def test_checkpoint_size_rejects_junk_without_500(self):
+        cases = (
+            "/pq/log/checkpoint/" + ("9" * 500),
+            "/pq/log/checkpoint/-1",
+            "/pq/log/checkpoint/+1",
+            "/pq/log/checkpoint/01",
+            "/pq/log/checkpoint/0",
+            "/pq/log/checkpoint/1e2",
+            "/pq/log/checkpoint/1%201",
+            "/pq/log/checkpoint/%201",
+            "/pq/log/checkpoint/9223372036854775808",
+            "/pq/log/checkpoint/junk",
+            "/pq/log/checkpoint/1/",
+        )
+        for path in cases:
+            status, raw, hdrs = self._get(path)
+            self.assertEqual(status, 404, path)
+            self.assertNotEqual(status, 500, path)
+            self.assertTrue(raw, path)
+            self.assertIn("json", (hdrs.get("content-type") or "").lower(), path)
+
+    def test_docs_falcon_anchoring_wording(self):
+        spec = json.dumps(discover.openapi_spec())
+        self.assertIn("Falcon anchoring is TestNet-only", spec)
+        self.assertIn("Eligible checkpoints may be broadcast to Algorand TestNet", spec)
+        self.assertIn("MainNet broadcasting is not enabled", spec)
+        self.assertNotIn("Falcon broadcast is TestNet-only and off by default", spec)
+
     def test_head_checkpoint(self):
         status, raw, hdrs = self._get("/pq/log/checkpoint", method="HEAD")
         self.assertEqual(status, 200)

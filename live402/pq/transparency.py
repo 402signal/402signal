@@ -19,6 +19,7 @@ from live402.pq import checkpoint as ckpt
 from live402.pq import store
 from live402.pq import trust
 from live402.pq import worker
+from live402 import site_chrome
 
 _PLACEHOLDER_TXID = frozenset({"", "your_txid", "placeholder", "txid", "none", "null"})
 _SECRET_MARKERS = (
@@ -224,7 +225,11 @@ def authorized_lifecycle() -> dict | None:
 
 
 def parse_checkpoint_fields(note: str) -> dict | None:
-    """Parse a signed or unsigned checkpoint note. Does not rewrite bytes."""
+    """Parse a signed or unsigned checkpoint note. Size-labeling only.
+
+    Never treat this as a successful bound proof. bound_checkpoint requires
+    a trusted Ed25519 vkey and verify_signed_note.
+    """
     if not note or not isinstance(note, str):
         return None
     try:
@@ -247,7 +252,12 @@ def parse_checkpoint_fields(note: str) -> dict | None:
 
 
 def bound_checkpoint(conf: dict | None) -> dict | None:
-    """Signed checkpoint for the confirmed tree only. Fail closed on mismatch."""
+    """Signed checkpoint for the confirmed tree only. Fail closed.
+
+    Requires checkpoint_at(confirmed_size), a trusted Ed25519 vkey,
+    verify_signed_note success, and origin / size / root match. Missing
+    vkey, unsigned body, or a bad signature is not a bound checkpoint.
+    """
     if not conf:
         return None
     size = int(conf.get("size") or 0)
@@ -256,26 +266,33 @@ def bound_checkpoint(conf: dict | None) -> dict | None:
     note = store.checkpoint_at(size)
     if not note:
         return None
-    parsed = parse_checkpoint_fields(note)
-    if not parsed:
-        return None
-    want_origin = str(conf.get("origin") or ORIGIN)
-    if parsed["origin"] != want_origin:
-        return None
-    if parsed["tree_size"] != size:
-        return None
-    if parsed["root_hex"] != str(conf.get("root") or ""):
-        return None
     vkey = public_vkey()
-    if vkey:
-        try:
-            ckpt.verify_signed_note(note, vkey)
-        except ValueError:
-            return None
+    if not vkey:
+        return None
+    try:
+        verified = ckpt.verify_signed_note(note, vkey)
+    except ValueError:
+        return None
+    body = verified.get("body") if isinstance(verified, dict) else None
+    if not isinstance(body, dict):
+        return None
+    root = body.get("root")
+    if not isinstance(root, (bytes, bytearray)) or len(root) != 32:
+        return None
+    origin = str(body.get("origin") or "")
+    tree_size = int(body.get("tree_size") or 0)
+    root_hex = bytes(root).hex()
+    want_origin = str(conf.get("origin") or ORIGIN)
+    if origin != want_origin:
+        return None
+    if tree_size != size:
+        return None
+    if root_hex != str(conf.get("root") or ""):
+        return None
     return {
         "size": size,
-        "origin": parsed["origin"],
-        "root_hex": parsed["root_hex"],
+        "origin": origin,
+        "root_hex": root_hex,
         "href": "/pq/log/checkpoint/%s" % size,
     }
 
@@ -286,43 +303,59 @@ def log_integrity_error(current: int, confirmed: dict | None) -> bool:
     return current < int(confirmed.get("size") or 0)
 
 
+def _history_row_ok(row: dict) -> dict | None:
+    txid = str(row.get("txid") or "").strip()
+    size = int(row.get("size") or 0)
+    rnd = int(row.get("round") or 0)
+    if size < 1 or rnd < 1 or not _looks_like_txid(txid):
+        return None
+    explorer = pera_tx_url(txid)
+    if not explorer:
+        return None
+    return {
+        "size": size,
+        "txid": txid,
+        "round": rnd,
+        "at": int(row.get("at") or 0),
+        "utc": utc_text(int(row.get("at") or 0)),
+        "iso": utc_iso(int(row.get("at") or 0)),
+        "explorer": explorer,
+        "root": root_hex(row.get("root")),
+    }
+
+
 def history_rows() -> list[dict]:
-    rows = store.list_confirmed_anchors(limit=HISTORY_LIMIT)
+    """Latest 250 confirmed anchors. Query 251 so the oldest visible delta
+    can use a hidden baseline. The baseline row is never rendered.
+    """
+    fetched = store.list_confirmed_anchors(limit=HISTORY_LIMIT + 1)
+    hidden = fetched[HISTORY_LIMIT] if len(fetched) > HISTORY_LIMIT else None
+    visible_src = fetched[:HISTORY_LIMIT]
     valid = []
-    for row in rows:
-        txid = str(row.get("txid") or "").strip()
-        size = int(row.get("size") or 0)
-        rnd = int(row.get("round") or 0)
-        if size < 1 or rnd < 1 or not _looks_like_txid(txid):
-            continue
-        explorer = pera_tx_url(txid)
-        if not explorer:
-            continue
-        valid.append(
-            {
-                "size": size,
-                "txid": txid,
-                "round": rnd,
-                "at": int(row.get("at") or 0),
-                "utc": utc_text(int(row.get("at") or 0)),
-                "iso": utc_iso(int(row.get("at") or 0)),
-                "explorer": explorer,
-                "root": root_hex(row.get("root")),
-            }
-        )
+    for row in visible_src:
+        parsed = _history_row_ok(row)
+        if parsed:
+            valid.append(parsed)
+    baseline = 0
+    if hidden:
+        hidden_ok = _history_row_ok(hidden)
+        if hidden_ok:
+            baseline = int(hidden_ok["size"])
     chronological = sorted(valid, key=lambda r: (r["at"], r["size"]))
-    prev = 0
+    prev = baseline
     deltas = {}
     spans = {}
     for row in chronological:
         size = row["size"]
-        deltas[id(row)] = size if prev <= 0 else size - prev
         if prev <= 0:
+            deltas[id(row)] = size
             spans[id(row)] = "leaves 1–%s" % size if size >= 1 else ""
-        elif size > prev:
-            spans[id(row)] = "leaves %s–%s" % (prev + 1, size)
         else:
-            spans[id(row)] = ""
+            deltas[id(row)] = size - prev
+            if size > prev:
+                spans[id(row)] = "leaves %s–%s" % (prev + 1, size)
+            else:
+                spans[id(row)] = ""
         prev = size
     for row in valid:
         row["delta"] = deltas.get(id(row), row["size"])
@@ -373,7 +406,7 @@ def homepage_pq_html() -> str:
     if log_integrity_error(int(store.size() or 0), conf):
         return ""
     evidence = (
-        '        <p class="pq-evidence">Latest checkpoint · Tree %s · Block %s · Confirmed</p>\n'
+        '        <p class="pq-evidence">Latest anchor · Tree %s · Block %s · Confirmed</p>\n'
         % (esc(conf["size"]), esc(conf["round"]))
     )
     return (
@@ -387,7 +420,7 @@ def homepage_pq_html() -> str:
         f"{evidence}"
         "        <p>So if an agent pays for an API, research, or service, the evidence "
         "behind that routing decision can’t simply be rewritten later.</p>\n"
-        '        <p><a class="btn secondary" href="/transparency">View transparency log</a></p>\n'
+        '        <p><a class="btn secondary" href="/transparency">View transparency</a></p>\n'
         "      </section>\n"
     )
 
@@ -460,7 +493,7 @@ def _status_strip(model: dict) -> str:
     latest = _time(confirmed["utc"], confirmed["iso"]) if confirmed else "-"
     last_anchored = str(confirmed_size) if confirmed else "-"
     return (
-        '<section class="pq-status" aria-label="Live log status">\n'
+        '<section class="status-grid pq-status" aria-label="Live log status">\n'
         '  <div><p class="pq-kicker">LOG SIZE</p><p class="pq-stat">%s</p></div>\n'
         '  <div><p class="pq-kicker">LAST ANCHORED</p><p class="pq-stat">%s</p></div>\n'
         '  <div><p class="pq-kicker">SINCE ANCHOR</p><p class="pq-stat">%s</p></div>\n'
@@ -472,42 +505,8 @@ def _status_strip(model: dict) -> str:
 
 
 def _four_stage(model: dict | None = None) -> str:
-    proof = ""
-    if not (model or {}).get("integrity_error"):
-        proof = (
-            "<p class=\"note\">Proof chain: routing evidence is committed to an append-only log; "
-            "402Signal signs a checkpoint of that log; the checkpoint is authorized on Algorand "
-            "TestNet with Falcon-1024 (f1).</p>\n"
-        )
-    return (
-        '<div class="flow flow-four" role="img" '
-        'aria-label="Routing evidence, then append-only log, then signed checkpoint, then Algorand TestNet">\n'
-        '  <div class="flow-box">\n'
-        '    <p class="flow-kicker">ROUTING EVIDENCE</p>\n'
-        '    <p class="flow-title">Commitments</p>\n'
-        "    <p class=\"flow-detail\">Commitments to what 402Signal observed and selected.</p>\n"
-        "  </div>\n"
-        '  <div class="flow-conn" aria-hidden="true"></div>\n'
-        '  <div class="flow-box">\n'
-        '    <p class="flow-kicker">APPEND-ONLY LOG</p>\n'
-        '    <p class="flow-title">Merkle history</p>\n'
-        "    <p class=\"flow-detail\">A growing Merkle history that exposes later rewriting.</p>\n"
-        "  </div>\n"
-        '  <div class="flow-conn" aria-hidden="true"></div>\n'
-        '  <div class="flow-box">\n'
-        '    <p class="flow-kicker">SIGNED CHECKPOINT</p>\n'
-        '    <p class="flow-title">Ed25519 identity</p>\n'
-        "    <p class=\"flow-detail\">402Signal signs the current Merkle root with its Ed25519 log identity.</p>\n"
-        "  </div>\n"
-        '  <div class="flow-conn" aria-hidden="true"></div>\n'
-        '  <div class="flow-box flow-emphasis">\n'
-        '    <p class="flow-kicker">ALGORAND TESTNET</p>\n'
-        '    <p class="flow-title">Falcon-1024 / f1</p>\n'
-        "    <p class=\"flow-detail\">The checkpoint is anchored using Falcon-1024 / f1 authorization.</p>\n"
-        "  </div>\n"
-        "</div>\n"
-        + proof
-    )
+    del model
+    return site_chrome.signal_flow_html(variant="proof")
 
 
 def _pera_views(model: dict) -> str:
@@ -546,10 +545,6 @@ def _confirmed_card(model: dict) -> str:
             "  <p>TestNet anchoring has not yet produced a confirmed checkpoint.</p>\n"
             "</section>\n"
         )
-    note = model["note"]
-    decoder = _pq1_decoder(note) if note else (
-        "<p>The committed note could not be reconstructed from verified fields.</p>\n"
-    )
     return (
         '<section class="block" id="latest-confirmed">\n'
         "  <h2>Latest confirmed checkpoint</h2>\n"
@@ -578,22 +573,16 @@ def _confirmed_card(model: dict) -> str:
         "%s"
         "    </p>\n"
         "  </article>\n"
-        '  <div class="pq-decoder">\n'
-        "    <h3>What the transaction commits</h3>\n"
-        "    <p>Generic explorers may show unreadable text. 402Signal decodes the same 84-byte PQ1 layout.</p>\n"
-        "%s"
-        "  </div>\n"
         "</section>\n"
         % (
             esc(conf["size"]),
-            _mono_copy(conf["root"], what="Merkle root"),
+            _mono_copy(conf["root"], abbreviate(conf["root"]), "Merkle root"),
             _time(conf["utc"], conf["iso"]),
             esc(conf["round"]),
             _mono_copy(conf["txid"], abbreviate(conf["txid"]), "transaction id"),
             _falcon_account_row(model["falcon_address"]),
             esc(conf["explorer"]),
             _confirmed_checkpoint_cta(model),
-            decoder,
         )
     )
 
@@ -650,6 +639,8 @@ def _pq1_decoder(note: dict) -> str:
 
 
 def _current_vs_anchored(model: dict) -> str:
+    if model.get("caught_up") and not model.get("integrity_error"):
+        return ""
     current = model["current_size"]
     confirmed_size = model["confirmed_size"]
     growth = model["growth"]
@@ -733,7 +724,7 @@ def _history(model: dict) -> str:
         '<section class="block" id="anchor-history">\n'
         "  <h2>Anchor history</h2>\n"
         + heading
-        + '  <div class="table-wrap history-table">\n'
+        + '  <div class="table-wrap history-table desktop-only">\n'
         '    <table class="anchor-table">\n'
         "      <thead><tr><th scope=\"col\">TREE</th><th scope=\"col\">Δ LEAVES</th>"
         "<th scope=\"col\">VERIFIED</th><th scope=\"col\">BLOCK</th>"
@@ -741,7 +732,7 @@ def _history(model: dict) -> str:
         "      <tbody>%s</tbody>\n"
         "    </table>\n"
         "  </div>\n"
-        '  <div class="history-cards">%s</div>\n'
+        '  <div class="history-cards mobile-only">%s</div>\n'
         "%s"
         "</section>\n"
         % ("".join(body), "".join(cards), _growth_chart(rows))
@@ -771,10 +762,10 @@ def _growth_chart(rows: list[dict]) -> str:
         circles.append('<circle cx="%.1f" cy="%.1f" r="3.5" fill="#fec865" />' % (x, y))
     return (
         '<figure class="growth-chart">\n'
-        "  <figcaption>Confirmed tree size at each confirmed time. "
-        "The line joins those observations only.</figcaption>\n"
+        "  <figcaption>Tree size at each time 402Signal verified a confirmed "
+        "TestNet anchor. The line joins those observations only.</figcaption>\n"
         '  <svg viewBox="0 0 %s %s" role="img" '
-        'aria-label="Confirmed tree size at each confirmed timestamp. '
+        'aria-label="Tree size at each time 402Signal verified a confirmed TestNet anchor. '
         'Points are real confirmed checkpoints. The line joins those observations.">\n'
         '    <polyline fill="none" stroke="#e49c60" stroke-width="1.5" points="%s" />\n'
         "    %s\n"
@@ -849,12 +840,7 @@ def _technical(model: dict) -> str:
                 % esc(conf["indexer"])
             )
     body = "\n".join(parts) if parts else "<p>No additional public fields yet.</p>"
-    return (
-        '<details class="tech-details">\n'
-        "  <summary>Technical details</summary>\n"
-        '  <div class="tech-body">%s</div>\n'
-        "</details>\n" % body
-    )
+    return "<h3>Technical details</h3>\n<div class=\"tech-body\">%s</div>\n" % body
 
 
 def _verify_yourself(model: dict) -> str:
@@ -869,7 +855,7 @@ def _verify_yourself(model: dict) -> str:
         )
     )
     if conf and conf.get("root"):
-        copies.append(("Merkle root", conf["root"], None, "Merkle root"))
+        copies.append(("Merkle root", conf["root"], abbreviate(conf["root"]), "Merkle root"))
     if conf and conf.get("txid"):
         copies.append(("Txid", conf["txid"], abbreviate(conf["txid"]), "transaction id"))
     if model["vkey"]:
@@ -939,49 +925,11 @@ def _chrome_head(title: str, description: str, canonical: str) -> str:
 
 
 def _site_header() -> str:
-    return (
-        '    <header class="site">\n'
-        '      <a class="brand" href="/">\n'
-        '        <span class="mark">402</span>\n'
-        '        <span class="brand-name">402Signal</span>\n'
-        "      </a>\n"
-        '      <nav class="nav" aria-label="Primary">\n'
-        '        <a href="/catalog">Catalog</a>\n'
-        '        <a href="/how">How it works</a>\n'
-        '        <a href="/developers">Developers</a>\n'
-        '        <a href="https://github.com/402signal/402signal" rel="noopener noreferrer">GitHub</a>\n'
-        "      </nav>\n"
-        "    </header>\n"
-    )
+    return site_chrome.header_html()
 
 
 def _site_footer(*, current: str = "") -> str:
-    trans = (
-        '        <a href="/transparency" aria-current="page">Transparency</a>\n'
-        if current == "/transparency"
-        else '        <a href="/transparency">Transparency</a>\n'
-    )
-    return (
-        '    <footer class="foot">\n'
-        '      <p class="listed-on">\n'
-        "        Listed on\n"
-        '        <a href="https://glama.ai/mcp/servers/402signal/402signal" rel="noopener noreferrer">Glama</a>\n'
-        '        <a href="https://registry.modelcontextprotocol.io/?q=402signal" rel="noopener noreferrer">MCP Registry</a>\n'
-        '        <a href="https://github.com/Haustorium12/gold-402/blob/main/directory/aggregators.md" rel="noopener noreferrer">Gold-402</a>\n'
-        '        <a href="https://smithery.ai/servers/live402/signal" rel="noopener noreferrer">Smithery</a>\n'
-        '        <a href="https://agentic.market/services/402signal-com" rel="noopener noreferrer">Agentic Market</a>\n'
-        '        <a href="https://github.com/michielpost/x402-dev/blob/master/Projects.md" rel="noopener noreferrer">x402-dev</a>\n'
-        '        <a href="https://facilitator.goplausible.xyz/dashboard/bazaar?q=402signal" rel="noopener noreferrer">GoPlausible</a>\n'
-        "      </p>\n"
-        "      <p>\n"
-        '        <a href="https://github.com/402signal/402signal" rel="noopener noreferrer">GitHub</a>\n'
-        '        <a href="https://x.com/402Signal" rel="noopener noreferrer">@402Signal</a>\n'
-        '        <a href="/openapi.json">OpenAPI</a>\n'
-        + trans
-        + '        <a href="mailto:402signal@gmail.com">Contact</a>\n'
-        "      </p>\n"
-        "    </footer>\n"
-    )
+    return site_chrome.footer_html(current=current)
 
 
 def render_html() -> str:
@@ -1013,6 +961,36 @@ def page_html() -> str:
     return html
 
 
+def _verification_details(model: dict) -> str:
+    note = model.get("note")
+    decoder = ""
+    if model.get("confirmed"):
+        if note:
+            decoder = (
+                '<div class="pq-decoder">\n'
+                "  <h3>What the transaction commits</h3>\n"
+                "  <p>Generic explorers may show unreadable text. 402Signal decodes the same "
+                "84-byte PQ1 layout.</p>\n"
+                "%s"
+                "</div>\n" % _pq1_decoder(note)
+            )
+        else:
+            decoder = (
+                "<p>The committed note could not be reconstructed from verified fields.</p>\n"
+            )
+    return (
+        '<details class="tech-details" id="verification-details">\n'
+        "  <summary>Verification details</summary>\n"
+        '  <div class="tech-body">\n'
+        + decoder
+        + _pera_views(model)
+        + _technical(model)
+        + _verify_yourself(model)
+        + "  </div>\n"
+        "</details>\n"
+    )
+
+
 def _main(model: dict) -> str:
     return (
         '      <section class="hero compact">\n'
@@ -1022,6 +1000,11 @@ def _main(model: dict) -> str:
         "append-only transparency log. Signed checkpoints are periodically anchored to "
         "Algorand TestNet using native Falcon-1024 authorization.</p>\n"
         "        <p class=\"note\">Routing never waits for blockchain confirmation.</p>\n"
+        "        <p class=\"privacy-note\">Transparent history, not public requests. This page "
+        "shows 402Signal infrastructure commitments: log size, signed checkpoints, and "
+        "confirmed TestNet anchors. It does not publish agent needs, wallets, payment "
+        "signatures, or seller response bodies. It is not a claim of anonymous, unlinkable, "
+        "or fully private traffic.</p>\n"
         "      </section>\n"
         '      <section class="block">\n'
         "        <h2>Why this matters</h2>\n"
@@ -1041,10 +1024,9 @@ def _main(model: dict) -> str:
         + _status_strip(model)
         + _four_stage(model)
         + _confirmed_card(model)
-        + _pera_views(model)
         + _current_vs_anchored(model)
         + _history(model)
-        + _technical(model)
+        + _verification_details(model)
         + '      <section class="block">\n'
         "        <h2>What this proves</h2>\n"
         "        <p>This anchor commits a specific log state to TestNet. Anyone can compare the "
@@ -1057,7 +1039,6 @@ def _main(model: dict) -> str:
         "payments PQ-safe via Falcon; identify or authenticate a seller; or guarantee future "
         "endpoint behavior.</p>\n"
         "      </section>\n"
-        + _verify_yourself(model)
     )
 
 

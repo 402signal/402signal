@@ -19,15 +19,14 @@
         <a href="/catalog">Catalog</a>
         <a href="/how">How it works</a>
         <a href="/developers">Developers</a>
-        <a href="https://github.com/402signal/402signal" rel="noopener noreferrer">GitHub</a>
       </nav>
     </header>
 
     <main>
       <section class="hero compact">
         <h1>This is the paid routing endpoint.</h1>
-        <p class="lede">Agents POST /route when they want 402Signal to check an x402 service immediately before spending. An unpaid request returns HTTP 402 with the $0.01 USDC payment requirements. After payment, 402Signal returns a live route with evidence or an explicit miss.</p>
-        <p class="note">402Signal does not hold your wallet or pay the selected service.</p>
+        <p class="lede">Agents POST /route. Unpaid: HTTP 402, $0.01 USDC. Paid: a live route with evidence, or a typed miss.</p>
+        <p class="note">Your agent keeps the wallet. 402Signal does not pay the selected service.</p>
         <div class="hero-actions">
           <a class="btn" href="/developers">Developer docs</a>
           <a class="btn secondary" href="/catalog">Browse catalog</a>
@@ -36,16 +35,6 @@
     </main>
 
     <footer class="foot">
-      <p class="listed-on">
-        Listed on
-        <a href="https://glama.ai/mcp/servers/402signal/402signal" rel="noopener noreferrer">Glama</a>
-        <a href="https://registry.modelcontextprotocol.io/?q=402signal" rel="noopener noreferrer">MCP Registry</a>
-        <a href="https://github.com/Haustorium12/gold-402/blob/main/directory/aggregators.md" rel="noopener noreferrer">Gold-402</a>
-        <a href="https://smithery.ai/servers/live402/signal" rel="noopener noreferrer">Smithery</a>
-        <a href="https://agentic.market/services/402signal-com" rel="noopener noreferrer">Agentic Market</a>
-        <a href="https://github.com/michielpost/x402-dev/blob/master/Projects.md" rel="noopener noreferrer">x402-dev</a>
-        <a href="https://facilitator.goplausible.xyz/dashboard/bazaar?q=402signal" rel="noopener noreferrer">GoPlausible</a>
-      </p>
       <p>
         <a href="https://github.com/402signal/402signal" rel="noopener noreferrer">GitHub</a>
         <a href="https://x.com/402Signal" rel="noopener noreferrer">@402Signal</a>

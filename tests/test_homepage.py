@@ -19,7 +19,7 @@ from live402.server import Handler
 
 STATIC = Path(__file__).resolve().parent.parent / "live402" / "static"
 
-NAV_LABELS = ("Catalog", "How it works", "Developers", "GitHub")
+NAV_LABELS = ("Catalog", "How it works", "Developers")
 LISTED_ON = (
     ("Glama", "https://glama.ai/mcp/servers/402signal/402signal"),
     ("MCP Registry", "https://registry.modelcontextprotocol.io/?q=402signal"),
@@ -229,7 +229,7 @@ class HomepageProductTests(unittest.TestCase):
             html,
         )
         self.assertIn(
-            "402Signal checks x402 services immediately before an agent uses them. It keeps catalog claims separate from what the endpoint actually returns, then gives the agent a route or a clear miss.",
+            "Independent signal an agent checks immediately before spending. Discovery listings are claims. 402Signal reports what the endpoint actually returned. Routing never waits for chain.",
             html,
         )
         self.assertIn("Base · Solana · Algorand", html)
@@ -237,16 +237,24 @@ class HomepageProductTests(unittest.TestCase):
         self.assertIn("Developer docs", html)
         self.assertIn('href="/catalog"', html)
         self.assertIn('href="/developers"', html)
-        self.assertIn("402Signal recommends the route. Your agent keeps the wallet.", html)
-        self.assertIn("What discovery sources say is available", html)
+        self.assertIn("$0.01 USDC per live routing check · your agent keeps the wallet.", html)
+        self.assertIn("What catalogs claim", html)
         self.assertIn("Check it now", html)
         self.assertIn("Decide whether to spend", html)
-        self.assertIn("If the check does not pass, 402Signal returns a miss instead of quietly substituting an unverified service.", html)
-        self.assertIn("The live routing check costs $0.01 USDC. 402Signal does not hold your keys or pay the selected seller for you.", html)
-        self.assertIn("Browse the catalog", html)
-        self.assertIn("Use 402Signal in an agent", html)
+        self.assertIn("A decision, with evidence", html)
+        self.assertIn(">ROUTE<", html)
+        self.assertIn(">EVIDENCE<", html)
+        self.assertIn(">MISS<", html)
+        self.assertIn(">HISTORY<", html)
+        self.assertIn('class="signal-flow"', html)
+        self.assertIn('class="trust-rail"', html)
+        self.assertIn("Algorand TestNet · Falcon-1024", html)
+        self.assertNotIn("Browse the catalog", html)
+        self.assertNotIn("Use 402Signal in an agent", html)
         self.assertNotIn("<pre", html)
         self.assertNotIn("<code>", html)
+        self.assertNotIn("Latest checkpoint", html)
+        self.assertNotIn("Falcon", _parse(html).h1[0])
 
     def test_old_one_page_sections_gone_from_home(self):
         html = self.home
@@ -282,10 +290,11 @@ class HomepageProductTests(unittest.TestCase):
                     "/catalog",
                     "/how",
                     "/developers",
-                    "https://github.com/402signal/402signal",
                 ],
                 path,
             )
+            self.assertNotIn("GitHub", labels)
+            self.assertNotIn("Transparency", labels)
             self.assertIn('class="mark"', html)
             self.assertIn('class="brand-name"', html)
             self.assertIn(">402Signal<", html)
@@ -302,9 +311,11 @@ class HomepageProductTests(unittest.TestCase):
         html = self.catalog
         self.assertIn("Browse x402 services", html)
         self.assertIn("Search discovery listings across Base, Solana and Algorand.", html)
-        self.assertIn("These are discovery listings, not fresh checks.", html)
-        self.assertIn("OBSERVED means prior 402Signal history when it exists.", html)
-        self.assertIn("Before an agent spends, use the paid /route check for a current observation.", html)
+        self.assertIn("Discovery listings are candidates.", html)
+        self.assertIn("OBSERVED is prior 402Signal history when it exists, not a live check.", html)
+        self.assertIn("Before spending, use paid /route.", html)
+        self.assertNotIn("PQ", html)
+        self.assertNotIn("Falcon", html)
         self.assertIn("What does your agent need?", html)
         self.assertIn('id="search-form"', html)
         self.assertIn('id="search-btn"', html)
@@ -369,7 +380,14 @@ class HomepageProductTests(unittest.TestCase):
         self.assertIn("402Signal keeps the listing and the runtime observation separate.", html)
         self.assertIn("What a live check can establish", html)
         self.assertIn("Did the endpoint return a valid, parseable x402 challenge?", html)
+        self.assertIn(">PAYMENT<", html)
+        self.assertIn(">TERMS<", html)
+        self.assertIn(">INVOCATION<", html)
+        self.assertIn(">FRESHNESS<", html)
+        self.assertIn(">EVIDENCE<", html)
         self.assertIn(">Readiness<", html)
+        self.assertIn('class="signal-flow"', html)
+        self.assertIn("Trust path", html)
         self.assertIn("Found in supported discovery infrastructure.", html)
         self.assertIn("402Signal stops before seller execution", html)
         self.assertIn("402Signal recommends a route.", html)
@@ -384,6 +402,8 @@ class HomepageProductTests(unittest.TestCase):
         html = self.devs
         self.assertIn("Use 402Signal from an agent", html)
         self.assertIn("Send the capability you need. Pay $0.01 USDC for the live routing check.", html)
+        self.assertIn("Your agent keeps the wallet.", html)
+        self.assertIn("<details", html)
         self.assertIn(">HTTP<", html)
         self.assertIn(">MCP<", html)
         self.assertIn("<code>POST /route</code>", html)
@@ -432,10 +452,16 @@ class HomepageProductTests(unittest.TestCase):
         expected = list(LISTED_ON)
         for path, html in self.pages.items():
             parsed = _parse(html)
-            self.assertIn("Listed on", html, path)
-            self.assertEqual(parsed.listed_links, expected, path)
-            self.assertEqual(parsed.listed_imgs, 0, path)
-            self.assertEqual(html.count("listed-on"), 1, path)
+            if path == "/developers":
+                self.assertIn("Listed on", html, path)
+                self.assertIn("<details", html, path)
+                self.assertEqual(parsed.listed_links, expected, path)
+                self.assertEqual(parsed.listed_imgs, 0, path)
+                self.assertEqual(html.count("listed-on"), 1, path)
+            else:
+                self.assertNotIn("Listed on", html, path)
+                self.assertNotIn("listed-on", html, path)
+                self.assertEqual(parsed.listed_links, [], path)
             for blob in forbidden:
                 self.assertNotIn(blob, html, path)
             self.assertIn("mailto:402signal@gmail.com", html, path)
@@ -443,6 +469,7 @@ class HomepageProductTests(unittest.TestCase):
             self.assertIn("https://x.com/402Signal", html, path)
             self.assertIn('href="/transparency"', html, path)
             self.assertIn(">Transparency<", html, path)
+            self.assertIn("https://github.com/402signal/402signal", html, path)
 
     def test_probe_and_wallet_absent(self):
         for name in ("index.html", "catalog.html", "how.html", "developers.html", "app.js", "transparency.js"):
@@ -471,7 +498,15 @@ class HomepageProductTests(unittest.TestCase):
         css = self.css
         self.assertIn("overflow-x: hidden", css)
         self.assertIn("@media (max-width: 720px)", css)
+        self.assertIn("@media (max-width: 640px)", css)
         self.assertIn("@media (max-width: 390px)", css)
+        self.assertIn("@media (max-width: 320px)", css)
+        self.assertIn(".signal-flow", css)
+        self.assertIn(".trust-rail", css)
+        self.assertIn(".status-grid", css)
+        self.assertIn(".copy-btn", css)
+        self.assertIn(".mobile-only", css)
+        self.assertIn(".desktop-only", css)
         self.assertIn("grid-template-columns: 1fr", css)
         for html in self.pages.values():
             self.assertIn('name="viewport"', html)
@@ -506,6 +541,7 @@ class HomepageProductTests(unittest.TestCase):
             "live402/static/dashboard.js",
             "live402/static/transparency.js",
             "live402/pq/transparency.py",
+            "live402/site_chrome.py",
         )
         for rel in sources:
             text = (root / rel).read_text(encoding="utf-8")
@@ -571,6 +607,28 @@ class HomepageProductTests(unittest.TestCase):
         self.assertEqual(res.status, 402)
         route_body = json.loads(route_raw.decode("utf-8"))
         self.assertIn("accepts", route_body)
+
+    def test_route_and_dashboard_share_v2_chrome(self):
+        extra = {
+            "/route": _get_full(self.port, "/route", extra_headers={"Accept": "text/html"})[1],
+            "/dashboard": _get_full(self.port, "/dashboard")[1],
+        }
+        for path, html in extra.items():
+            parsed = _parse(html)
+            self.assertEqual([t for t, _h in parsed.nav_links], list(NAV_LABELS), path)
+            self.assertNotIn("Listed on", html, path)
+            self.assertNotIn("listed-on", html, path)
+            self.assertIn("https://github.com/402signal/402signal", html, path)
+            self.assertIn(">Transparency<", html, path)
+            self.assertEqual(html.count("<h1"), 1, path)
+            self.assertNotIn("\N{EM DASH}", html, path)
+
+    def test_transparency_privacy_copy_and_no_customer_ui(self):
+        html = self.transparency
+        self.assertIn("Transparent history, not public requests", html)
+        self.assertNotIn("<form", html)
+        self.assertNotIn("PAYMENT-SIGNATURE", html)
+        self.assertNotIn("customer-search", html)
 
     def test_seo_titles(self):
         self.assertIn("<title>402Signal: Find a paid API that works right now</title>", self.home)

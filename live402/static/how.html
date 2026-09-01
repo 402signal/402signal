@@ -28,7 +28,6 @@
         <a href="/catalog">Catalog</a>
         <a href="/how" aria-current="page">How it works</a>
         <a href="/developers">Developers</a>
-        <a href="https://github.com/402signal/402signal" rel="noopener noreferrer">GitHub</a>
       </nav>
     </header>
 
@@ -39,23 +38,34 @@
         <p class="lede">402Signal keeps the listing and the runtime observation separate.</p>
       </section>
 
-      <div class="flow" role="img" aria-label="Discovery to 402Signal to your agent">
-        <div class="flow-box">
-          <p class="flow-kicker">DISCOVERY</p>
-          <p class="flow-title">What sellers say is available</p>
-          <p class="flow-detail">Catalogs, directories, and seller metadata. A listing can remain after the endpoint has changed.</p>
+      <div class="signal-flow" role="img" aria-label="Discovery to 402Signal to your agent, with an asynchronous teal evidence path">
+        <div class="signal-row">
+          <div class="flow-box">
+            <p class="flow-kicker">DISCOVERY</p>
+            <p class="flow-title">What catalogs claim</p>
+            <p class="flow-detail">Listings and seller metadata. A claim can outlive the endpoint.</p>
+          </div>
+          <div class="flow-conn gold" aria-hidden="true"></div>
+          <div class="flow-box flow-emphasis">
+            <p class="flow-kicker">402SIGNAL</p>
+            <p class="flow-title">Check it now</p>
+            <p class="flow-detail">Valid x402? Payment terms? Invocation info? Fresh observation?</p>
+          </div>
+          <div class="flow-conn gold" aria-hidden="true"></div>
+          <div class="flow-box">
+            <p class="flow-kicker">YOUR AGENT</p>
+            <p class="flow-title">Decide whether to spend</p>
+            <p class="flow-detail">Own wallet. Sign. Pay the seller. Call the API.</p>
+          </div>
         </div>
-        <div class="flow-conn" aria-hidden="true"></div>
-        <div class="flow-box flow-emphasis">
-          <p class="flow-kicker">402SIGNAL</p>
-          <p class="flow-title">Check it now</p>
-          <p class="flow-detail">Valid x402? Payment terms? Invocation info? Fresh observation? The listing is not treated as the answer.</p>
-        </div>
-        <div class="flow-conn" aria-hidden="true"></div>
-        <div class="flow-box">
-          <p class="flow-kicker">YOUR AGENT</p>
-          <p class="flow-title">Decide whether to spend</p>
-          <p class="flow-detail">Own wallet. Sign the seller payment. Pay the seller. Call the API.</p>
+        <div class="trust-rail">
+          <p class="trust-rail-label">EVIDENCE · asynchronous</p>
+          <ol class="trust-steps">
+            <li><span class="trust-step-kicker">COMMIT</span> Routing evidence enters an append-only Merkle log.</li>
+            <li><span class="trust-step-kicker">SIGN</span> 402Signal signs a checkpoint with its Ed25519 log identity.</li>
+            <li><span class="trust-step-kicker">ANCHOR</span> Algorand TestNet · Falcon-1024</li>
+          </ol>
+          <p class="trust-rail-note">The route is gold and synchronous. Evidence is teal and does not delay routing.</p>
         </div>
       </div>
 
@@ -63,20 +73,24 @@
         <h2>What a live check can establish</h2>
         <dl class="checks compact">
           <div>
-            <dt>Payment</dt>
+            <dt>PAYMENT</dt>
             <dd>Did the endpoint return a valid, parseable x402 challenge?</dd>
           </div>
           <div>
-            <dt>Payment terms</dt>
+            <dt>TERMS</dt>
             <dd>What payTo, amount, asset and network did the endpoint return?</dd>
           </div>
           <div>
-            <dt>Invocation</dt>
+            <dt>INVOCATION</dt>
             <dd>Is there enough request information for an agent to construct the call?</dd>
           </div>
           <div>
-            <dt>Freshness</dt>
+            <dt>FRESHNESS</dt>
             <dd>When did 402Signal make the observation?</dd>
+          </div>
+          <div>
+            <dt>EVIDENCE</dt>
+            <dd>Was the observation committed to the append-only history? Confirmed TestNet anchors are asynchronous and never block the route.</dd>
           </div>
         </dl>
       </section>
@@ -105,6 +119,11 @@
       </section>
 
       <section class="block">
+        <h2>Trust path</h2>
+        <p>The gold path is the live check: observe, then return a route or a miss. The teal path is evidence: commit, sign, then optionally anchor on Algorand TestNet with Falcon-1024. Routing never waits for chain.</p>
+      </section>
+
+      <section class="block">
         <h2>402Signal stops before seller execution</h2>
         <p>402Signal recommends a route. The caller keeps its wallet, signs the seller payment and executes the seller request.</p>
         <p>The $0.01 routing check pays 402Signal for the check itself. It is separate from whatever the selected seller charges.</p>
@@ -119,16 +138,6 @@
     </main>
 
     <footer class="foot">
-      <p class="listed-on">
-        Listed on
-        <a href="https://glama.ai/mcp/servers/402signal/402signal" rel="noopener noreferrer">Glama</a>
-        <a href="https://registry.modelcontextprotocol.io/?q=402signal" rel="noopener noreferrer">MCP Registry</a>
-        <a href="https://github.com/Haustorium12/gold-402/blob/main/directory/aggregators.md" rel="noopener noreferrer">Gold-402</a>
-        <a href="https://smithery.ai/servers/live402/signal" rel="noopener noreferrer">Smithery</a>
-        <a href="https://agentic.market/services/402signal-com" rel="noopener noreferrer">Agentic Market</a>
-        <a href="https://github.com/michielpost/x402-dev/blob/master/Projects.md" rel="noopener noreferrer">x402-dev</a>
-        <a href="https://facilitator.goplausible.xyz/dashboard/bazaar?q=402signal" rel="noopener noreferrer">GoPlausible</a>
-      </p>
       <p>
         <a href="https://github.com/402signal/402signal" rel="noopener noreferrer">GitHub</a>
         <a href="https://x.com/402Signal" rel="noopener noreferrer">@402Signal</a>

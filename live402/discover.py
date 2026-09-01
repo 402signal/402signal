@@ -906,7 +906,9 @@ def openapi_spec(resource_url: str = ROUTE) -> dict:
                     "description": (
                         "text/plain C2SP tlog-checkpoint for the current / latest tree. "
                         "Experimental. Not MainNet-anchored. "
-                        "Falcon broadcast is TestNet-only and off by default. "
+                        "Falcon anchoring is TestNet-only. Eligible checkpoints "
+                        "may be broadcast to Algorand TestNet. MainNet broadcasting "
+                        "is not enabled. "
                         "/route does not wait for chain. Falcon authorizes a checkpoint "
                         "txn, not a merchant payment. May be newer than the latest TestNet anchor."
                     ),

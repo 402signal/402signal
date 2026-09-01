@@ -150,8 +150,9 @@ class TransparencyPageTests(unittest.TestCase):
             "As agents start spending money on your behalf, there should be a record of what they relied on.",
             html,
         )
-        self.assertIn("Latest checkpoint · Tree 1 · Block 66860001 · Confirmed", html)
-        self.assertIn("View transparency log", html)
+        self.assertIn("Latest anchor · Tree 1 · Block 66860001 · Confirmed", html)
+        self.assertIn("View transparency", html)
+        self.assertNotIn("Latest checkpoint · Tree", html)
         self.assertIn('href="/transparency"', html)
         self.assertNotIn("View TestNet transaction", html)
         self.assertNotIn(algo_anchor.TESTNET_EXPLORER_TX_URL + _TX_A, html)
@@ -186,7 +187,7 @@ class TransparencyPageTests(unittest.TestCase):
         self.assertIn("402signal.com/pq/log", html)
         self.assertNotIn("raw on-chain note", html.lower())
         self.assertIn("Caught up", html)
-        self.assertIn("The latest log checkpoint is anchored.", html)
+        self.assertNotIn("Current vs anchored", html)
         self.assertIn("TOTAL CONFIRMED ANCHORS 1", html)
         self.assertNotIn("growth-chart", html)
         self.assertNotIn("Logged event types", html)
@@ -237,6 +238,7 @@ class TransparencyPageTests(unittest.TestCase):
         html, _hdrs = self._html()
         self.assertIn("SUBMITTED · awaiting TestNet confirmation", html)
         self.assertNotIn("Latest checkpoint · Tree 1", html)
+        self.assertNotIn("Latest anchor · Tree 1", html)
         self.assertNotIn(algo_anchor.TESTNET_EXPLORER_TX_URL + _TX_A, html)
         home, _ = self._html("/")
         self.assertNotIn('id="pq-testnet"', home)
@@ -266,8 +268,9 @@ class TransparencyPageTests(unittest.TestCase):
         self.assertIn(algo_anchor.TESTNET_EXPLORER_TX_URL + _TX_B, html)
         self.assertIn("growth-chart", html)
         self.assertIn("joins those observations", html)
+        self.assertIn("Tree size at each time 402Signal verified a confirmed TestNet anchor", html)
         self.assertIn("Caught up", html)
-        self.assertIn("The latest log checkpoint is anchored.", html)
+        self.assertNotIn("Current vs anchored", html)
         model = pq_view.page_model()
         sizes = [row["size"] for row in model["history"]]
         self.assertEqual(sizes, [3, 1])
@@ -379,6 +382,7 @@ class TransparencyPageTests(unittest.TestCase):
         home, _ = self._html("/")
         self.assertNotIn('id="pq-testnet"', home)
         self.assertNotIn("Latest checkpoint · Tree 10", home)
+        self.assertNotIn("Latest anchor · Tree 10", home)
         self.assertEqual(worker.homepage_pq_html(), "")
 
     def test_history_count_and_cap(self):
@@ -404,6 +408,127 @@ class TransparencyPageTests(unittest.TestCase):
         html, _ = self._html()
         self.assertIn("TOTAL CONFIRMED ANCHORS 251", html)
         self.assertIn("Showing latest 250 anchors.", html)
+        self.assertIn("leaves 2–2", html)
+        self.assertNotIn("leaves 1–2", html)
+        self.assertNotIn("leaves 1–251", html)
+        first_txid = alphabet[1 % 32] * 51 + alphabet[(1 // 32) % 32]
+        self.assertNotIn(first_txid, html)
+        model = pq_view.page_model()
+        sizes = [row["size"] for row in model["history"]]
+        self.assertEqual(max(sizes), 251)
+        self.assertEqual(min(sizes), 2)
+        self.assertEqual(len(model["history"]), 250)
+        oldest = [row for row in model["history"] if row["size"] == 2][0]
+        self.assertEqual(oldest["delta"], 1)
+        self.assertEqual(oldest["span"], "leaves 2–2")
+
+
+class BoundCheckpointFailClosedTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        os.environ["LIVE402_PQ_LOG_DB"] = os.path.join(self.tmp.name, "pq-log.sqlite")
+        store.reset()
+        store.append(b"one")
+        self.root = store.root(1)
+        self.conf = {
+            "size": 1,
+            "origin": ORIGIN,
+            "root": self.root.hex(),
+        }
+
+    def tearDown(self):
+        from live402.pq import receipt
+
+        receipt.configure_signer(None)
+        store.reset()
+        os.environ.pop("LIVE402_PQ_LOG_DB", None)
+        os.environ.pop("LIVE402_PQ_LOG_VKEY", None)
+        self.tmp.cleanup()
+
+    def _sign(self, key):
+        from live402.pq import checkpoint as ckpt
+        from live402.pq import receipt
+
+        receipt.configure_signer(key)
+        note = ckpt.sign_checkpoint(ORIGIN, 1, self.root, key)
+        store.save_checkpoint(1, note)
+        return note
+
+    def test_a_missing_vkey_fails(self):
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        from live402.pq import receipt
+
+        self._sign(Ed25519PrivateKey.generate())
+        receipt.configure_signer(None)
+        os.environ.pop("LIVE402_PQ_LOG_VKEY", None)
+        self.assertEqual(pq_view.public_vkey(), "")
+        self.assertIsNone(pq_view.bound_checkpoint(self.conf))
+
+    def test_b_tampered_sig_fails(self):
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+        note = self._sign(Ed25519PrivateKey.generate())
+        flipped = note[:-2] + ("A" if note[-2] != "A" else "B") + note[-1]
+        store.save_checkpoint(1, flipped)
+        self.assertIsNone(pq_view.bound_checkpoint(self.conf))
+
+    def test_c_wrong_key_fails(self):
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        from live402.pq import receipt
+
+        self._sign(Ed25519PrivateKey.generate())
+        receipt.configure_signer(Ed25519PrivateKey.generate())
+        self.assertIsNone(pq_view.bound_checkpoint(self.conf))
+
+    def test_d_correct_passes(self):
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+        self._sign(Ed25519PrivateKey.generate())
+        bound = pq_view.bound_checkpoint(self.conf)
+        self.assertIsNotNone(bound)
+        self.assertEqual(bound["size"], 1)
+        self.assertEqual(bound["origin"], ORIGIN)
+        self.assertEqual(bound["root_hex"], self.root.hex())
+        self.assertEqual(bound["href"], "/pq/log/checkpoint/1")
+
+
+class TransparencyPrivacyTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        os.environ["LIVE402_PQ_LOG_DB"] = os.path.join(self.tmp.name, "pq-log.sqlite")
+        store.reset()
+        worker.clear_queue()
+        self.httpd, self.port = _serve()
+
+    def tearDown(self):
+        self.httpd.shutdown()
+        self.httpd.server_close()
+        worker.clear_queue()
+        store.reset()
+        os.environ.pop("LIVE402_PQ_LOG_DB", None)
+        self.tmp.cleanup()
+
+    def test_transparency_has_no_customer_activity_ui(self):
+        status, html, _hdrs = _get(self.port, "/transparency")
+        self.assertEqual(status, 200)
+        self.assertIn("Transparent history, not public requests", html)
+        low = html.lower()
+        self.assertNotIn("is anonymous", low)
+        self.assertNotIn("is unlinkable", low)
+        self.assertNotIn("is fully private", low)
+        self.assertIn("not a claim of anonymous, unlinkable, or fully private", low)
+        self.assertNotIn("<form", html)
+        self.assertNotIn('id="need"', html)
+        self.assertNotIn('name="need"', html)
+        self.assertNotIn('id="prompt"', html)
+        self.assertNotIn("PAYMENT-SIGNATURE", html)
+        self.assertNotIn("X-PAYMENT", html)
+        self.assertNotIn("payer_address", html)
+        self.assertNotIn("payment_signature", html)
+        self.assertNotIn("seller_body", html)
+        self.assertNotIn("customer-search", html)
+        self.assertNotIn("wallet feed", html.lower())
+        self.assertNotIn("customer feed", html.lower())
 
 
 class TransparencyHelperTests(unittest.TestCase):
