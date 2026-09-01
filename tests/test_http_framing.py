@@ -49,9 +49,46 @@ def _raw(port, request: bytes, timeout=2.0) -> bytes:
 
 
 def _status(raw: bytes) -> int:
+    if not raw:
+        return 0
     line = raw.split(b"\r\n", 1)[0]
+    if not line.startswith(b"HTTP/"):
+        return 0
     parts = line.split()
-    return int(parts[1]) if len(parts) >= 2 else 0
+    if len(parts) < 2:
+        return 0
+    try:
+        return int(parts[1])
+    except ValueError:
+        return 0
+
+
+def _recv_http_message(sock: socket.socket, timeout: float = 2.0) -> bytes:
+    """Read one HTTP response. Leftover body bytes must not be treated as a new request."""
+    sock.settimeout(timeout)
+    buf = b""
+    while b"\r\n\r\n" not in buf:
+        chunk = sock.recv(4096)
+        if not chunk:
+            return buf
+        buf += chunk
+    header, rest = buf.split(b"\r\n\r\n", 1)
+    content_length = None
+    for line in header.split(b"\r\n")[1:]:
+        if line.lower().startswith(b"content-length:"):
+            try:
+                content_length = int(line.split(b":", 1)[1].strip())
+            except ValueError:
+                content_length = None
+            break
+    if content_length is None:
+        return buf
+    while len(rest) < content_length:
+        chunk = sock.recv(4096)
+        if not chunk:
+            break
+        rest += chunk
+    return header + b"\r\n\r\n" + rest[:content_length]
 
 
 def _headers_obj(*pairs: tuple[str, str]) -> Message:
@@ -209,18 +246,20 @@ class FramingServerTests(unittest.TestCase):
                 b"POST /route HTTP/1.1\r\nHost: 127.0.0.1\r\n"
                 b"Content-Length: abc\r\n\r\n{}"
             )
-            sock.settimeout(2)
-            first = sock.recv(4096)
+            first = _recv_http_message(sock)
             self.assertEqual(_status(first), 400)
             self.assertIn(b"Connection: close", first)
-            sock.sendall(
-                b"POST /route HTTP/1.1\r\nHost: 127.0.0.1\r\n"
-                b"Content-Length: 2\r\n\r\n{}"
-            )
             try:
+                sock.sendall(
+                    b"POST /route HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+                    b"Content-Length: 2\r\n\r\n{}"
+                )
                 second = sock.recv(4096)
             except (socket.timeout, ConnectionError, OSError):
                 second = b""
+            # Leftover first-response bytes are not a new status line. A
+            # closed or poisoned keep-alive must never look like success.
+            self.assertNotEqual(_status(second), 200)
             self.assertTrue(second == b"" or _status(second) in (0, 400))
         finally:
             sock.close()
