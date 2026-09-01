@@ -55,7 +55,7 @@ _MAX_LINE = 65536
 # Documented merged signer identity. Not a secret.
 SIGNER_APP = "402signal-pq-signer-mainnet"
 SIGNER_MERGE_SHA = "a901ef7a"
-SIGNER_REVIEWED_HEAD = "9798c38f"
+SIGNER_REVIEWED_HEAD = "1c3e640a"
 SIGNER_PROTOCOL = "pq-anchor/2"
 REQUEST_VERSION = 2
 # Narrow HMAC-bound policy. Flattened into the MAC. Do not add
@@ -251,7 +251,7 @@ def canonical_bytes(
         "root": _hex_node(root),
         "timestamp": str(int(timestamp)),
         "tree_size": str(int(tree_size)),
-        "v": "2",
+        "v": SIGNER_PROTOCOL,
     }
     fields.update(flatten_policy_fields(policy))
     if set(fields) != set(CANONICAL_KEYS):

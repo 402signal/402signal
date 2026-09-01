@@ -20,17 +20,15 @@ _SIG = base64.b64encode(b"\x00" * 4 + b"\x22" * 64).decode("ascii")
 _FALCON_PK = b"pk" + bytes(range(14))
 _FALCON_SIG = b"sig" + bytes(range(29))
 
-# Shared with 402signal-pq-signer pq-anchor/2 HMAC. Flat k=v, size_version=1.
-_GOLDEN_TOKEN = "vector-token"
-_GOLDEN_ROOT = "00" * 32
-_GOLDEN_BODY = "402signal.com/pq/log/mainnet-v1\n1\nAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\n"
-_GOLDEN_CHECKPOINT = "%s\n%s %s %s\n" % (_GOLDEN_BODY, "\u2014", ORIGIN_MAINNET, _SIG)
+# Published by 402signal-pq-signer @ 1c3e640ae856a6c7a47cd892d0bfa1794df5deb5.
+# Flat k=v, size_version=1, v=pq-anchor/2. Exactly 380 UTF-8 bytes.
+_GOLDEN_ROOT = "abababababababababababababababababababababababababababababababab"
 _GOLDEN_POLICY = {
     "canonical_fee": 3000,
     "fee_per_byte": 0,
-    "fv": 12345,
-    "last_round": 12345,
-    "lv": 13345,
+    "fv": 10,
+    "last_round": 10,
+    "lv": 1010,
     "min_fee": 1000,
     "size_rule": "deterministic_falcon_envelope_estimate",
     "size_version": 1,
@@ -39,22 +37,22 @@ _GOLDEN_POLICY = {
 FLAT_HMAC_GOLDEN = (
     "pq-anchor/2\n"
     "canonical_fee=3000\n"
-    "checkpoint=" + _GOLDEN_CHECKPOINT + "\n"
+    "checkpoint=NOTE\n"
     "consistency=\n"
     "fee_per_byte=0\n"
-    "fv=12345\n"
-    "last_round=12345\n"
-    "lv=13345\n"
+    "fv=10\n"
+    "last_round=10\n"
+    "lv=1010\n"
     "min_fee=1000\n"
     "origin=402signal.com/pq/log/mainnet-v1\n"
-    "request_id=req-vector-mn-1\n"
-    "root=" + _GOLDEN_ROOT + "\n"
+    "request_id=golden-v2\n"
+    "root=abababababababababababababababababababababababababababababababab\n"
     "size_rule=deterministic_falcon_envelope_estimate\n"
     "size_version=1\n"
     "snapshot_at=1700000000\n"
     "timestamp=1700000000\n"
-    "tree_size=1\n"
-    "v=2\n"
+    "tree_size=2\n"
+    "v=pq-anchor/2\n"
 )
 FLAT_HMAC_FIELD_ORDER = (
     "canonical_fee",
@@ -261,7 +259,7 @@ class PrekeyCorrectionTests(unittest.TestCase):
         self.assertIn(b"canonical_fee=3000\n", body)
         self.assertIn(b"size_version=1\n", body)
         self.assertIn(b"size_rule=deterministic_falcon_envelope_estimate\n", body)
-        self.assertIn(b"v=2\n", body)
+        self.assertIn(b"v=pq-anchor/2\n", body)
         self.assertNotIn(b"policy=", body)
         self.assertNotIn(b"txn=", body)
         missing = {**policy, "size_version": 2}
@@ -492,26 +490,26 @@ class PrekeyCorrectionTests(unittest.TestCase):
     def test_flat_hmac_golden_vector_matches_go_signer_format(self):
         self.assertEqual(signer_mainnet.CANONICAL_KEYS, FLAT_HMAC_FIELD_ORDER)
         self.assertEqual(signer_mainnet.HMAC_SIZE_VERSION, 1)
+        want = FLAT_HMAC_GOLDEN.encode("utf-8")
+        self.assertEqual(len(want), 380)
         body = signer_mainnet.canonical_bytes(
             origin=ORIGIN_MAINNET,
-            tree_size=1,
+            tree_size=2,
             root=_GOLDEN_ROOT,
             consistency=[],
             timestamp=1700000000,
-            request_id="req-vector-mn-1",
-            checkpoint=_GOLDEN_CHECKPOINT,
+            request_id="golden-v2",
+            checkpoint="NOTE",
             policy=_GOLDEN_POLICY,
         )
-        self.assertEqual(body, FLAT_HMAC_GOLDEN.encode("utf-8"))
+        self.assertEqual(len(body), 380)
+        self.assertEqual(body, want)
         self.assertNotIn(b"policy=", body)
-        mac = signer_mainnet.mac_hex(_GOLDEN_TOKEN, body)
-        self.assertEqual(
-            mac,
-            signer_mainnet.mac_hex(_GOLDEN_TOKEN, FLAT_HMAC_GOLDEN.encode("utf-8")),
-        )
+        self.assertTrue(body.startswith(b"pq-anchor/2\n"))
+        self.assertTrue(body.endswith(b"v=pq-anchor/2\n"))
         spec = (__import__("pathlib").Path("docs/signer-mainnet-spec.md").read_text(encoding="utf-8"))
         self.assertIn("size_version=1", spec)
-        self.assertIn("canonical_fee=<decimal>", spec)
+        self.assertIn("v=pq-anchor/2", spec)
         self.assertNotIn("policy=<canonical_fee=", spec)
 
     def test_ready_stays_no(self):

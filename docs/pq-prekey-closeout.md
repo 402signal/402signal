@@ -66,7 +66,7 @@ a pinned MainNet suggested-params snapshot itself and HMAC-binds
 the narrow policy (`last_round`, `min_fee`, `fee_per_byte`, `fv`,
 `lv`, `canonical_fee`, `snapshot_at`, `size_rule`, `size_version=1`)
 by flattening those fields into the Go-signer MAC (no nested
-`policy=` blob). Operator
+`policy=` blob; MAC `v=pq-anchor/2`; `size_version=1`). Operator
 authorize/prepare does not depend on injected params. Canonical
 fee/fv/lv validation is not loosened.
 

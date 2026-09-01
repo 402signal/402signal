@@ -31,7 +31,7 @@ spec. Do not add Falcon SK handling to 402signal.
 | Genesis hash | `wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=` |
 | Checkpoint origin | `402signal.com/pq/log/mainnet-v1` |
 | Address env | `LIVE402_PQ_FALCON_MAINNET_ADDRESS` (public, empty until Ross ceremony) |
-| Wire protocol | `pq-anchor/2` (`v=2`) |
+| Wire protocol | `pq-anchor/2` (JSON `v=2`; MAC `v=pq-anchor/2`) |
 
 Do not reuse the TestNet HMAC token. Do not reuse the TestNet Falcon
 secret. Do not reuse the TestNet Ed25519 log secret. Do not accept a
@@ -106,8 +106,14 @@ size_version=1\n
 snapshot_at=<decimal unix seconds>\n
 timestamp=<decimal>\n
 tree_size=<decimal>\n
-v=2\n
+v=pq-anchor/2\n
 ```
+
+Published signer golden (head `1c3e640ae856a6c7a47cd892d0bfa1794df5deb5`)
+is exactly 380 UTF-8 bytes. Router test
+`tests/test_pq_prekey_correction.py` (`FLAT_HMAC_GOLDEN`) must match
+that preimage byte-for-byte. MAC `v` is the protocol id string
+`pq-anchor/2`, not the JSON integer `2`.
 
 Integers are decimal with no leading zeros (except the value `0`).
 `hmac` is hex(HMAC-SHA256(token, canonical)). Golden vector:
