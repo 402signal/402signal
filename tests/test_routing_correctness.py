@@ -320,8 +320,7 @@ class PersistChangeRehydrateTests(unittest.TestCase):
         t0 = int(time.time()) - 10
         first = _live_base_only(url, _catalog_base_and_solana(url), pay_to="0x1111111111111111111111111111111111111111")
         first["ts"] = t0
-        first["batch_id"] = "a" * 32
-        history.persist_route_batch(first["batch_id"], [first])
+        history.record_probe(url, first)
 
         later = _live_base_only(url, _catalog_base_and_solana(url), pay_to=CATALOG_BASE_PAYTO)
         later["ts"] = t0 + 5
@@ -330,14 +329,13 @@ class PersistChangeRehydrateTests(unittest.TestCase):
         self.assertIn(url, metas)
         self.assertTrue(metas[url].get("payTo_flipped"))
         self.assertTrue(later.get("payTo_changed"))
+        self.assertEqual(history.summary(url)["last_payTo"], "0x1111111111111111111111111111111111111111")
 
         body = dict(later)
         body.pop("payTo_changed", None)
         out = history.attach_to_result(body, metas[url])
         self.assertTrue(out.get("payTo_changed"))
         self.assertEqual(out.get("risk"), ["payTo_changed"])
-        changes = out.get("changes") or {}
-        self.assertIn("payTo_changed_at", changes)
         claimed_opts = (out.get("claimed") or {}).get("payment_options") or []
         self.assertTrue(claimed_opts)
 
@@ -346,8 +344,7 @@ class PersistChangeRehydrateTests(unittest.TestCase):
         item = _catalog_base_and_solana(url)
         previous = _live_base_only(url, item, pay_to=OBS_BASE_PAYTO)
         previous["ts"] = int(time.time()) - 8
-        previous["batch_id"] = "c" * 32
-        history.persist_route_batch(previous["batch_id"], [previous])
+        history.record_probe(url, previous)
 
         current = _live_base_only(url, item, pay_to=CATALOG_BASE_PAYTO)
         current["ts"] = int(time.time()) - 1
@@ -360,6 +357,7 @@ class PersistChangeRehydrateTests(unittest.TestCase):
         self.assertTrue(
             payment.payto_equal(claimed_pay or CATALOG_BASE_PAYTO, CATALOG_BASE_PAYTO, "base")
         )
+        self.assertTrue(payment.payto_equal(history.summary(url)["last_payTo"], OBS_BASE_PAYTO, "base"))
 
 
 if __name__ == "__main__":

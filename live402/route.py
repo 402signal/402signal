@@ -10,6 +10,25 @@ from live402 import facilitator, fixtures, payment, probe, replay, reqctx, selec
 from live402 import policy as policy_mod
 
 
+def _preserve_observed_facts(result: dict) -> None:
+    """Keep current-observation facts when a miss zeros decision fields."""
+    if not isinstance(result, dict):
+        return
+    obs = result.get("observed") if isinstance(result.get("observed"), dict) else {}
+    obs = dict(obs)
+    if obs.get("live") is None:
+        obs["live"] = bool(result.get("live"))
+    if obs.get("payable") is None and result.get("payable") is not None:
+        obs["payable"] = result.get("payable")
+    if obs.get("invocable") is None and result.get("invocable") is not None:
+        obs["invocable"] = result.get("invocable")
+    if obs.get("http_status") is None and result.get("status") is not None:
+        obs["http_status"] = result.get("status")
+    if obs.get("latency_ms") is None and result.get("latency_ms") is not None:
+        obs["latency_ms"] = result.get("latency_ms")
+    result["observed"] = obs
+
+
 def gate_open(headers) -> bool:
     """LOCAL_FREE tests-only. A payment header alone never opens the gate."""
     if fixtures.local_free():
@@ -137,6 +156,7 @@ def _direct_url_result(body: dict, url: str, need: str, deadline: float) -> tupl
         result["stop_reason"] = "candidate_set_exhausted"
         if result.get("miss_reason"):
             result["miss_reason"] = probe.public_miss_reason(result.get("miss_reason")) or result.get("miss_reason")
+    _preserve_observed_facts(result)
     result["live"] = False
     result["invocable"] = False
     result["payable"] = False
@@ -194,6 +214,7 @@ def run_probe(body: dict, deadline: float | None = None) -> tuple[int, dict]:
         unmet = select.collect_unmet_constraints([result], constraints)
         if unmet:
             result["unmet_constraints"] = unmet
+        _preserve_observed_facts(result)
         result["live"] = False
         result["invocable"] = False
         result["payable"] = False

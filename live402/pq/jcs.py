@@ -137,6 +137,16 @@ def utc_seconds_z(ts: int | float | None = None) -> str:
     return now.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def utc_minutes_z(ts: int | float | None = None) -> str:
+    """Privacy-rounded RFC3339 UTC timestamp. Floors to the minute."""
+    if ts is None:
+        now = datetime.now(timezone.utc)
+    else:
+        now = datetime.fromtimestamp(int(ts), timezone.utc)
+    now = now.replace(second=0, microsecond=0)
+    return now.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def amounts_as_strings(obj):
     """Walk a structure and stringify known amount fields. Reject floats there."""
     if isinstance(obj, dict):

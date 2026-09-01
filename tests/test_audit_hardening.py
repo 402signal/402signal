@@ -56,13 +56,16 @@ class V2ReceiptRoundtripTests(unittest.TestCase):
         tr = out["pq_trust"]["transparency"]
         self.assertEqual(tr["status"], "pending")
         self.assertEqual(tr["state"], "checkpoint_signed")
-        self.assertEqual(tr["leaf_type"], events.TYPE_ROUTE_DECISION_V2)
+        self.assertEqual(tr["leaf_type"], events.TYPE_ROUTE_DECISION_V3)
         verified = receipt.verify_receipt(tr["receipt"], self.vkey)
         self.assertEqual(verified["body"]["origin"], ORIGIN)
-        self.assertTrue(events.verify_reveal(tr["reveal"]["commitment"], tr["reveal"]))
+        self.assertTrue(events.verify_reveal_v3(tr["reveal"]["commitment"], tr["reveal"]))
+        receipt.verify_route_receipt(tr["receipt"], tr["reveal"], self.vkey)
         leaf = json.loads(store.leaf_at(tr["index"])["body"].decode("utf-8"))
         self.assertEqual(leaf["commitment"], tr["reveal"]["commitment"])
+        self.assertEqual(set(leaf), {"type", "ts", "nonce", "commitment"})
         self.assertNotIn("salt", leaf)
+        self.assertNotIn("live", leaf)
         self.assertNotIn("private-need-text", json.dumps(leaf))
         self.assertNotIn("anonymous", json.dumps(leaf).lower())
 
@@ -358,6 +361,17 @@ class SchemaAndTrustSyncTests(unittest.TestCase):
         self.assertIn("salt", omits)
         self.assertIn("need", omits)
         self.assertNotIn("anonymous", " ".join(reveals))
+
+    def test_v3_public_leaf_docs(self):
+        reveals = schema_fields.v3_public_leaf_reveals()
+        omits = schema_fields.v3_public_leaf_omits()
+        self.assertEqual(set(reveals), {"type", "ts", "nonce", "commitment"})
+        self.assertIn("salt", omits)
+        self.assertIn("live", omits)
+        self.assertIn("payTo", omits)
+        self.assertNotIn("anonymous", " ".join(reveals))
+        self.assertIn("policy.objective", schema_fields.v3_bound_fields())
+        self.assertIn("catalog_claimed", schema_fields.v3_unbound_fields())
 
     def test_worker_decoupled_and_fixture_network_free(self):
         src = inspect.getsource(catalog._trickle_loop)

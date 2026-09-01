@@ -211,3 +211,78 @@ def v2_public_leaf_omits() -> tuple[str, ...]:
         "PAYMENT-SIGNATURE",
         "X-PAYMENT",
     )
+
+
+def v3_public_leaf_reveals() -> tuple[str, ...]:
+    """Minimal v3 public leaf. Metadata minimization, not anonymity."""
+    return ("type", "ts", "nonce", "commitment")
+
+
+def v3_public_leaf_omits() -> tuple[str, ...]:
+    return (
+        "salt",
+        "evidence",
+        "need",
+        "url",
+        "wallet",
+        "payTo",
+        "network",
+        "amount",
+        "asset",
+        "outcome",
+        "live",
+        "miss_reason",
+        "identity",
+        "auth",
+        "seller_body",
+        "PAYMENT-SIGNATURE",
+        "X-PAYMENT",
+    )
+
+
+def v3_bound_fields() -> tuple[str, ...]:
+    """Private-evidence fields bound into the v3 commitment. Not on the public leaf."""
+    return (
+        "request.need",
+        "request.url",
+        "policy.objective",
+        "policy.constraints",
+        "policy.unresolved",
+        "decision.outcome",
+        "decision.winner_url",
+        "decision.miss_reason",
+        "observation.live",
+        "observation.challenge_observed",
+        "observation.payable",
+        "observation.invocable",
+        "observation.http_status",
+        "observation.latency_ms",
+        "observation.observed_at",
+        "selected_payment.rail",
+        "selected_payment.network",
+        "selected_payment.scheme",
+        "selected_payment.asset",
+        "selected_payment.amount_atomic",
+        "selected_payment.payTo",
+        "comparison.candidate_count",
+        "comparison.candidate_set_digest",
+        "comparison.probe_batch_id",
+        "comparison.observation_batch_hash",
+        "scoring.model_id",
+        "scoring.model_hash",
+    )
+
+
+def v3_unbound_fields() -> tuple[str, ...]:
+    """Explicitly not bound. Catalog claims are never treated as observed."""
+    return (
+        "catalog_claimed",
+        "raw_PAYMENT_auth",
+        "signatures",
+        "customer_wallet",
+        "facilitator_tokens",
+        "seller_bodies",
+        "api_credentials",
+        "full_compared_rows",
+        "salt",
+    )
