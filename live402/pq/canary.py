@@ -217,6 +217,13 @@ def project_policy(
     }
 
 
+def _test_sign_hook_allowed() -> bool:
+    """Fixture / TEST SUPPORT only. Production never accepts caller bytes."""
+    fixture = (os.environ.get("LIVE402_FIXTURE") or "").strip()
+    support = (os.environ.get("LIVE402_PQ_TEST_SUPPORT") or "").strip()
+    return fixture in {"1", "true", "TRUE", "yes"} or support in {"1", "true", "TRUE", "yes"}
+
+
 def persist_existing_signed(
     signed: bytes,
     *,
@@ -225,22 +232,16 @@ def persist_existing_signed(
     params: dict | None = None,
     fetch_params_fn=None,
 ) -> dict:
-    """Validate a cached algokey SignedTxn and persist AUTHORIZED.
+    """Refuse AUTHORIZED from caller-supplied SignedTxn bytes.
 
-    Never dials the signer. Never creates a new Falcon signature.
-    Resume path after a router parse miss when IPC already returned
-    ok+SignedTxn (TREE3 reuse). New signatures created: 0.
+    Exact SignedTxn provenance is not authenticated on this router:
+    the IPC reply is not yet response-MAC bound, and this path never
+    saw a signer dial. Do not persist AUTHORIZED from unauthenticated
+    bytes. Residual: Ross-only signer response-MAC (or official native
+    Falcon verify). This function never writes store state.
     """
-    blob = bytes(signed or b"")
-    if not blob:
-        raise CanaryError("not a signed pq1 txn")
-    return authorize(
-        now=now,
-        request_id=request_id,
-        params=params,
-        sign_fn=lambda _ident: blob,
-        fetch_params_fn=fetch_params_fn,
-    )
+    del signed, now, request_id, params, fetch_params_fn
+    raise CanarySecurityError("unauthenticated caller SignedTxn is not provenance")
 
 
 def persist_authorized(
@@ -355,6 +356,8 @@ def authorize(
     if sign_fn is not None:
         if not callable(sign_fn):
             raise CanaryError("invalid sign hook")
+        if not _test_sign_hook_allowed():
+            raise CanarySecurityError("caller-supplied sign hook forbidden")
         signed = sign_fn(ident)
         reply = {"signed": bytes(signed), "verified": {}, "policy": policy}
     else:

@@ -16,7 +16,7 @@ os.environ.setdefault("LIVE402_FIXTURE", "1")
 from live402 import payment
 from live402.pq import ORIGIN, ORIGIN_MAINNET, algo_anchor, signer_client, signer_mainnet, store
 from live402.pq import checkpoint as ckpt
-from tests.pq_test_env import clear_pq_env
+from tests.pq_test_env import clear_pq_env, falcon_f1_fixture_pk, falcon_f1_fixture_sig
 
 
 _TOKEN = "mainnet-vector-token"
@@ -52,9 +52,9 @@ def _mainnet_signed(size, root, addr=None, fee=3000, fv=1, lv=1001):
     return algo_tx.msgpack_encode(
         {
             "pqsig": {
-                "pk": b"pk" + bytes(range(14)),
+                "pk": falcon_f1_fixture_pk(b"pk"),
                 "sch": "f1",
-                "sig": b"sig" + bytes(range(29)),
+                "sig": falcon_f1_fixture_sig(b"sig"),
                 "slt": 0,
             },
             "txn": txn,

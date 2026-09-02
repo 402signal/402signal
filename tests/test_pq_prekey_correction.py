@@ -14,11 +14,11 @@ os.environ.setdefault("LIVE402_FIXTURE", "1")
 from live402 import payment
 from live402.pq import ORIGIN_MAINNET, algo_anchor, canary, mainnet_params, signer_mainnet, store
 from live402.pq import checkpoint as ckpt
-from tests.pq_test_env import clear_pq_env, insert_authorized_fixture
+from tests.pq_test_env import clear_pq_env, falcon_f1_fixture_pk, falcon_f1_fixture_sig, insert_authorized_fixture
 
 _SIG = base64.b64encode(b"\x00" * 4 + b"\x22" * 64).decode("ascii")
-_FALCON_PK = b"pk" + bytes(range(14))
-_FALCON_SIG = b"sig" + bytes(range(29))
+_FALCON_PK = falcon_f1_fixture_pk(b"pk")
+_FALCON_SIG = falcon_f1_fixture_sig(b"sig")
 
 # Historical golden published by 402signal-pq-signer @ 1c3e640ae856a6c7a47cd892d0bfa1794df5deb5 (pre org-main merge).
 # Flat k=v, size_version=1, v=pq-anchor/2. Exactly 380 UTF-8 bytes.

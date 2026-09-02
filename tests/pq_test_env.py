@@ -50,6 +50,22 @@ def arm_test_support() -> None:
     os.environ.setdefault("LIVE402_PQ_LOG_EPOCH", "testnet-v1")
 
 
+def falcon_f1_fixture_pk(tag: bytes = b"") -> bytes:
+    """Sanitized Falcon-1024 pk shape (1793 bytes). Not a live key."""
+    from live402.pq import algo_anchor
+
+    seed = bytes(tag) + bytes((0x80 + (i % 0x40)) for i in range(algo_anchor.FALCON_F1_PK_LEN))
+    return seed[: algo_anchor.FALCON_F1_PK_LEN]
+
+
+def falcon_f1_fixture_sig(tag: bytes = b"") -> bytes:
+    """Sanitized Falcon-1024 compressed-sig shape (1233 bytes). Not a live sig."""
+    from live402.pq import algo_anchor
+
+    seed = bytes(tag) + bytes((0xC0 + (i % 0x20)) for i in range(algo_anchor.FALCON_F1_SIG_LIVE))
+    return seed[: algo_anchor.FALCON_F1_SIG_LIVE]
+
+
 def insert_authorized_fixture(
     *,
     tree_size: int,

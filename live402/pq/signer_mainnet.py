@@ -19,6 +19,14 @@ Reply is bound to tree / root / origin / checkpoint plus expected
 MainNet identity. Full SignedTxn semantic verify runs on the router
 before persist and requires exact equality with the HMAC-bound policy.
 
+Residual (Ross-only): the response SignedTxn bytes themselves are
+not yet response-MAC authenticated. Do not weaken parse_reply or
+bind_mainnet_reply. Do not invent Falcon crypto. Official native
+Falcon verify, or a signer response-MAC over protocol version,
+request_id, origin, tree size, root, checkpoint/policy digest, and
+SHA-256 of the exact SignedTxn bytes, is required before treating
+IPC bytes as authenticated provenance.
+
 This module never loads a Falcon SK. No Algorand submit.
 """
 
@@ -470,6 +478,7 @@ def request_signed(
         if error in SURFACE_ERRORS:
             raise SignerClientError(error)
     data = parse_reply(raw)
+    # Identity bind only. SignedTxn bytes are not response-MAC authenticated.
     bind_mainnet_reply(
         data,
         tree_size=tree_size,

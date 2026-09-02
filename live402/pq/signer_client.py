@@ -272,7 +272,16 @@ def _recv_line(sock: socket.socket, timeout: float) -> str:
 
 
 def parse_reply(raw: str) -> dict:
-    """Live reply {ok, tree_size, root, pqsig:"present", signed}. signed is SignedTxn hex."""
+    """Live reply {ok, tree_size, root, pqsig:"present", signed}. signed is SignedTxn hex.
+
+    Residual (Ross-only): the response SignedTxn is not yet
+    response-MAC authenticated. This parser does not weaken existing
+    field checks and does not invent Falcon crypto. Router-side
+    persist of AUTHORIZED from these bytes still depends on a future
+    signer MAC (protocol version, request_id, origin, tree size, root,
+    checkpoint/policy digest, SHA-256 of exact SignedTxn bytes) or
+    official native Falcon verify.
+    """
     try:
         data = json.loads(raw)
     except json.JSONDecodeError as exc:

@@ -11,7 +11,7 @@ os.environ.setdefault("LIVE402_FIXTURE", "1")
 from live402 import payment
 from live402.pq import ORIGIN, ORIGIN_MAINNET, algo_anchor, store
 from live402 import algo_tx
-from tests.pq_test_env import clear_pq_env
+from tests.pq_test_env import clear_pq_env, falcon_f1_fixture_pk, falcon_f1_fixture_sig
 
 
 class FalconFeeTests(unittest.TestCase):
@@ -137,7 +137,7 @@ class FalconFeeTests(unittest.TestCase):
         too_small = algo_tx.pay_txn(addr, addr, 0, 1000, 1, 1001, algo_anchor.TESTNET_GENESIS_ID, gh, note=note)
         blob_small = algo_tx.msgpack_encode(
             {
-                "pqsig": {"pk": b"pk" + bytes(range(14)), "sch": "f1", "sig": b"sig" + bytes(range(29)), "slt": 0},
+                "pqsig": {"pk": falcon_f1_fixture_pk(b"pk"), "sch": "f1", "sig": falcon_f1_fixture_sig(b"sig"), "slt": 0},
                 "txn": too_small,
             }
         )
@@ -154,7 +154,7 @@ class FalconFeeTests(unittest.TestCase):
         over = algo_tx.pay_txn(addr, addr, 0, 30001, 1, 1001, algo_anchor.TESTNET_GENESIS_ID, gh, note=note)
         blob_over = algo_tx.msgpack_encode(
             {
-                "pqsig": {"pk": b"pk" + bytes(range(14)), "sch": "f1", "sig": b"sig" + bytes(range(29)), "slt": 0},
+                "pqsig": {"pk": falcon_f1_fixture_pk(b"pk"), "sch": "f1", "sig": falcon_f1_fixture_sig(b"sig"), "slt": 0},
                 "txn": over,
             }
         )
@@ -171,7 +171,7 @@ class FalconFeeTests(unittest.TestCase):
         ok = algo_tx.pay_txn(addr, addr, 0, 3000, 1, 1001, algo_anchor.TESTNET_GENESIS_ID, gh, note=note)
         blob_ok = algo_tx.msgpack_encode(
             {
-                "pqsig": {"pk": b"pk" + bytes(range(14)), "sch": "f1", "sig": b"sig" + bytes(range(29)), "slt": 0},
+                "pqsig": {"pk": falcon_f1_fixture_pk(b"pk"), "sch": "f1", "sig": falcon_f1_fixture_sig(b"sig"), "slt": 0},
                 "txn": ok,
             }
         )

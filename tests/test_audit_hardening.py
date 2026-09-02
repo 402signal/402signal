@@ -19,6 +19,7 @@ from live402 import catalog, discover, fixtures, hydrate, mcp, payment, schema_f
 from live402.pq import ORIGIN, algo_anchor, events, receipt, store, trust, worker
 from live402.route import handle_route
 from live402.server import Handler
+from tests.pq_test_env import falcon_f1_fixture_pk, falcon_f1_fixture_sig
 
 
 def _serve():
@@ -176,7 +177,7 @@ class SignedTxnVerifyTests(unittest.TestCase):
         txn.update(txn_over)
         blob = algo_tx.msgpack_encode(
             {
-                "pqsig": {"pk": b"pk" + bytes(range(14)), "sch": "f1", "sig": b"sig" + bytes(range(29)), "slt": 0},
+                "pqsig": {"pk": falcon_f1_fixture_pk(b"pk"), "sch": "f1", "sig": falcon_f1_fixture_sig(b"sig"), "slt": 0},
                 "txn": txn,
             }
         )

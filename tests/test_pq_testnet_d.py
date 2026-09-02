@@ -21,6 +21,7 @@ from live402 import catalog, payment
 from live402.pq import ORIGIN, algo_anchor, store, worker
 from live402.pq import checkpoint as ckpt
 from live402.server import Handler
+from tests.pq_test_env import falcon_f1_fixture_pk, falcon_f1_fixture_sig
 
 
 _TOKEN = "vector-token"
@@ -46,8 +47,8 @@ def _pq1_signed(size, root, addr=None):
     return algo_tx.msgpack_encode(
         {"pqsig": {"pk": _FALCON_PK, "sch": "f1", "sig": _FALCON_AUTH, "slt": 0}, "txn": txn}
     )
-_FALCON_AUTH = b"FALCON-PQ-AUTH" + bytes(range(48))
-_FALCON_PK = b"FALCON-PK" + bytes(range(24))
+_FALCON_AUTH = falcon_f1_fixture_sig(b"FALCON-PQ-AUTH")
+_FALCON_PK = falcon_f1_fixture_pk(b"FALCON-PK")
 
 
 def _indexer_pqsig(*, scheme="f1", salt=0, pk=_FALCON_PK, sig=_FALCON_AUTH):
