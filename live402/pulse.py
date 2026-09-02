@@ -10,7 +10,7 @@ import threading
 import time
 from urllib.parse import urlparse, urlencode
 
-from live402 import catalog, fixtures, payment, probe, site_chrome
+from live402 import catalog, fixtures, payment, probe, schema_fields, site_chrome
 
 CACHE_TTL = 15.0
 OURS_URL = "https://402signal.com/route"
@@ -1032,19 +1032,21 @@ def preview_need(need: str, prefer_network: str | None = None, networks=None) ->
             continue
         label = sample_need_for(item, url) or raw
         fac = _item_facilitator(item)
-        row = {
-            "need": label,
-            "label": label,
-            "url": href,
-            "price": _item_price_label(item),
-            "chain": chain or None,
-            "facilitator": fac,
-            "method": probe.extract_method(item),
-            "inputSchema_present": bool(
-                item.get("_input_schema_present") or probe.extract_input_schema(item)
-            ),
-            "rails_up": rails_up.get(chain) if chain else None,
-        }
+        row = schema_fields.mark_seller_claimed_text(
+            {
+                "need": label,
+                "label": label,
+                "url": href,
+                "price": _item_price_label(item),
+                "chain": chain or None,
+                "facilitator": fac,
+                "method": probe.extract_method(item),
+                "inputSchema_present": bool(
+                    item.get("_input_schema_present") or probe.extract_input_schema(item)
+                ),
+                "rails_up": rails_up.get(chain) if chain else None,
+            }
+        )
         need_key = str(row.get("need") or "").strip().lower()
         others = sorted((by_need_chains.get(need_key) or set()) - ({chain} if chain else set()))
         if others:
