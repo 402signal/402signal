@@ -1,0 +1,135 @@
+{
+  "resources": [
+    {
+      "url": "https://fixture.402signal.local/xss-script-desc",
+      "description": "Hourly weather <script>alert(1)</script> forecast",
+      "serviceName": "<script>alert(1)</script>",
+      "type": "http",
+      "accepts": [
+        {
+          "scheme": "exact",
+          "network": "eip155:8453",
+          "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+          "amount": "10000",
+          "payTo": "0xabcabcabcabcabcabcabcabcabcabcabcabcabca",
+          "maxTimeoutSeconds": 60
+        }
+      ],
+      "extensions": {
+        "bazaar": {
+          "info": {
+            "input": {
+              "type": "http",
+              "method": "GET",
+              "toolName": "<script>alert(1)</script>",
+              "inputSchema": {
+                "type": "object",
+                "properties": {
+                  "city": {
+                    "type": "string",
+                    "description": "<script>alert(1)</script> city name"
+                  }
+                }
+              }
+            },
+            "output": {
+              "type": "json",
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "temp": {
+                    "type": "string",
+                    "description": "<script>alert(1)</script> temperature"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "temp": {
+            "type": "string",
+            "description": "<script>alert(1)</script> temperature"
+          }
+        }
+      }
+    },
+    {
+      "url": "javascript:alert(1)",
+      "description": "javascript:alert(1) weather lookup",
+      "serviceName": "javascript:alert(document.domain)",
+      "type": "http",
+      "accepts": [
+        {
+          "scheme": "exact",
+          "network": "eip155:8453",
+          "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+          "amount": "10000",
+          "payTo": "0xabcabcabcabcabcabcabcabcabcabcabcabcabca",
+          "maxTimeoutSeconds": 60
+        }
+      ],
+      "extensions": {
+        "bazaar": {
+          "info": {
+            "input": {
+              "inputSchema": {
+                "type": "object",
+                "properties": {
+                  "q": {
+                    "type": "string",
+                    "description": "javascript:alert(1) query"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "url": "https://fixture.402signal.local/xss-onerror",
+      "description": "<img src=x onerror=alert(1)> weather",
+      "serviceName": "\"><img src=x onerror=alert(1)>",
+      "type": "http",
+      "accepts": [
+        {
+          "scheme": "exact",
+          "network": "eip155:8453",
+          "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+          "amount": "10000",
+          "payTo": "0xabcabcabcabcabcabcabcabcabcabcabcabcabca",
+          "maxTimeoutSeconds": 60
+        }
+      ],
+      "extensions": {
+        "bazaar": {
+          "info": {
+            "input": {
+              "toolName": "<img src=x onerror=alert(1)>",
+              "inputSchema": {
+                "type": "object",
+                "properties": {
+                  "q": {
+                    "type": "string",
+                    "description": "<img src=x onerror=alert(1)> query"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "outputSchema": {
+        "properties": {
+          "out": {
+            "description": "\" onerror=alert(1) x="
+          }
+        }
+      }
+    }
+  ]
+}
