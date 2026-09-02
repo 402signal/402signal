@@ -141,6 +141,14 @@ def vkey() -> str:
 
 
 def falcon_address() -> str:
+    from live402.pq import log_identity
+
+    try:
+        network = log_identity.live_network_name()
+    except log_identity.ConfigError:
+        return ""
+    if network == log_identity.NETWORK_MAINNET or log_identity.is_production_runtime():
+        return (os.environ.get(log_identity.MAINNET_ADDRESS_ENV) or "").strip()
     env_name = "LIVE402_PQ_FALCON_ADDRESS"
     desc = trust_root()
     falcon = desc.get("falcon") if isinstance(desc.get("falcon"), dict) else {}
@@ -149,7 +157,11 @@ def falcon_address() -> str:
 
 
 def falcon_allowed_broadcast() -> str:
-    """Only TestNet may be broadcast. MainNet stays behind not_mainnet_go."""
+    """PRODUCTION: none. TEST SUPPORT archive may still say testnet."""
+    from live402.pq import log_identity
+
+    if log_identity.is_production_runtime():
+        return "none"
     desc = trust_root()
     falcon = desc.get("falcon") if isinstance(desc.get("falcon"), dict) else {}
     return str(falcon.get("allowed_broadcast") or "testnet").strip().lower()
@@ -162,11 +174,42 @@ def witness_policy() -> list:
 
 
 def public_descriptor() -> dict:
-    """Public trust descriptor. TestNet only. Runtime PUBLIC vkey. Never a private key.
+    """Public trust descriptor. Runtime PUBLIC vkey. Never a private key.
 
-    Empty witness_policy stays empty. vkey comes from LIVE402_PQ_LOG_VKEY or
-    the in-memory store meta after boot. Never fabricated.
+    PRODUCTION uses MainNet identity (origin, genesis, allowed_broadcast=none).
+    TEST SUPPORT may still expose the archived TestNet v1 descriptor.
+    Empty witness_policy stays empty. Never fabricated secrets.
     """
+    from live402.pq import log_identity
+
+    production = False
+    try:
+        production = (
+            log_identity.is_production_runtime()
+            or log_identity.live_network_name() == log_identity.NETWORK_MAINNET
+        )
+    except log_identity.ConfigError:
+        production = log_identity.is_production_runtime()
+    if production:
+        from live402.pq import ORIGIN_MAINNET
+
+        desc = dict(trust_root_v2())
+        falcon = dict(desc.get("falcon") or {})
+        falcon["network"] = "mainnet-v1.0"
+        falcon["allowed_broadcast"] = "none"
+        falcon["address"] = (os.environ.get(log_identity.MAINNET_ADDRESS_ENV) or "").strip()
+        desc["falcon"] = falcon
+        desc["origin"] = ORIGIN_MAINNET
+        desc["not_mainnet_go"] = True
+        runtime = (os.environ.get(log_identity.MAINNET_VKEY_ENV) or "").strip() or vkey()
+        sig = dict(desc.get("log_signature") or {})
+        sig["vkey"] = runtime
+        sig.pop("sk", None)
+        sig.pop("private_key", None)
+        desc["log_signature"] = sig
+        desc.pop("private_key", None)
+        desc.pop("sk", None)
+        return desc
     desc = dict(trust_root())
     falcon = dict(desc.get("falcon") or {})
     falcon["network"] = "testnet-v1.0"

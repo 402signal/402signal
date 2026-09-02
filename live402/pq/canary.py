@@ -511,6 +511,8 @@ def poll_expected(
         txid=verified["txid"],
         confirmed_round=int(verified["confirmed_round"]),
         at=when,
+        network=algo_anchor.MAINNET_NAME,
+        genesis_id=algo_anchor.MAINNET_GENESIS_ID,
     )
     del policy
     return confirmed

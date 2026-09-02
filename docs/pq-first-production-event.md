@@ -11,7 +11,7 @@ after:
 2. Empty `/data/pq-log-mainnet.sqlite` (tree size 0)
 3. `trust_root.v2.json` public vkey filled
 4. Origin `402signal.com/pq/log/mainnet-v1`
-5. Website copy still honest (TestNet until cutover GO)
+5. Website copy stays honest (MainNet identity, awaiting first confirmed checkpoint)
 
 Then a human runs one real paid `POST /route` against production, with
 `require_transparency` if that is the intended gate, and confirms:

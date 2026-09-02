@@ -43,10 +43,13 @@ primary_region = "iad"
 
 # 1GB persistent volume for probe history + catalog.sqlite + pq-log*.sqlite (Ross approved ~$0.15/mo).
 # Process-local only. Do not HTTP-serve /data or sqlite files.
-# Production live log: /data/pq-log-mainnet.sqlite (epoch mainnet-v1).
-# pq-log.sqlite is the archived TestNet shard. Do not delete it.
+# PRODUCTION is MainNet-only. Unset/unknown network must fail closed.
+# Live log: /data/pq-log-mainnet.sqlite (epoch mainnet-v1).
+# pq-log.sqlite is the archived TestNet shard (TEST SUPPORT only). Do not delete it.
+# Do not set TestNet Falcon address, TestNet log SK, TestNet signer HMAC,
+# or TestNet broadcast flags here.
 # Do not enable TestNet or MainNet Falcon broadcast from this file.
-# No extra machines in this PR. Falcon private material is not on this app.
+# Automatic anchoring stays off. No extra machines. Falcon SK is not on this app.
 # Scheduled snapshots off.
 [[mounts]]
   source = "data"
