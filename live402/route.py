@@ -414,7 +414,7 @@ def handle_route(body: dict, headers, resource_url: str, bazaar: dict | None = N
     accept = payment.match_accept(parsed, required_body)
     if not accept:
         required, extra = _required_pair(
-            resource_url, "Payment does not match an advertised accept", bazaar=bazaar
+            resource_url, payment.inbound_match_error(parsed), bazaar=bazaar
         )
         return 402, required, extra
 

@@ -1156,10 +1156,104 @@ def _accepted_from_payload(payload: dict) -> dict:
         return accepted
     # x402 v1: scheme/network at top level
     out = {}
-    for key in ("scheme", "network", "asset", "payTo", "amount", "extra"):
+    for key in ("scheme", "network", "asset", "payTo", "amount", "maxAmountRequired", "extra"):
         if key in payload:
             out[key] = payload[key]
     return out
+
+
+def inbound_payload_version(payload: dict) -> int:
+    """Literal x402Version, else v1 when only maxAmountRequired is present."""
+    accepted = _accepted_from_payload(payload) if isinstance(payload, dict) else {}
+    for obj in (accepted, payload if isinstance(payload, dict) else {}):
+        ver = _literal_x402_version(obj.get("x402Version"))
+        if ver is not None:
+            return ver
+    if "maxAmountRequired" in accepted and "amount" not in accepted:
+        return 1
+    return 2
+
+
+def inbound_client_network(payload: dict):
+    if not isinstance(payload, dict):
+        return None
+    accepted = _accepted_from_payload(payload)
+    if "network" in accepted:
+        return accepted.get("network")
+    return payload.get("network")
+
+
+def inbound_client_amount(accepted: dict, version: int):
+    """Canonical atomic int. v1 requires maxAmountRequired; v2 requires amount."""
+    if not isinstance(accepted, dict):
+        return None
+    if version == 1:
+        if "maxAmountRequired" not in accepted:
+            return None
+        amount = canonical_atomic_string(accepted.get("maxAmountRequired"))
+        if amount is None:
+            return None
+        other = accepted.get("amount")
+        if other is not None and other != "":
+            if canonical_atomic_string(other) != amount:
+                return None
+        return amount
+    if "amount" not in accepted:
+        return None
+    amount = canonical_atomic_string(accepted.get("amount"))
+    if amount is None:
+        return None
+    other = accepted.get("maxAmountRequired")
+    if other is not None and other != "":
+        if canonical_atomic_string(other) != amount:
+            return None
+    return amount
+
+
+def advertised_accept_amount(item: dict):
+    if not isinstance(item, dict):
+        return None
+    raw = item.get("amount")
+    if raw is None or raw == "":
+        raw = item.get("maxAmountRequired")
+    if type(raw) is not str:
+        return None
+    return canonical_atomic_string(raw)
+
+
+_TESTNET_NETWORKS = frozenset(
+    {
+        "eip155:84532",
+        "eip155:11155111",
+        "eip155:11155420",
+        "base-sepolia",
+        "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1",
+        "solana:4uhcVJyU9pJkvQyS88uRDiswHXSCkY3z",
+    }
+)
+_TESTNET_MARKERS = ("sepolia", "testnet", "devnet", "goerli", "holesky")
+
+INBOUND_MISMATCH_ERROR = "Payment does not match an advertised accept"
+INBOUND_TESTNET_ERROR = "testnet networks are not accepted"
+
+
+def looks_like_testnet_network(network) -> bool:
+    if type(network) is not str:
+        return False
+    text = network.strip()
+    if not text:
+        return False
+    if text in _TESTNET_NETWORKS:
+        return True
+    low = text.lower()
+    return any(marker in low for marker in _TESTNET_MARKERS)
+
+
+def inbound_match_error(payload: dict) -> str:
+    """402 error when match_accept fails (SEC-ROUTER-005 / A-07)."""
+    if looks_like_testnet_network(inbound_client_network(payload)):
+        return INBOUND_TESTNET_ERROR
+    return INBOUND_MISMATCH_ERROR
 
 
 def resource_url_of(obj) -> str | None:
@@ -1187,6 +1281,11 @@ def match_accept(payload: dict, required: dict) -> dict | None:
     SEC-ROUTER-002: bind resource.url. Fail closed when the request resource
     is missing or the payment's resource.url does not match it. A payment
     authorized for /route must not match /mcp.
+
+    SEC-ROUTER-005 / A-07: require client network, amount, and payTo. No
+    omit-to-first-same-rail. Inbound rail is rail_of_observed_network
+    (strict CAIP on v2; exact short aliases or CAIP on v1). Testnet and
+    unknown networks fail closed. v1 amounts use maxAmountRequired.
     """
     if not isinstance(required, dict):
         return None
@@ -1204,31 +1303,31 @@ def match_accept(payload: dict, required: dict) -> dict | None:
     claimed = payload_url or accepted_url
     if claimed != required_url:
         return None
-    rail = rail_of_network(accepted.get("network") or payload.get("network") or "")
-    if not rail:
-        pay_to = accepted.get("payTo")
-        if pay_to and payto_equal(pay_to, payto_algorand(), "algorand"):
-            rail = "algorand"
-        elif pay_to and payto_equal(pay_to, payto_solana(), "solana"):
-            rail = "solana"
-        elif pay_to and payto_equal(pay_to, payto_address(), "base"):
-            rail = "base"
+    version = inbound_payload_version(payload)
+    rail = rail_of_observed_network(inbound_client_network(payload), version)
     if not rail:
         return None
     client_pay = accepted.get("payTo")
-    client_amount = accepted.get("amount")
+    if not client_pay:
+        return None
+    client_amount = inbound_client_amount(accepted, version)
+    if client_amount is None:
+        return None
     client_token = token_of(accepted)
+    req_ver = _literal_x402_version(required.get("x402Version")) or 2
     for item in required.get("accepts") or []:
         if not isinstance(item, dict):
             continue
         item_url = resource_url_of(item)
         if item_url and item_url != required_url:
             continue
-        if rail_of_network(item.get("network")) != rail:
+        item_ver = _literal_x402_version(item.get("x402Version")) or req_ver
+        if rail_of_observed_network(item.get("network"), item_ver) != rail:
             continue
-        if client_pay and not payto_equal(client_pay, item.get("payTo"), rail):
+        if not payto_equal(client_pay, item.get("payTo"), rail):
             continue
-        if client_amount is not None and str(client_amount) != str(item.get("amount")):
+        item_amount = advertised_accept_amount(item)
+        if item_amount is None or item_amount != client_amount:
             continue
         our_token = token_of(item)
         if client_token and our_token:
