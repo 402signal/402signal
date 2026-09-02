@@ -304,7 +304,7 @@
             <p>PQ Trust is the public name for this transparency layer. Production identity is Algorand MainNet. Falcon anchors checkpoints, not merchant payments.</p>
             <p>The Algorand transaction authorizes a transparency-log checkpoint. It is not a merchant payment, and paid <code>/route</code> does not wait for blockchain confirmation.</p>
             <p>The human-readable transparency view is available at <a href="/transparency">/transparency</a>.</p>
-            <p>Paid <code>/route</code> may include <code>pq_trust.transparency</code> with status <code>pending</code> or <code>unavailable</code>. <code>pending</code> means a durable leaf plus a signed checkpoint. It is not a confirmed MainNet anchor. <code>payment_authorization.pq_native</code> is false. There is no <code>/trust</code> page.</p>
+            <p>Paid <code>/route</code> may include <code>pq_trust.transparency</code> with status <code>pending</code>, <code>logged_uncheckpointed</code>, or <code>unavailable</code>. Paid HTTP 200 (hit) and 503 (typed miss) are not atomic with log append (SEC-ROUTER-004 / A-14): those codes do not require a durable signed leaf unless the request set <code>require_transparency</code>. <code>pending</code> means a durable leaf plus a signed checkpoint. It is not a confirmed MainNet anchor. <code>logged_uncheckpointed</code> means the leaf is durable without a signed checkpoint and is never success when <code>require_transparency</code> is true. <code>unavailable</code> means append failed. <code>payment_authorization.pq_native</code> is false. There is no <code>/trust</code> page.</p>
           </div>
         </details>
         <details class="tech-details">

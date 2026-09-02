@@ -270,17 +270,27 @@ def _require_transparency(body: dict | None) -> bool:
 
 
 def _transparency_ok(result: dict) -> bool:
+    """True only for a durable signed leaf (pending / checkpoint_signed + checkpoint).
+
+    SEC-ROUTER-004 / A-14: logged_uncheckpointed and unavailable are never
+    success when require_transparency is set.
+    """
     tr = ((result.get("pq_trust") or {}).get("transparency") or {}) if isinstance(result, dict) else {}
     status = str(tr.get("status") or "")
     state = str(tr.get("state") or "")
+    if status in {"logged_uncheckpointed", "unavailable"}:
+        return False
     if status == "pending" or state == "checkpoint_signed":
         return bool(tr.get("receipt") and (tr.get("receipt") or {}).get("checkpoint"))
     return False
 
 
 def _attach_pq_trust(code: int, result: dict, body: dict) -> dict:
-    """Optional transparency receipt. Paid /route still succeeds if the log is down
-    unless require_transparency is set.
+    """Optional transparency receipt. Paid 200/503 is not atomic with log append.
+
+    SEC-ROUTER-004 / A-14: a paid hit (200) or typed miss (503) does not
+    require a durable signed leaf unless require_transparency is set.
+    Append failure is best-effort (logged_uncheckpointed or unavailable).
     """
     if not isinstance(result, dict):
         return result

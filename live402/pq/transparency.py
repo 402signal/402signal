@@ -180,11 +180,16 @@ def root_hex(root) -> str:
 
 
 def public_vkey() -> str:
-    for source in (store.meta_get("vkey"), trust.vkey()):
-        text = str(source or "").strip()
-        if text:
-            return text
-    return ""
+    """Public verifier key for trust surfaces. Env wins over sqlite meta.vkey.
+
+    SEC-ROUTER-004 / A-14: a stale sqlite meta.vkey must not override the
+    env/trust vkey. If the env vkey is set, it is the only advertised key
+    (fail closed on stale sqlite). Sqlite is used only when env is empty.
+    """
+    env = str(trust.vkey() or "").strip()
+    if env:
+        return env
+    return str(store.meta_get("vkey") or "").strip()
 
 
 def public_falcon_address() -> str:
