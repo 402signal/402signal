@@ -12,7 +12,7 @@ Hard ceiling MAX_FEE=30000 µALGO (fail closed if required > cap).
 Caller cannot select the fee. Signer and reconstruction derive
 the same canonical fee.
 Falcon signing goes through the 6PN client (TestNet pq-anchor/1,
-MainNet pq-anchor/2). This module
+MainNet pq-anchor/3 with an authenticated success response). This module
 does not load a Falcon SK. send_forbidden() always raises.
 
 TestNet submit of a signer-approved SignedTxn is gated on
@@ -398,13 +398,13 @@ def fee_policy_snapshot(params: dict | None = None, *, unsigned: dict | None = N
         "snapshot_max_age_s": SNAPSHOT_MAX_AGE_S,
         "size_rule": HMAC_SIZE_RULE,
         "size_version": HMAC_SIZE_VERSION,
-        "version": "pq-anchor/2",
+        "version": "pq-anchor/3",
         "formula": "max(fee_per_byte * deterministic_falcon_envelope_estimate, protocol_base_min * 3)",
     }
 
 
 def hmac_policy(policy: dict | None) -> dict:
-    """Narrow policy object HMAC-bound by pq-anchor/2. No arbitrary txn."""
+    """Narrow policy object HMAC-bound by pq-anchor/3. No arbitrary txn."""
     if not isinstance(policy, dict):
         raise AnchorError("policy required")
     out = {}

@@ -375,7 +375,11 @@ class AuthorizedPersistenceAndResumeTests(unittest.TestCase):
         self.assertFalse(store.last_authorized_checkpoint().get("signed"))
 
     def test_persist_authorized_rejects_forgeable_provenance_values(self):
-        for forged in (None, True, "fixture-sign-hook", "response-mac", object()):
+        class EqualToEverything:
+            def __eq__(self, _other):
+                return True
+
+        for forged in (None, True, "fixture-sign-hook", "response-mac", object(), EqualToEverything()):
             with self.subTest(forged=repr(forged)):
                 with mock.patch.object(
                     store,
@@ -412,13 +416,28 @@ class AuthorizedPersistenceAndResumeTests(unittest.TestCase):
         finally:
             os.environ["LIVE402_FIXTURE"] = "1"
 
-    def test_production_request_signed_fail_closes_before_persist(self):
-        """No response provenance: do not dial signer or persist AUTHORIZED."""
-        with mock.patch("live402.pq.signer_mainnet.request_signed") as request_signed:
+    def test_production_authenticated_reply_persists_authorized(self):
+        reply = {
+            "signed": self.blob,
+            "verified": {"fee": 3000, "fv": 1, "lv": 1001},
+            "response_authenticated": True,
+        }
+        with mock.patch("live402.pq.signer_mainnet.request_signed", return_value=reply) as request_signed:
+            row = canary.authorize(params=self.params, request_id="authenticated")
+            request_signed.assert_called_once()
+        self.assertEqual(canary.send_state_of(row), canary.STATE_AUTHORIZED)
+        self.assertEqual(bytes(row["signed"]), self.blob)
+
+    def test_production_missing_response_authentication_does_not_persist(self):
+        reply = {
+            "signed": self.blob,
+            "verified": {"fee": 3000, "fv": 1, "lv": 1001},
+        }
+        with mock.patch("live402.pq.signer_mainnet.request_signed", return_value=reply) as request_signed:
             with self.assertRaises(canary.CanarySecurityError) as ctx:
                 canary.authorize(params=self.params)
             self.assertIn("provenance", str(ctx.exception))
-            request_signed.assert_not_called()
+            request_signed.assert_called_once()
         self.assertIsNone(store.authorized_at(1))
         self.assertFalse(store.last_authorized_checkpoint().get("signed"))
 
@@ -428,13 +447,15 @@ class AuthorizedPersistenceAndResumeTests(unittest.TestCase):
         self.assertIsNone(store.authorized_at(1))
         self.assertFalse(store.last_authorized_checkpoint().get("signed"))
 
-    def test_prepare_fail_closes_without_authenticated_response(self):
-        """NEW_PREPARE held: production prepare must not dial or persist."""
-        with mock.patch("live402.pq.signer_mainnet.request_signed") as request_signed:
+    def test_prepare_fail_closes_on_unauthenticated_response(self):
+        with mock.patch(
+            "live402.pq.signer_mainnet.request_signed",
+            return_value={"signed": self.blob, "verified": {"fee": 3000, "fv": 1, "lv": 1001}},
+        ) as request_signed:
             with self.assertRaises(canary.CanarySecurityError) as ctx:
                 canary.prepare(params=self.params)
             self.assertIn("provenance", str(ctx.exception))
-            request_signed.assert_not_called()
+            request_signed.assert_called_once()
         self.assertIsNone(store.authorized_at(1))
         self.assertFalse(store.last_authorized_checkpoint().get("signed"))
 

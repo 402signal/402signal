@@ -22,6 +22,7 @@ _FALCON_SIG = falcon_f1_fixture_sig(b"sig")
 
 # Historical golden published by 402signal-pq-signer @ 1c3e640ae856a6c7a47cd892d0bfa1794df5deb5 (pre org-main merge).
 # Flat k=v, size_version=1, v=pq-anchor/2. Exactly 380 UTF-8 bytes.
+# Retained as immutable migration evidence; v3 changes only the protocol label.
 _GOLDEN_ROOT = "abababababababababababababababababababababababababababababababab"
 _GOLDEN_POLICY = {
     "canonical_fee": 3000,
@@ -34,7 +35,7 @@ _GOLDEN_POLICY = {
     "size_version": "1",
     "snapshot_at": 1700000000,
 }
-FLAT_HMAC_GOLDEN = (
+FLAT_HMAC_V2_GOLDEN = (
     "pq-anchor/2\n"
     "canonical_fee=3000\n"
     "checkpoint=NOTE\n"
@@ -54,6 +55,7 @@ FLAT_HMAC_GOLDEN = (
     "tree_size=2\n"
     "v=pq-anchor/2\n"
 )
+FLAT_HMAC_V3_GOLDEN = FLAT_HMAC_V2_GOLDEN.replace("pq-anchor/2", "pq-anchor/3")
 FLAT_HMAC_FIELD_ORDER = (
     "canonical_fee",
     "checkpoint",
@@ -233,7 +235,7 @@ class PrekeyCorrectionTests(unittest.TestCase):
             )
         self.assertFalse(store.last_authorized_checkpoint().get("signed"))
 
-    def test_pq_anchor_2_hmac_flattens_policy(self):
+    def test_pq_anchor_3_hmac_flattens_policy(self):
         policy = {
             "last_round": 9,
             "min_fee": 1000,
@@ -255,11 +257,11 @@ class PrekeyCorrectionTests(unittest.TestCase):
             checkpoint=_signed_note(1, b"\x11" * 32),
             policy=policy,
         )
-        self.assertTrue(body.startswith(b"pq-anchor/2\n"))
+        self.assertTrue(body.startswith(b"pq-anchor/3\n"))
         self.assertIn(b"canonical_fee=3000\n", body)
         self.assertIn(b"size_version=1\n", body)
         self.assertIn(b"size_rule=deterministic_falcon_envelope_estimate\n", body)
-        self.assertIn(b"v=pq-anchor/2\n", body)
+        self.assertIn(b"v=pq-anchor/3\n", body)
         self.assertNotIn(b"policy=", body)
         self.assertNotIn(b"txn=", body)
         missing = {**policy, "size_version": "2"}
@@ -539,7 +541,10 @@ class PrekeyCorrectionTests(unittest.TestCase):
     def test_flat_hmac_golden_vector_matches_go_signer_format(self):
         self.assertEqual(signer_mainnet.CANONICAL_KEYS, FLAT_HMAC_FIELD_ORDER)
         self.assertEqual(signer_mainnet.HMAC_SIZE_VERSION, "1")
-        want = FLAT_HMAC_GOLDEN.encode("utf-8")
+        historic_v2 = FLAT_HMAC_V2_GOLDEN.encode("utf-8")
+        self.assertTrue(historic_v2.startswith(b"pq-anchor/2\n"))
+        self.assertTrue(historic_v2.endswith(b"v=pq-anchor/2\n"))
+        want = FLAT_HMAC_V3_GOLDEN.encode("utf-8")
         self.assertEqual(len(want), 380)
         body = signer_mainnet.canonical_bytes(
             origin=ORIGIN_MAINNET,
@@ -554,19 +559,19 @@ class PrekeyCorrectionTests(unittest.TestCase):
         self.assertEqual(len(body), 380)
         self.assertEqual(body, want)
         self.assertNotIn(b"policy=", body)
-        self.assertTrue(body.startswith(b"pq-anchor/2\n"))
-        self.assertTrue(body.endswith(b"v=pq-anchor/2\n"))
+        self.assertTrue(body.startswith(b"pq-anchor/3\n"))
+        self.assertTrue(body.endswith(b"v=pq-anchor/3\n"))
         spec = (__import__("pathlib").Path("docs/signer-mainnet-spec.md").read_text(encoding="utf-8"))
         self.assertIn("size_version=1", spec)
-        self.assertIn("v=pq-anchor/2", spec)
+        self.assertIn("v=pq-anchor/3", spec)
         self.assertNotIn("policy=<canonical_fee=", spec)
 
     def test_ready_stays_no(self):
         text = (__import__("pathlib").Path("docs/pq-prekey-closeout.md").read_text(encoding="utf-8"))
         self.assertIn("READY_FOR_PRODUCTION_KEY_INSTALL = NO", text)
         spec = (__import__("pathlib").Path("docs/signer-mainnet-spec.md").read_text(encoding="utf-8"))
-        self.assertIn("pq-anchor/2", spec)
-        self.assertIn("Parallel private-signer PR checklist", spec)
+        self.assertIn("pq-anchor/3", spec)
+        self.assertIn("Paired private-signer requirements", spec)
         self.assertIn("size_version", spec)
 
 

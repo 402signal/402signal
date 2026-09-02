@@ -7,7 +7,7 @@ PRODUCTION (public router, not fixture):
   ORIGIN 402signal.com/pq/log/mainnet-v1
   MainNet Falcon address
   MainNet signer HMAC (authorize path)
-  pq-anchor/2 only
+  pq-anchor/3 only (authenticated success response)
 
 Unset or unknown network/epoch fail closed. They never become TestNet.
 

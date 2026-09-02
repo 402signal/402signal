@@ -5,15 +5,14 @@ Preferred new app name: `402signal-pq-signer-mainnet`.
 This public router repository does not contain the isolated signer and
 must not reimplement it. The live TestNet signer stays
 `402signal-pq-signer` (pq-anchor/1). MainNet uses a new app, a new HMAC
-token name, a new 6PN hostname, and **pq-anchor/2**.
+token name, a new 6PN hostname, and **pq-anchor/3**.
 
 The signer authorizes only. It never broadcasts. It never reads
 `LIVE402_PQ_FALCON_BROADCAST` or `LIVE402_PQ_FALCON_MAINNET_BROADCAST`.
 Destroying the Falcon key is not the kill switch.
 
-github.com/402signalhq/402signal-pq-signer (historical: github.com/402signal/402signal-pq-signer) was not readable from this
-environment. Implement the signer in that private repo against this
-spec. Do not add Falcon SK handling to 402signal.
+The isolated signer lives in the Ross-only private repository. Keep its
+source and secrets there; do not add Falcon SK handling to 402signal.
 
 ## Identity
 
@@ -31,20 +30,20 @@ spec. Do not add Falcon SK handling to 402signal.
 | Genesis hash | `wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=` |
 | Checkpoint origin | `402signal.com/pq/log/mainnet-v1` |
 | Address env | `LIVE402_PQ_FALCON_MAINNET_ADDRESS` (public, empty until Ross ceremony) |
-| Wire protocol | `pq-anchor/2` (JSON `v=2`; MAC `v=pq-anchor/2`) |
+| Wire protocol | `pq-anchor/3` (JSON `v=3`; request MAC `v=pq-anchor/3`) |
 
 Do not reuse the TestNet HMAC token. Do not reuse the TestNet Falcon
 secret. Do not reuse the TestNet Ed25519 log secret. Do not accept a
 pq-anchor/1 MainNet request.
 
-## pq-anchor/2 request
+## pq-anchor/3 request
 
 The router sends exactly these JSON keys:
 
 `v`, `origin`, `tree_size`, `root`, `consistency`, `timestamp`,
 `request_id`, `checkpoint`, `policy`, `hmac`
 
-`v` is `2`. `checkpoint` is the Ed25519 signed-note the log already
+`v` is `3`. `checkpoint` is the Ed25519 signed-note the log already
 produced. `policy` is the **narrow frozen snapshot object only**:
 
 ```
@@ -58,10 +57,11 @@ string). The HMAC flatten is still `size_version=1`. The router
 rejects int `1` at `narrow_policy` (no int-to-str coerce).
 
 Router serialization gate (offline, no signer credentials):
-`tests/test_pq_cross_repo_wire.py` and
-`tests/fixtures/pq_anchor2_wire/`. Full Go parser integration runs
-on private signer CI under Ross. Do not add a GitHub secret on this
-public router for signer access.
+`tests/test_pq_cross_repo_wire.py`. The immutable
+`tests/fixtures/pq_anchor2_wire/` corpus remains only as migration
+evidence; active requests are v3-only. Full Go parser and response-MAC
+integration runs on private signer CI under Ross. Do not add a GitHub
+secret on this public router for signer access.
 Do **not** send an arbitrary txn, unsigned blob, fee, firstValid,
 sender, amount, pk, or sk as top-level keys. Unknown JSON keys are
 rejected.
@@ -96,7 +96,7 @@ v
 ```
 
 ```
-pq-anchor/2\n
+pq-anchor/3\n
 canonical_fee=<decimal>\n
 checkpoint=<signed-note>\n
 consistency=<hex nodes joined by comma>\n
@@ -113,18 +113,18 @@ size_version=1\n
 snapshot_at=<decimal unix seconds>\n
 timestamp=<decimal>\n
 tree_size=<decimal>\n
-v=pq-anchor/2\n
+v=pq-anchor/3\n
 ```
 
-Published signer golden (head `1c3e640ae856a6c7a47cd892d0bfa1794df5deb5`)
-is exactly 380 UTF-8 bytes. Router test
-`tests/test_pq_prekey_correction.py` (`FLAT_HMAC_GOLDEN`) must match
-that preimage byte-for-byte. MAC `v` is the protocol id string
-`pq-anchor/2`, not the JSON integer `2`.
+The request preimage remains exactly 380 UTF-8 bytes for the published
+golden inputs. Router test `tests/test_pq_prekey_correction.py`
+(`FLAT_HMAC_V3_GOLDEN`) matches that preimage byte-for-byte and retains
+the v2 golden separately as migration evidence. MAC `v` is the protocol
+id string `pq-anchor/3`, not the JSON integer `3`.
 
 Integers are decimal with no leading zeros (except the value `0`).
 `hmac` is hex(HMAC-SHA256(token, canonical)). Golden vector:
-`tests/test_pq_prekey_correction.py` (`FLAT_HMAC_GOLDEN`). Share that
+`tests/test_pq_prekey_correction.py` (`FLAT_HMAC_V3_GOLDEN`). Share that
 exact UTF-8 byte string with the private signer repo.
 
 Invalid HMAC must reject with **exactly**:
@@ -134,10 +134,31 @@ Invalid HMAC must reject with **exactly**:
 ```
 
 That is the preferred reviewed-signer probe reply. A well-formed
-pq-anchor/2 request with an invalid HMAC must never produce a
+pq-anchor/3 request with an invalid HMAC must never produce a
 SignedTxn. Router preflight treats `error=hmac` (and the small
-allowlist `hmac_invalid` / `invalid_hmac` / `mac`) as the auth
-boundary. A success reply to an invalid HMAC is a protocol failure.
+exact allowlist containing only `hmac`) as the request-auth boundary.
+A success reply to an invalid HMAC is a protocol failure.
+
+## pq-anchor/3 success response
+
+The signer returns exactly these JSON keys on success:
+
+`ok`, `tree_size`, `root`, `pqsig`, `signed`, `response_hmac`
+
+`ok` is the JSON boolean `true`; `tree_size` is a JSON integer (never a
+boolean); `root`, `signed`, and `response_hmac` are canonical lowercase
+hex; and `pqsig` is exactly `present`. Duplicate, missing, or unknown
+keys fail closed. The router preserves the exact decoded SignedTxn bytes.
+
+`response_hmac` is HMAC-SHA256 with the same MainNet IPC token over a
+domain-separated, length-prefixed byte string. It binds, in this exact
+order: `checkpoint`, `origin`, `pqsig`, the original request `hmac`,
+`request_id`, request protocol `pq-anchor/3`, `root`, the exact raw
+SignedTxn bytes, and `tree_size`. The domain is
+`pq-anchor-response/1`. Length prefixes make embedded newlines and
+binary SignedTxn bytes unambiguous. The router verifies this MAC before
+identity binding, semantic SignedTxn validation, or AUTHORIZED
+persistence. There is no pq-anchor/2 fallback.
 
 ## Reconstruction
 
@@ -214,7 +235,7 @@ Reject (no SignedTxn) when any of these hold:
 
 | Reason | Detail |
 |---|---|
-| Wrong protocol | not pq-anchor/2 / `v!=2` / missing `policy` |
+| Wrong protocol | not pq-anchor/3 / `v!=3` / missing `policy` |
 | size_version | not exactly `1` |
 | Wrong origin | not `402signal.com/pq/log/mainnet-v1` |
 | Wrong genesis | not MainNet ID+hash |
@@ -238,12 +259,11 @@ Reject (no SignedTxn) when any of these hold:
 The signer does **not** own AUTHORIZED / SUBMITTED / CONFIRMED. Those
 live on the router log:
 
-- AUTHORIZED: router persists only after authenticated response
-  provenance (Ross-only signer response-MAC, or official native
-  Falcon verify). `request_signed` HMAC-authenticates the request,
-  not the SignedTxn bytes. Until that binding exists, production
-  `canary.authorize` fail-closes before `persist_authorized`.
-  Fixture `sign_fn` / `LIVE402_FIXTURE` may persist for tests.
+- AUTHORIZED: router persists only after the pq-anchor/3 response HMAC
+  authenticates the exact SignedTxn bytes and full request identity,
+  followed by strict semantic SignedTxn validation. Caller-supplied
+  SignedTxn bytes cannot reach persistence. Fixture `sign_fn` /
+  `LIVE402_FIXTURE` may persist only through a separate test capability.
   Already-confirmed checkpoints and read-only trust are unchanged.
 - SEND_ATTEMPTED: router latched expected txid before POST
 - SUBMITTED: router POSTed (signer never does this)
@@ -274,17 +294,17 @@ restarts:
 This is a spec, a contract, and signer-repo tests only. Do not
 reimplement the private signer inside this public router.
 
-## Parallel private-signer PR checklist
+## Paired private-signer requirements
 
 Private repo: `402signalhq/402signal-pq-signer` (historical personal path `402signal/402signal-pq-signer` redirects)
-Suggested branch: `cursor/isolated-falcon-signer-9f06` follow-up
-Historical TestNet head was `9798c38f` / merge `a901ef7a` until
-the pq-anchor/2 MainNet app lands.
+The public router contains only the client, protocol contract, and
+mocks. Signer source and secrets remain private. The paired signer
+change must:
 
-This agent cannot edit that private repo. The public router implements
-the client, protocol docs, and mocks. The signer PR must:
-
-1. Speak **pq-anchor/2** only on the MainNet app. Reject pq-anchor/1.
+1. Add **pq-anchor/3** to the MainNet app and authenticate every v3
+   success response. The router speaks v3 only. The signer may retain v2
+   temporarily for deployment compatibility, but must reject pq-anchor/1;
+   remove v2 after the v3 router rollout is verified.
 2. HMAC-verify flattened policy fields (`size_version=1` required) using the canonical encoding above. Do not nest `policy=` in the MAC.
 3. Independently fetch MainNet `/v2/transactions/params` from the hardcoded allowlist.
 4. Apply freshness / lastRound slack / min-fee / required-fee-vs-frozen rules. Never rewrite fee/fv/lv.
@@ -293,6 +313,9 @@ the client, protocol docs, and mocks. The signer PR must:
 7. Keep durable monotonic / replay / conflict state. No automatic second spend.
 8. Never read BROADCAST/CANARY. Never POST. Fixture/CI never hit live MainNet.
 9. Add tests: two observation times agree **or** fail closed; required fee > frozen rejects; policy field missing rejects; unsigned txn keys reject.
+10. Authenticate every successful response with the exact
+    `pq-anchor-response/1` contract above, including the original request
+    HMAC and exact raw SignedTxn bytes. Never MAC a re-encoded transaction.
 
 ## Tests the signer repo must have
 

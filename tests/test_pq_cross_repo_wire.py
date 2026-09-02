@@ -1,4 +1,4 @@
-"""Offline pq-anchor/2 cross-repo wire contract (router serialization gate).
+"""Offline cross-repo wire contract and pq-anchor/2 migration fixture.
 
 Builds real request bytes via narrow_policy / build_request /
 encode_request_line. Pins a Go-compatible fixture corpus Ross can
@@ -23,6 +23,9 @@ from live402.pq import ORIGIN_MAINNET, signer_mainnet
 from live402.pq import checkpoint as ckpt
 
 ROOT = Path(__file__).resolve().parents[1]
+# The immutable v2 corpus is retained as migration evidence. Active requests
+# must differ only where pq-anchor/3 intentionally changes the request version
+# and HMAC; the response-MAC contract has its own cross-language golden tests.
 CORPUS = ROOT / "tests" / "fixtures" / "pq_anchor2_wire"
 FIXTURE_TOKEN = "fixture-hmac-token-not-a-secret"
 _SIG = base64.b64encode(b"\x00" * 4 + b"\x22" * 64).decode("ascii")
@@ -91,10 +94,12 @@ class CrossRepoWireContractTests(unittest.TestCase):
         self.assertEqual(wire["policy"]["size_version"], "1")
         self.assertNotIsInstance(wire["policy"]["size_version"], int)
 
-    def test_hmac_preimage_matches_380_byte_golden(self):
-        pinned = (CORPUS / "hmac_canonical.txt").read_bytes()
-        self.assertEqual(len(pinned), 380)
-        self.assertIn(b"size_version=1\n", pinned)
+    def test_v3_hmac_preimage_is_exact_migration_from_v2_golden(self):
+        pinned_v2 = (CORPUS / "hmac_canonical.txt").read_bytes()
+        self.assertEqual(len(pinned_v2), 380)
+        self.assertTrue(pinned_v2.startswith(b"pq-anchor/2\n"))
+        self.assertTrue(pinned_v2.endswith(b"v=pq-anchor/2\n"))
+        expected_v3 = pinned_v2.replace(b"pq-anchor/2", b"pq-anchor/3")
         body = signer_mainnet.canonical_bytes(
             origin=ORIGIN_MAINNET,
             tree_size=2,
@@ -106,13 +111,13 @@ class CrossRepoWireContractTests(unittest.TestCase):
             policy=_POLICY,
         )
         self.assertEqual(len(body), 380)
-        self.assertEqual(body, pinned)
+        self.assertEqual(body, expected_v3)
         self.assertIn(b"size_version=1\n", body)
-        self.assertTrue(body.startswith(b"pq-anchor/2\n"))
-        self.assertTrue(body.endswith(b"v=pq-anchor/2\n"))
+        self.assertTrue(body.startswith(b"pq-anchor/3\n"))
+        self.assertTrue(body.endswith(b"v=pq-anchor/3\n"))
         self.assertNotIn(b"policy=", body)
 
-    def test_pinned_request_bytes_match_real_encoder(self):
+    def test_v3_request_preserves_v2_fields_but_changes_version_and_hmac(self):
         bound = signer_mainnet.narrow_policy(_POLICY)
         payload = signer_mainnet.build_request(
             origin=ORIGIN_MAINNET,
@@ -127,12 +132,34 @@ class CrossRepoWireContractTests(unittest.TestCase):
         )
         line = signer_mainnet.encode_request_line(payload)
         raw = line.encode("utf-8")
-        pinned = (CORPUS / "request.json").read_bytes()
-        self.assertEqual(raw, pinned)
-        self.assertFalse(pinned.endswith(b"\n"))
-        self.assertIn(b'"size_version":"1"', pinned)
-        self.assertNotIn(b'"size_version":1,', pinned)
-        self.assertNotIn(b'"size_version":1}', pinned)
+        pinned_v2 = (CORPUS / "request.json").read_bytes()
+        self.assertFalse(pinned_v2.endswith(b"\n"))
+        active = json.loads(raw)
+        historic = json.loads(pinned_v2)
+        self.assertEqual(historic["v"], 2)
+        self.assertEqual(active["v"], 3)
+        historic.pop("v")
+        active_hmac = active.pop("hmac")
+        historic.pop("hmac")
+        active.pop("v")
+        self.assertEqual(active, historic)
+        expected_mac = signer_mainnet.mac_hex(
+            FIXTURE_TOKEN,
+            signer_mainnet.canonical_bytes(
+                origin=ORIGIN_MAINNET,
+                tree_size=2,
+                root=_GOLDEN_ROOT,
+                consistency=[],
+                timestamp=1700000000,
+                request_id="wire-corpus-v1",
+                checkpoint=_signed_note(2, bytes.fromhex(_GOLDEN_ROOT)),
+                policy=_POLICY,
+            ),
+        )
+        self.assertEqual(active_hmac, expected_mac)
+        self.assertIn(b'"size_version":"1"', raw)
+        self.assertNotIn(b'"size_version":1,', raw)
+        self.assertNotIn(b'"size_version":1}', raw)
 
     def test_pinned_hmac_reject_has_no_authorization_keys(self):
         raw = (CORPUS / "reject.json").read_bytes()

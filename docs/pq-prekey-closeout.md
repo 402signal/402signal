@@ -61,12 +61,14 @@ Router and signer agree on min fee, fee/byte, lastRound, fv, lv, and
 canonical fee without public caller control. Values come only from
 the trusted MainNet network-parameter path.
 
-Follow-up (this PR): protocol is **pq-anchor/2**. The router fetches
+The active MainNet router protocol is **pq-anchor/3**. The router fetches
 a pinned MainNet suggested-params snapshot itself and HMAC-binds
 the narrow policy (`last_round`, `min_fee`, `fee_per_byte`, `fv`,
 `lv`, `canonical_fee`, `snapshot_at`, `size_rule`, `size_version=1`)
 by flattening those fields into the Go-signer MAC (no nested
-`policy=` blob; MAC `v=pq-anchor/2`; `size_version=1`). Operator
+`policy=` blob; request MAC `v=pq-anchor/3`; `size_version=1`). The
+signer response MAC additionally binds the full request identity and exact
+raw SignedTxn bytes. Operator
 authorize/prepare does not depend on injected params. Canonical
 fee/fv/lv validation is not loosened.
 
@@ -212,11 +214,9 @@ import those final functions.
   address, signer probe, confirm probe, fetch suggested params, show
   projected policy). Must not authorize, persist AUTHORIZED, or create
   a SignedTxn.
-- `--prepare`: currently fail-closed before dialing the signer because its
-  response is not response-MAC authenticated. After a separately reviewed,
-  coordinated signer-and-router response-binding change: preflight → fetch
-  frozen policy → signer once → authenticate response → verify → persist
-  AUTHORIZED → print expected txid. No POST.
+- `--prepare`: preflight → fetch frozen policy → signer once → authenticate
+  the pq-anchor/3 response → verify → persist AUTHORIZED → print expected
+  txid. No POST. Any missing/mismatched response MAC fails before persistence.
 - `--go`: send already-persisted AUTHORIZED only. Does not silently
   create a fresh auth.
 - `--discard-authorized`: explicit discard of AUTHORIZED that expired

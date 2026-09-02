@@ -49,7 +49,7 @@ class CloseoutImportTests(unittest.TestCase):
         self.assertTrue(callable(canary.prepare))
         self.assertTrue(callable(canary.send_persisted))
         self.assertTrue(callable(mainnet_params.fetch_trusted_mainnet_params))
-        self.assertEqual(signer_mainnet.SIGNER_PROTOCOL, "pq-anchor/2")
+        self.assertEqual(signer_mainnet.SIGNER_PROTOCOL, "pq-anchor/3")
         self.assertTrue(callable(signer_mainnet.request_signed))
         self.assertTrue(callable(store.get_tile))
         self.assertEqual(tiles.MAX_TILE_INDEX, 2**63 - 1)
