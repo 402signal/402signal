@@ -742,26 +742,25 @@ class Handler(SimpleHTTPRequestHandler):
         self.end_headers()
 
     def _homepage_html(self) -> str | None:
-        """Inject homepage PQ card only when last_confirmed.size > 0."""
+        """Swap homepage status chip to Anchored when last_confirmed exists."""
         parsed = urlparse(self.path)
         if parsed.path not in ("/", "/index.html"):
             return None
         html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
         try:
             from live402.pq import worker as pq_worker
+            from live402.pq import transparency as pq_view
 
             section = pq_worker.homepage_pq_html()
+            marker = pq_view.HOMEPAGE_AWAITING_CHIP
         except Exception:
             section = ""
+            marker = '<p class="pq-chip"><!--PQ_LATEST-->Awaiting checkpoint</p>'
         if not section:
             return None
-        marker = "<!--PQ_LATEST-->"
         if marker in html:
             return html.replace(marker, section, 1)
-        fallback = "</main>"
-        if fallback not in html:
-            return html
-        return html.replace(fallback, section + "    </main>", 1)
+        return None
 
     def _transparency_html(self) -> str:
         from live402.pq import transparency as pq_view

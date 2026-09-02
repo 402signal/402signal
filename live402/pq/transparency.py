@@ -481,17 +481,20 @@ def page_model() -> dict:
     }
 
 
+HOMEPAGE_AWAITING_CHIP = (
+    '<p class="pq-chip"><!--PQ_LATEST-->Awaiting checkpoint</p>'
+)
+HOMEPAGE_ANCHORED_CHIP = '<p class="pq-chip is-anchored">Anchored</p>'
+
+
 def homepage_pq_html() -> str:
-    """Injected Latest confirmed line. Empty unless last_confirmed has a real confirmed txid."""
+    """Homepage status chip. Anchored only when last_confirmed has a real txid."""
     conf = confirmed_view()
     if not conf:
         return ""
     if log_integrity_error(int(store.size() or 0), conf):
         return ""
-    return (
-        '        <p class="pq-evidence">Latest confirmed Tree %s · Round %s</p>\n'
-        % (esc(conf["size"]), esc(conf["round"]))
-    )
+    return HOMEPAGE_ANCHORED_CHIP
 
 
 def _copy_btn(value: str, what: str = "value") -> str:
@@ -620,9 +623,8 @@ def _confirmed_card(model: dict) -> str:
         return (
             '<section class="block" id="latest-confirmed">\n'
             "  <h2>Latest confirmed checkpoint</h2>\n"
-            "  <p>Awaiting first confirmed %s checkpoint.</p>\n"
+            "  <p>Awaiting first confirmed MainNet checkpoint.</p>\n"
             "</section>\n"
-            % _network_label()
         )
     cta = _confirmed_checkpoint_cta(model)
     bind_note = ""
@@ -770,9 +772,9 @@ def _current_vs_anchored(model: dict) -> str:
         elif model["confirmed"] and growth > 0:
             compare = "%s newer log entries exist after the latest confirmed anchor." % growth
         elif current > 0 and not model["confirmed"]:
-            compare = "The log has entries. Awaiting first confirmed %s checkpoint." % _network_label()
+            compare = "The log has entries. Awaiting first confirmed MainNet checkpoint."
         else:
-            compare = "Awaiting first confirmed %s checkpoint." % _network_label()
+            compare = "Awaiting first confirmed MainNet checkpoint."
         numbers = "Current tree %s · confirmed tree %s · unanchored growth %s." % (
             esc(current),
             esc(confirmed_size if model["confirmed"] else 0),
@@ -1124,8 +1126,14 @@ def _verification_details(model: dict) -> str:
     )
 
 
+def _mainnet_confirmed(model: dict) -> bool:
+    """True only when last_confirmed is independently verified as MainNet."""
+    conf = model.get("confirmed")
+    return bool(conf) and _confirmed_network_label(conf) == "MainNet"
+
+
 def _hero_badge(model: dict) -> str:
-    if model.get("confirmed"):
+    if _mainnet_confirmed(model):
         return '        <p class="pq-badge">Algorand MainNet log</p>\n'
     return (
         '        <p class="pq-badge">Algorand MainNet log · awaiting first '
@@ -1134,10 +1142,10 @@ def _hero_badge(model: dict) -> str:
 
 
 def _hero_lede(model: dict) -> str:
-    if model.get("confirmed"):
+    if _mainnet_confirmed(model):
         return (
             "        <p class=\"lede\">PQ Trust is 402Signal's append-only transparency layer. "
-            "Signed checkpoints are periodically anchored to "
+            "Confirmed checkpoints are independently anchored to "
             "Algorand MainNet using native Falcon-1024 post-quantum authorization.</p>\n"
         )
     return (

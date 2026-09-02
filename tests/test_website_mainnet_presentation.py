@@ -122,21 +122,34 @@ class COPY_EXPLORER_ISOLATION(unittest.TestCase):
     def test_production_pages_are_mainnet_pq_trust_and_awaiting(self):
         home = self._html("/")
         how = self._html("/how")
+        catalog = self._html("/catalog")
         trans = self._html("/transparency")
         devs = self._html("/developers")
+        for path, html in (
+            ("/", home),
+            ("/how", how),
+            ("/catalog", catalog),
+            ("/transparency", trans),
+            ("/developers", devs),
+        ):
+            self.assertNotIn("Currently Algorand TestNet", html, path)
+            self.assertNotIn("periodically anchored to Algorand TestNet", html, path)
+            self.assertNotIn("periodically anchored to Algorand MainNet", html, path)
+            _assert_no_banned_copy(self, html, path)
         for path, html in (("/", home), ("/how", how), ("/transparency", trans), ("/developers", devs)):
             self.assertIn("Algorand MainNet", html, path)
-            self.assertIn("Awaiting first confirmed MainNet checkpoint", html, path)
             self.assertIn("PQ Trust", html, path)
-            self.assertNotIn("Currently Algorand TestNet", html, path)
-            _assert_no_banned_copy(self, html, path)
         self.assertIn("PQ TRUST", home)
         self.assertIn('class="pq-trust"', home)
+        self.assertIn("Algorand MainNet", home)
+        self.assertIn("Awaiting checkpoint", home)
+        self.assertIn('class="pq-chip"', home)
+        self.assertIn("Falcon anchors checkpoints, not merchant payments.", home)
         self.assertIn("PQ Trust is 402Signal's append-only transparency layer", home)
         self.assertIn("PQ Trust is 402Signal's append-only transparency layer", trans)
         self.assertNotIn("Latest confirmed Tree", home)
         self.assertNotIn('class="confirm-card"', trans)
-        self.assertIn("Awaiting first confirmed TestNet checkpoint.", trans)
+        self.assertIn("Awaiting first confirmed MainNet checkpoint.", trans)
         self.assertNotIn(algo_anchor.TESTNET_EXPLORER_TX_URL, home)
         self.assertNotIn(algo_anchor.MAINNET_EXPLORER_TX_URL, home)
 
@@ -149,8 +162,11 @@ class COPY_EXPLORER_ISOLATION(unittest.TestCase):
         self.assertNotIn("TRANSPARENCY", home)
         self.assertNotIn("currently TestNet", home)
         self.assertNotIn("Currently Algorand TestNet", home)
-        self.assertIn("Awaiting first confirmed MainNet checkpoint", home)
-        self.assertIn("Awaiting first confirmed MainNet checkpoint", how)
+        self.assertIn("Algorand MainNet", home)
+        self.assertIn("Awaiting checkpoint", home)
+        self.assertIn("Falcon anchors checkpoints, not merchant payments.", home)
+        self.assertIn("Algorand MainNet", how)
+        self.assertIn("Falcon anchors checkpoints, not merchant payments.", how)
         _assert_no_banned_copy(self, home, "index.html")
         _assert_no_banned_copy(self, how, "how.html")
         self.assertLessEqual(len(payment.CATALOG_DESCRIPTION), 500)
@@ -172,6 +188,8 @@ class COPY_EXPLORER_ISOLATION(unittest.TestCase):
         _assert_no_banned_copy(self, html, "confirmed-testnet")
         self.assertIn("The Algorand transaction authorizes a checkpoint.", html)
         self.assertIn("It is not a merchant payment.", html)
+        self.assertNotIn("Confirmed checkpoints are independently anchored to Algorand MainNet", html)
+        self.assertIn("Awaiting first confirmed MainNet checkpoint.", html)
 
     def test_confirmed_mainnet_anchor_never_links_testnet_explorer(self):
         self._restart_with_mainnet_identity()
@@ -206,7 +224,10 @@ class COPY_EXPLORER_ISOLATION(unittest.TestCase):
         )
         self.assertNotIn("testnet", algo_anchor.verified_explorer_tx_url(_TX_A, "mainnet"))
         home = self._html("/")
-        self.assertIn("Latest confirmed Tree 1 · Round 200", home)
+        self.assertIn("Anchored", home)
+        self.assertIn('class="pq-chip is-anchored"', home)
+        self.assertNotIn("Awaiting checkpoint", home)
+        self.assertNotIn("Latest confirmed Tree", home)
         self.assertNotIn(algo_anchor.TESTNET_EXPLORER_TX_URL + _TX_A, home)
         _assert_no_banned_copy(self, html, "confirmed-mainnet")
 
@@ -255,6 +276,8 @@ class COPY_EXPLORER_ISOLATION(unittest.TestCase):
         self.assertNotIn(algo_anchor.TESTNET_EXPLORER_TX_URL, html)
         home = self._html("/")
         self.assertNotIn("Latest confirmed Tree", home)
+        self.assertIn("Awaiting checkpoint", home)
+        self.assertNotIn('class="pq-chip is-anchored"', home)
 
         store.save_authorized_checkpoint(
             tree_size=1,
@@ -275,6 +298,8 @@ class COPY_EXPLORER_ISOLATION(unittest.TestCase):
         self.assertNotIn(algo_anchor.MAINNET_EXPLORER_TX_URL + _TX_A, submitted)
         home2 = self._html("/")
         self.assertNotIn("Latest confirmed Tree", home2)
+        self.assertIn("Awaiting checkpoint", home2)
+        self.assertNotIn('class="pq-chip is-anchored"', home2)
 
     def test_mainnet_secrets_do_not_relabel_testnet_evidence(self):
         for key in (

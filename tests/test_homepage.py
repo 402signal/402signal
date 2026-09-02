@@ -288,14 +288,15 @@ class HomepageProductTests(unittest.TestCase):
         )
         self.assertIn("PQ TRUST", html)
         self.assertIn("Commit route evidence to the PQ Trust log", html)
-        self.assertIn("Production log identity is Algorand MainNet. Awaiting first confirmed MainNet checkpoint.", html)
+        self.assertIn("Algorand MainNet", html)
+        self.assertIn("Awaiting checkpoint", html)
+        self.assertIn('class="pq-badge"', html)
+        self.assertIn('class="pq-chip"', html)
         self.assertNotIn("Signed checkpoints are periodically anchored to Algorand MainNet.", html)
-        self.assertIn("Falcon-1024 post-quantum transaction authorization.", html)
-        self.assertIn(
-            "This post-quantum authorization protects the checkpoint transaction. "
-            "It does not make Base or Solana merchant payments post-quantum secure.",
-            html,
-        )
+        self.assertNotIn("periodically anchored to Algorand TestNet", html)
+        self.assertNotIn("Currently Algorand TestNet", html)
+        self.assertNotIn("Latest confirmed Tree", html)
+        self.assertIn("Falcon anchors checkpoints, not merchant payments.", html)
         self.assertIn("Verifiable routing history", html)
         self.assertIn("PQ Trust is 402Signal's append-only transparency layer", html)
         self.assertIn("append-only Merkle log", html)
@@ -577,13 +578,13 @@ class HomepageProductTests(unittest.TestCase):
         self.assertNotIn("HEALTHY", html)
         self.assertNotIn("honest", html.lower())
         self.assertIn(
-            "Routing evidence committed to the PQ Trust log. Production log identity "
-            "is Algorand MainNet. Awaiting first confirmed MainNet checkpoint. "
-            "Falcon-1024 post-quantum authorization protects confirmed MainNet "
-            "checkpoint transactions when present.",
+            "Routing evidence is committed to the PQ Trust log. Production identity "
+            "is Algorand MainNet. Falcon anchors checkpoints, not merchant payments.",
             html,
         )
         self.assertNotIn("periodically anchored to Algorand MainNet", html)
+        self.assertNotIn("periodically anchored to Algorand TestNet", html)
+        self.assertNotIn("Currently Algorand TestNet", html)
         self.assertIn("Routing does not wait for confirmation.", html)
         self.assertNotIn("may later be anchored", html)
 
@@ -644,7 +645,11 @@ class HomepageProductTests(unittest.TestCase):
         self.assertNotIn("algo_bonus", html)
         self.assertNotIn("TestNet Falcon broadcast is off unless explicitly enabled.", html)
         self.assertIn("402Signal maintains a public append-only PQ Trust log", html)
-        self.assertIn("Production log identity is Algorand MainNet", html)
+        self.assertIn("Production identity is Algorand MainNet", html)
+        self.assertIn("Falcon anchors checkpoints, not merchant payments.", html)
+        self.assertNotIn("Historical TestNet archive", html)
+        self.assertNotIn("Currently Algorand TestNet", html)
+        self.assertNotIn("periodically anchored to Algorand TestNet", html)
         self.assertIn("The human-readable transparency view is available at", html)
         self.assertIn('href="/transparency"', html)
 
@@ -1105,9 +1110,11 @@ class HomepageProductTests(unittest.TestCase):
             "PQ-safe",
             "merchant payments PQ-safe",
         )
-        self.assertIn("post-quantum", self.home.lower())
+        self.assertIn("Falcon anchors checkpoints, not merchant payments.", self.home)
         self.assertIn("post-quantum", self.transparency.lower())
-        self.assertIn("post-quantum", self.how.lower())
+        self.assertIn("Falcon anchors checkpoints, not merchant payments.", self.how)
+        self.assertNotIn("post-quantum", self.home.lower())
+        self.assertNotIn("post-quantum", self.how.lower())
         self.assertNotIn("post-quantum", self.devs.lower())
         self.assertNotIn("post-quantum", self.catalog.lower())
         self.assertNotIn("post-quantum", self.contact.lower())

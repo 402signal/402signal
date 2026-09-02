@@ -183,8 +183,9 @@ class C2SPHttpTests(unittest.TestCase):
             encoding="utf-8"
         )
         self.assertIn("PQ Trust", home)
-        self.assertIn("post-quantum", home.lower())
-        self.assertIn("Falcon-1024 post-quantum transaction authorization.", home)
+        self.assertIn("Algorand MainNet", home)
+        self.assertIn("Awaiting checkpoint", home)
+        self.assertIn("Falcon anchors checkpoints, not merchant payments.", home)
         self.assertNotIn("/pq/log", home)
 
 
