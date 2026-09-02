@@ -467,17 +467,18 @@
       showMessage("Enter a capability to search the catalog.");
       return;
     }
-    setStatus("Previewing discovery...");
+    setStatus("Searching catalog...");
     if (results) results.textContent = "";
-    let pulse = null;
+    const pulseRequest = fetch("/pulse", { cache: "no-store" })
+      .then(function (response) { return response.ok ? response.json() : null; })
+      .catch(function () { return null; });
     try {
-      const pulseRes = await fetch("/pulse", { cache: "no-store" });
-      if (pulseRes.ok) pulse = await pulseRes.json();
-    } catch (e) {
-      pulse = null;
-    }
-    try {
-      const res = await fetch(previewUrl(), { cache: "no-store" });
+      const pair = await Promise.all([
+        pulseRequest,
+        fetch(previewUrl(), { cache: "no-store" }),
+      ]);
+      const pulse = pair[0];
+      const res = pair[1];
       const raw = await res.text();
       let parsed = null;
       try { parsed = JSON.parse(raw); } catch (e) { parsed = null; }

@@ -37,13 +37,24 @@ HUMAN_PAGES = {
 }
 # Server-rendered human pages. Intercept before static rewrite. Not STATIC_DIR files.
 HUMAN_DYNAMIC_PATHS = frozenset({"/transparency", "/transparency.html"})
-STATIC_FILES = {"/styles.css", "/app.js", "/dashboard.js", "/transparency.js"}
+STATIC_FILES = {
+    "/styles.css",
+    "/app.js",
+    "/dashboard.js",
+    "/transparency.js",
+    "/favicon.svg",
+    "/og.png",
+    "/sitemap.xml",
+}
 # Constant paths only. Never join a request string onto STATIC_DIR.
 _ASSET_PATHS = {
     "/styles.css": STATIC_DIR / "styles.css",
     "/app.js": STATIC_DIR / "app.js",
     "/dashboard.js": STATIC_DIR / "dashboard.js",
     "/transparency.js": STATIC_DIR / "transparency.js",
+    "/favicon.svg": STATIC_DIR / "favicon.svg",
+    "/og.png": STATIC_DIR / "og.png",
+    "/sitemap.xml": STATIC_DIR / "sitemap.xml",
 }
 # Process-local volume files. Never HTTP-download, never static, never OpenAPI.
 _VOLUME_DUMP_PATHS = frozenset(
@@ -645,6 +656,9 @@ class Handler(SimpleHTTPRequestHandler):
         ctype = {
             "css": "text/css; charset=utf-8",
             "js": "text/javascript; charset=utf-8",
+            "svg": "image/svg+xml",
+            "png": "image/png",
+            "xml": "application/xml; charset=utf-8",
         }.get(suffix, "application/octet-stream")
         requested = (parse_qs(parsed.query).get("v") or [""])[0]
         cache = (
@@ -715,6 +729,10 @@ class Handler(SimpleHTTPRequestHandler):
             "/rails",
             "/pulse",
             "/attestation",
+            "/sitemap.xml",
+            "/favicon.svg",
+            "/og.png",
+            "/.well-known/security.txt",
         }
         human = self._read_human_html()
         if human is not None:
@@ -882,6 +900,14 @@ class Handler(SimpleHTTPRequestHandler):
             )
         if parsed.path == "/robots.txt":
             return self._text(200, discover.ROBOTS_TXT)
+        if parsed.path == "/.well-known/security.txt":
+            return self._text(
+                200,
+                "Contact: mailto:ross@402signal.com\n"
+                "Canonical: https://402signal.com/.well-known/security.txt\n"
+                "Expires: 2027-09-02T00:00:00Z\n"
+                "Preferred-Languages: en\n",
+            )
         if parsed.path == "/llms.txt":
             return self._text(200, discover.LLMS_TXT)
         if parsed.path in {"/mcp", "/mcp.json", "/.well-known/mcp.json"}:
@@ -890,6 +916,9 @@ class Handler(SimpleHTTPRequestHandler):
                 mcp.manifest(),
                 extra_headers={"Cache-Control": "public, max-age=300"},
             )
+        if self._wants_html():
+            html = (STATIC_DIR / "404.html").read_text(encoding="utf-8")
+            return self._html(404, html, extra_headers={"Cache-Control": "no-store"})
         return self._json(404, {"error": "not found"})
 
     def do_POST(self) -> None:

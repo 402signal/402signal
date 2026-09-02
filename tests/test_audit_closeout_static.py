@@ -72,7 +72,7 @@ class CloseoutStaticTests(unittest.TestCase):
         self.assertIn("Algorand MainNet", home)
         self.assertIn("Awaiting anchor", home)
         self.assertIn('class="pq-chip"', home)
-        self.assertIn("402Signal commits routing evidence to an append-only log.", home)
+        self.assertIn("402Signal records routing evidence in an append-only Merkle log.", home)
         self.assertIn('class="pq-trust"', home)
         self.assertNotIn("pq-testnet", home)
         self.assertNotIn("Signed checkpoints are periodically anchored to Algorand MainNet", home)

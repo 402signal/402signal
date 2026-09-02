@@ -4,17 +4,22 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>402Signal · Find a paid API that works right now</title>
-  <meta name="description" content="402Signal checks x402 endpoints before you spend. Base, Solana, and Algorand." />
+  <meta name="description" content="402Signal searches and checks x402 services before your agent spends. Base, Solana, and Algorand." />
   <link rel="canonical" href="https://402signal.com" />
   <meta property="og:title" content="402Signal · Find a paid API that works right now" />
-  <meta property="og:description" content="402Signal checks x402 endpoints before you spend. Base, Solana, and Algorand." />
+  <meta property="og:description" content="402Signal searches and checks x402 services before your agent spends. Base, Solana, and Algorand." />
   <meta property="og:url" content="https://402signal.com" />
   <meta property="og:type" content="website" />
   <meta property="og:site_name" content="402Signal" />
-  <meta name="twitter:card" content="summary" />
+  <meta property="og:image" content="https://402signal.com/og.png" />
+  <meta property="og:image:width" content="1200" />
+  <meta property="og:image:height" content="630" />
+  <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="402Signal · Find a paid API that works right now" />
-  <meta name="twitter:description" content="402Signal checks x402 endpoints before you spend. Base, Solana, and Algorand." />
+  <meta name="twitter:description" content="402Signal searches and checks x402 services before your agent spends. Base, Solana, and Algorand." />
+  <meta name="twitter:image" content="https://402signal.com/og.png" />
   <meta name="twitter:site" content="@402Signal" />
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
@@ -25,65 +30,71 @@
         <span class="brand-name">402Signal</span>
       </a>
       <nav class="nav" aria-label="Primary">
-        <a href="/" aria-current="page">Home</a>
-        <a href="/how">How it works</a>
         <a href="/catalog">Explore</a>
         <a href="/developers">Developers</a>
         <a href="/transparency">Transparency</a>
+        <a href="https://github.com/402signalhq/402signal" rel="noopener noreferrer">GitHub</a>
       </nav>
     </header>
 
     <main>
       <section class="hero">
+        <p class="eyebrow">Pre-spend routing for x402</p>
         <h1>Find a paid API that works right now.</h1>
-        <p class="lede">402Signal checks x402 endpoints before you spend. It compares the payment terms it sees now against your constraints and returns the best match, or a clear reason nothing qualified.</p>
-        <p class="lede">You keep your wallet and keys. 402Signal never pays the selected service for you.</p>
+        <p class="lede hero-copy">x402 lets software pay for APIs one request at a time. 402Signal searches Base, Solana, and Algorand, checks the payment options candidates return now, and picks one that fits your rules.</p>
+        <p class="boundary-line">Your app keeps the wallet. It decides whether to pay the seller and make the call.</p>
         <p class="rails-line">Base · Solana · Algorand</p>
-        <p class="note">$0.01 USDC per routing check</p>
         <div class="hero-actions">
-          <a class="btn" href="/catalog">Try a free preview</a>
-          <a class="btn secondary" href="/developers">Developer docs</a>
+          <a class="btn" href="/developers#quickstart">View the quick start</a>
+          <a class="btn secondary" href="/catalog">Search the free catalog</a>
         </div>
+        <p class="price-note">$0.01 USDC per live routing check. Seller payment is separate.</p>
+      </section>
+
+      <section class="example-card" aria-labelledby="example-heading">
+        <p class="eyebrow">Example</p>
+        <h2 id="example-heading">An agent needs weather data under 2 cents.</h2>
+        <p>A directory finds possible services. 402Signal checks which ones still return usable x402 terms, applies the budget, and returns a route. If none qualify, the agent gets a reason to stop.</p>
       </section>
 
       <section class="block" id="how-it-works">
-        <h2>How it works</h2>
-        <div class="decision-grid">
-          <article class="decision-card">
-            <h3>Search</h3>
-            <p>Find candidates across supported x402 discovery sources.</p>
-          </article>
-          <article class="decision-card">
-            <h3>Check</h3>
-            <p>Call candidate endpoints and read the payment requirements they return now.</p>
-          </article>
-          <article class="decision-card">
-            <h3>Match</h3>
-            <p>Apply your network, price, latency, and invocation constraints.</p>
-          </article>
-          <article class="decision-card">
-            <h3>Return</h3>
-            <p>Get the best qualifying route, or a typed reason nothing matched.</p>
-          </article>
+        <div class="section-heading">
+          <p class="eyebrow">One routing check</p>
+          <h2>From a need to a usable route</h2>
+        </div>
+        <ol class="route-steps">
+          <li><span>1</span><div><h3>Describe the job</h3><p>Send a capability, a specific URL, and any limits the route must meet.</p></div></li>
+          <li><span>2</span><div><h3>Check candidates</h3><p>402Signal searches supported sources and reads the payment requirements endpoints return now.</p></div></li>
+          <li><span>3</span><div><h3>Get a decision</h3><p>Receive the best qualifying payment option, or a typed reason nothing qualified.</p></div></li>
+        </ol>
+        <p class="scope-note"><strong>What “works right now” means:</strong> the endpoint returned a usable x402 payment offer when checked. It does not guarantee the quality of the seller's paid response.</p>
+        <p><a href="/how">Read the full routing flow</a></p>
+      </section>
+
+      <section class="block comparison" id="why">
+        <p class="eyebrow">Why 402Signal</p>
+        <h2>A catalog finds candidates. 402Signal makes a current decision.</h2>
+        <div class="comparison-grid">
+          <div class="comparison-head" aria-hidden="true"></div>
+          <div class="comparison-head">Directory</div>
+          <div class="comparison-head signal">402Signal</div>
+          <div>Payment data</div><div>Listed metadata</div><div>Endpoint response now</div>
+          <div>Policy</div><div>Search filters</div><div>Rules applied to observed options</div>
+          <div>Result</div><div>Possible services</div><div>One route or a clear miss</div>
         </div>
       </section>
 
-      <section class="block" id="why">
-        <h2>Check before you spend</h2>
-        <p>Discovery data gets stale. 402Signal checks the endpoint at routing time instead of relying only on what a directory says.</p>
-        <div class="decision-grid">
-          <article class="decision-card">
-            <h3>See what changed</h3>
-            <p>The result separates seller claims from what 402Signal observed.</p>
-          </article>
-          <article class="decision-card">
-            <h3>Keep control</h3>
-            <p>Your application keeps the wallet, signing, seller payment, and execution.</p>
-          </article>
-          <article class="decision-card">
-            <h3>Fail clearly</h3>
-            <p>If nothing meets your constraints, 402Signal returns a typed miss instead of guessing.</p>
-          </article>
+      <section class="block developer-callout">
+        <div>
+          <p class="eyebrow">For developers</p>
+          <h2>Start with one POST request.</h2>
+          <p>The first response is HTTP 402 with payment options for the routing fee. After payment, 402Signal searches, checks, and ranks candidates.</p>
+        </div>
+        <div class="code-card">
+          <div class="code-toolbar"><span>POST /route</span><a href="/developers">Full guide</a></div>
+          <pre class="code">curl -sS -D - https://402signal.com/route \
+  -H 'Content-Type: application/json' \
+  -d '{"need":"weather data","max_price_usd":0.02}'</pre>
         </div>
       </section>
 
@@ -92,20 +103,27 @@
           <p class="pq-badge">Algorand MainNet</p>
           <p class="pq-chip"><!--PQ_LATEST-->Awaiting anchor</p>
         </div>
-        <h2>Verifiable routing history</h2>
-        <p>402Signal commits routing evidence to an append-only log.</p>
-        <p>Published checkpoints make later changes to the recorded history detectable.</p>
-        <p><a class="btn secondary" href="/transparency">View transparency</a></p>
+        <h2>A routing history you can check</h2>
+        <p>402Signal records routing evidence in an append-only Merkle log. Confirmed checkpoints are authorized by a native Falcon-1024 account and anchored on Algorand MainNet. Later changes to the published history can be detected.</p>
+        <p class="pq-boundary">Falcon-1024 authorizes the checkpoint transaction. It does not make seller payments or API responses post-quantum secure.</p>
+        <p><a class="btn secondary" href="/transparency">Inspect the latest checkpoint</a></p>
       </section>
+    </main>
 
-      <section class="block" id="boundary">
-        <h2>402Signal recommends. You execute.</h2>
-        <p>402Signal finds and checks the route. Your application keeps control of its wallet, signs the seller payment, and calls the selected service.</p>
-      </section>
-
-      <section class="discover-row" aria-label="Public directories">
-        <h2>Listed in</h2>
-        <p>Directory links show where 402Signal is listed. They are not endorsements.</p>
+    <footer class="foot">
+      <p>402Signal</p>
+      <p>
+        <a href="https://github.com/402signalhq/402signal" rel="noopener noreferrer">GitHub</a>
+        <a href="https://x.com/402Signal" rel="noopener noreferrer">@402Signal</a>
+        <a href="/how">How it works</a>
+        <a href="/openapi.json">OpenAPI</a>
+        <a href="/mcp.json">MCP</a>
+        <a href="/transparency">Transparency</a>
+        <a href="/contact">Contact</a>
+        <a href="mailto:ross@402signal.com">ross@402signal.com</a>
+      </p>
+      <details class="footer-listings">
+        <summary>Public listings</summary>
         <p class="listed-on">
           <a href="https://glama.ai/mcp/servers/402signal/402signal" rel="noopener noreferrer">Glama</a>
           <a href="https://registry.modelcontextprotocol.io/?q=402signal" rel="noopener noreferrer">MCP Registry</a>
@@ -115,20 +133,7 @@
           <a href="https://github.com/michielpost/x402-dev/blob/master/Projects.md" rel="noopener noreferrer">x402-dev</a>
           <a href="https://facilitator.goplausible.xyz/dashboard/bazaar?q=402signal" rel="noopener noreferrer">GoPlausible</a>
         </p>
-      </section>
-    </main>
-
-    <footer class="foot">
-      <p>402Signal</p>
-      <p>
-        <a href="https://github.com/402signalhq/402signal" rel="noopener noreferrer">GitHub</a>
-        <a href="https://x.com/402Signal" rel="noopener noreferrer">@402Signal</a>
-        <a href="/openapi.json">OpenAPI</a>
-        <a href="/mcp.json">MCP</a>
-        <a href="/transparency">Transparency</a>
-        <a href="/contact">Contact</a>
-        <a href="mailto:ross@402signal.com">ross@402signal.com</a>
-      </p>
+      </details>
     </footer>
   </div>
 </body>

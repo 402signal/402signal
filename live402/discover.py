@@ -1058,7 +1058,6 @@ Allow: /
 Allow: /openapi.json
 Allow: /.well-known/x402
 Allow: /.well-known/x402.json
-Allow: /dashboard
 Allow: /pulse
 Allow: /health
 Allow: /llms.txt
@@ -1073,7 +1072,7 @@ Allow: /attestation
 Allow: /pq/log/checkpoint
 Allow: /transparency
 
-Sitemap: https://402signal.com/
+Sitemap: https://402signal.com/sitemap.xml
 """
 
 LLMS_TXT = "# 402Signal\n\n" + DESC + """
