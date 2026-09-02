@@ -545,13 +545,20 @@ class MainNetSignerIsolationTests(unittest.TestCase):
     def test_signer_identity_points_at_merged_production_signer(self):
         self.assertEqual(
             signer_mainnet.SIGNER_REVIEWED_HEAD,
-            "cf85a61b171762dd1c63f2e3eb1244b0155bb8cc",
+            "e68f7e7b6298bdae9dd933b6537876c66dc8305c",
         )
         self.assertEqual(
             signer_mainnet.SIGNER_MERGE_SHA,
-            "8a37e601ca223ce30c56d40321069397237e7cef",
+            "8759c158b07f6405731a34e0efc31eceebc1c380",
         )
-        for stale in ("a901ef7a", "1c3e640a", "9798c38f"):
+        for stale in (
+            "a901ef7a",
+            "1c3e640a",
+            "9798c38f",
+            "8a37e601",
+            "cf85a61b",
+            "6bc72b20",
+        ):
             self.assertNotEqual(signer_mainnet.SIGNER_MERGE_SHA, stale)
             self.assertNotEqual(signer_mainnet.SIGNER_REVIEWED_HEAD, stale)
 

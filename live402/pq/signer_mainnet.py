@@ -57,8 +57,8 @@ _FORBIDDEN_PORTS = frozenset({8080})
 _MAX_LINE = 65536
 # Documented merged signer identity. Not a secret.
 SIGNER_APP = "402signal-pq-signer-mainnet"
-SIGNER_MERGE_SHA = "8a37e601ca223ce30c56d40321069397237e7cef"
-SIGNER_REVIEWED_HEAD = "cf85a61b171762dd1c63f2e3eb1244b0155bb8cc"
+SIGNER_MERGE_SHA = "8759c158b07f6405731a34e0efc31eceebc1c380"
+SIGNER_REVIEWED_HEAD = "e68f7e7b6298bdae9dd933b6537876c66dc8305c"
 SIGNER_PROTOCOL = "pq-anchor/3"
 REQUEST_VERSION = 3
 RESPONSE_VERSION = "pq-anchor-response/1"
