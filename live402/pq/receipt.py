@@ -45,7 +45,7 @@ class CrashBeforeSign(RuntimeError):
 
 
 class SignerConfigError(ValueError):
-    """LIVE402_PQ_LOG_SK was set but could not be parsed. Do not generate a key."""
+    """Fail-closed signer identity. Do not generate a key or overwrite VKEY."""
 
 
 def _clear_signer_memory() -> None:
@@ -135,7 +135,8 @@ def load_signer_from_env() -> str:
     MainNet epoch uses LIVE402_PQ_LOG_SK_MAINNET only.
     reuse_testnet_sk=false: MainNet must not fall back to the TestNet secret
     and must not load a MainNet secret that matches the TestNet public key.
-    Never logs, prints, or writes the secret.
+    If SK_MAINNET and VKEY_MAINNET are both set, the staged VKEY must equal
+    the C2SP vkey derived from the SK. Never logs, prints, or writes the secret.
     """
     from live402.pq import log_identity
 
@@ -157,8 +158,18 @@ def load_signer_from_env() -> str:
 
 
 def _load_mainnet_signer_from_env() -> str:
-    """MainNet epoch: fresh SK only. Never silently use LIVE402_PQ_LOG_SK."""
-    from live402.pq import log_identity
+    """MainNet epoch: fresh SK only. Never silently use LIVE402_PQ_LOG_SK.
+
+    Identity contract:
+    - SK set and VKEY set: staged VKEY must exactly equal the derived C2SP
+      vkey. Mismatch clears signer memory, raises SignerConfigError, and
+      does not overwrite LIVE402_PQ_LOG_VKEY_MAINNET or fall back to
+      TestNet SK. Prevents advertising a different pubkey than the staged
+      VKEY (silent SK-derived overwrite).
+    - SK set and VKEY unset/empty: write the derived vkey into the env
+      (ops may stage SK first).
+    - SK unset: no MainNet signer.
+    """
     from live402.pq import trust
 
     desc = trust.trust_root_v2()
@@ -187,6 +198,13 @@ def _load_mainnet_signer_from_env() -> str:
         if test_fp and test_fp == main_fp:
             _clear_signer_memory()
             raise SignerConfigError("reuse_testnet_sk forbidden")
+    derived_vkey = ckpt.vkey_encode(_log_key_name(), main_fp)
+    staged_vkey = (os.environ.get(_VKEY_ENV_MAINNET) or "").strip()
+    if staged_vkey:
+        if staged_vkey != derived_vkey:
+            _clear_signer_memory()
+            raise SignerConfigError("vkey_mainnet mismatch")
+        return configure_signer(key)
     vkey = configure_signer(key)
     if vkey:
         os.environ[_VKEY_ENV_MAINNET] = vkey

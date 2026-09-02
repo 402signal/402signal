@@ -56,6 +56,11 @@ ceremony outline.
    Code rejects silent fallback to `LIVE402_PQ_LOG_SK`
    (`reuse_testnet_sk=false`).
 4. Publish the public half as `LIVE402_PQ_LOG_VKEY_MAINNET`.
+   If SK and VKEY are both set, boot requires exact string equality
+   with the C2SP vkey derived from the SK (fail closed; env is not
+   overwritten on mismatch). If SK is set and VKEY is unset, boot
+   writes the derived vkey (ops may stage SK first). If SK is unset,
+   there is no MainNet signer.
 5. GO checklist: the new MainNet public vkey MUST NOT EQUAL the
    archived TestNet public vkey. Public-only comparison.
    `log_identity.reject_reused_ed25519_vkey` fails the cutover if they
