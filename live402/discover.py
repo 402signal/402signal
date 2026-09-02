@@ -45,6 +45,10 @@ GUIDANCE = (
     "Awaiting first confirmed MainNet checkpoint. "
     "Signer never reads BROADCAST and never POSTs. /route does not wait for chain. "
     "Falcon authorizes a checkpoint txn, not a merchant payment. "
+    "Paid 200/503 is not atomic with log append (SEC-ROUTER-004 / A-14): "
+    "those codes do not require a durable signed leaf unless "
+    "require_transparency is true. logged_uncheckpointed is never success "
+    "when require_transparency is set. "
     "Probe budget is under 60s; a hang returns 503 JSON with miss_reason probe_timeout. "
     "If ranked candidates remain when the budget ends, miss_reason is probe_budget_exhausted "
     "(not no_candidates). If the request probe ceiling is hit with ranked candidates still untested and "
@@ -301,15 +305,26 @@ def openapi_spec(resource_url: str = ROUTE) -> dict:
             "pq_trust": {
                 "type": "object",
                 "description": (
-                    "Optional experimental transparency receipt. status is pending "
-                    "(durable leaf + signed checkpoint, not MainNet-anchored) or "
-                    "unavailable (log down). Not a /trust page."
+                    "Optional experimental transparency receipt. Not atomic with paid "
+                    "200/503 (SEC-ROUTER-004 / A-14): those codes do not require a "
+                    "durable signed leaf unless require_transparency is true. status is "
+                    "pending (durable leaf + signed checkpoint, not MainNet-anchored), "
+                    "logged_uncheckpointed (durable leaf, no signed checkpoint), or "
+                    "unavailable (append failed). logged_uncheckpointed is never success "
+                    "when require_transparency is true. Not a /trust page."
                 ),
                 "properties": {
                     "transparency": {
                         "type": "object",
                         "properties": {
-                            "status": {"type": "string", "enum": ["pending", "unavailable"]},
+                            "status": {
+                                "type": "string",
+                                "enum": list(schema_fields.TRANSPARENCY_STATUSES),
+                            },
+                            "state": {
+                                "type": "string",
+                                "enum": list(schema_fields.TRANSPARENCY_STATES),
+                            },
                             "log_origin": {"type": "string"},
                             "index": {"type": "integer"},
                             "checkpoint_size": {"type": "integer"},
@@ -1101,7 +1116,7 @@ HTTP 200 = live URL plus target contract. HTTP 503 = typed miss_reason.
 - GET /preview?need=weather  request-time catalog search (current upstream catalogs plus a local shadow; not a full-world RAM index) + discovery_matches + displayed + seller claims + read-only 402Signal observation (not_yet_observed when never independently probed). not_probed:true (does not probe, does not charge). Optional prefer_network=base|solana|algorand ranks across all rails; optional networks=solana restricts rails. discovery_via is a compact per-rail search|pages|error|fixture map. discovery_exhaustive is true only when the returned set is known complete. Catalog rows keep three clocks (discovery, claim, verification); a paid route also returns this request's probe time. HEAD 200 on /llms.txt /openapi.json /mcp.json /preview /rails /pulse.
 - POST /validate {"url":"https://seller.example/x402"}  unpaid seller probe (GET first, justified POST {} only, never a catalog-declared body, DNS IP-pin): is this seller agent-ready? Also GET /validate?url=. Fail-closed SSRF. Not a /route paywall bypass. Readiness + claimed vs observed + flags. Never a binary healthy flag.
 - GET /attestation  public sha256 of a recent 402signal_observed probe batch (batch_id, created_at, n, algo, hash). Not on-chain. Optional ?batch_id=.
-- GET /pq/log/checkpoint (also GET /pq/log/checkpoint/latest) and GET /pq/log/tile/*  experimental C2SP transparency log (tlog-checkpoint + tlog-tiles). Production transparency log identity targets Algorand MainNet. MainNet Falcon broadcasting is not enabled. Awaiting first confirmed MainNet checkpoint. Signer never reads BROADCAST and never POSTs. Falcon SK must never live on 402signal. last_confirmed is persisted only after an independent MainNet fetch+verify. /route does not wait for chain. Falcon authorizes a checkpoint txn, not a merchant payment. Paid /route may include pq_trust.transparency. status pending means a durable leaf and a signed checkpoint (state checkpoint_signed), not an Algorand inclusion. logged_uncheckpointed means the leaf is durable without a signed checkpoint. unavailable means append failed; it is not pending. Never call a leaf signed if there is no checkpoint. payment_authorization.pq_native is always false. GET /pq/log/trust is the public trust descriptor for the configured epoch (runtime Ed25519 vkey only; witness_policy is empty). Homepage PQ card evidence renders only when last_confirmed has a real confirmed txid. GET /transparency is the first-party read page. A v2 public leaf reveals type, ts, nonce, commitment, and optional live/miss_reason. It does not reveal salt, evidence, need, wallet, or payment. That is not a claim of anonymous or unlinkable traffic.
+- GET /pq/log/checkpoint (also GET /pq/log/checkpoint/latest) and GET /pq/log/tile/*  experimental C2SP transparency log (tlog-checkpoint + tlog-tiles). Production transparency log identity targets Algorand MainNet. MainNet Falcon broadcasting is not enabled. Awaiting first confirmed MainNet checkpoint. Signer never reads BROADCAST and never POSTs. Falcon SK must never live on 402signal. last_confirmed is persisted only after an independent MainNet fetch+verify. /route does not wait for chain. Falcon authorizes a checkpoint txn, not a merchant payment. Paid /route may include pq_trust.transparency. Paid 200/503 is not atomic with log append (SEC-ROUTER-004 / A-14): those codes do not require a durable signed leaf unless require_transparency is true. status pending means a durable leaf and a signed checkpoint (state checkpoint_signed), not an Algorand inclusion. logged_uncheckpointed means the leaf is durable without a signed checkpoint. unavailable means append failed; it is not pending. logged_uncheckpointed is never success when require_transparency is true. Never call a leaf signed if there is no checkpoint. payment_authorization.pq_native is always false. GET /pq/log/trust is the public trust descriptor for the configured epoch (runtime Ed25519 vkey only; env vkey wins over stale sqlite meta.vkey; witness_policy is empty). Homepage PQ card evidence renders only when last_confirmed has a real confirmed txid. GET /transparency is the first-party read page. A v2 public leaf reveals type, ts, nonce, commitment, and optional live/miss_reason. It does not reveal salt, evidence, need, wallet, or payment. That is not a claim of anonymous or unlinkable traffic.
 - GET /rails  three pay-in networks, asset, amountAtomic, facilitators, feePayers, maxTimeoutSeconds, per-rail up+latency
 - GET /health  {"ok":true} liveness only
 - GET /ready  storage/catalog/history/pq_log booleans. No paths or secrets. Fly health stays on /health.
