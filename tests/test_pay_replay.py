@@ -26,8 +26,8 @@ from live402 import discover, payment, replay
 from live402.route import handle_route
 
 
-def _payload(nonce="11"):
-    return {
+def _payload(nonce="11", resource_url="https://402signal.com/route"):
+    body = {
         "x402Version": 2,
         "accepted": {
             "scheme": "exact",
@@ -50,6 +50,9 @@ def _payload(nonce="11"):
             },
         },
     }
+    if resource_url:
+        body["resource"] = {"url": resource_url}
+    return body
 
 
 class _Headers(dict):
@@ -465,10 +468,10 @@ class StateMachineReplayTests(unittest.TestCase):
         self.assertNotEqual(first[1].get("live"), True)
 
     def test_same_auth_different_resource_does_not_settle(self):
-        """Same PAYMENT-SIGNATURE against /mcp after /route: reject / no second settle."""
+        """SEC-ROUTER-002: /route payment reused on /mcp is 402; no second settle."""
         verify_calls = []
         settle_calls = []
-        headers = _headers_for(_payload("rs"))
+        headers = _headers_for(_payload("rs", resource_url=discover.ROUTE))
         body = _weather_body()
         mcp_resource = discover.ORIGIN + "/mcp"
         with patch(
@@ -478,11 +481,10 @@ class StateMachineReplayTests(unittest.TestCase):
             first = handle_route(body, headers, discover.ROUTE)
             second = handle_route(body, headers, mcp_resource, bazaar=payment.BAZAAR_MCP)
         self.assertEqual(first[0], 200)
+        self.assertEqual(second[0], 402)
         self.assertEqual(len(settle_calls), 1)
         self.assertEqual(len(verify_calls), 1)
-        # Replay is keyed by payment fingerprint (payload + rail), not resource URL.
-        # Second resource must not be a second economic action.
-        self.assertEqual(second[0], first[0])
+        self.assertNotEqual(second[1].get("live"), True)
         self.assertNotEqual(mcp_resource, discover.ROUTE)
 
     def test_concurrent_identical_auth_holds_during_settle(self):

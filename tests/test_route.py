@@ -1353,6 +1353,7 @@ class UnitHelpers(unittest.TestCase):
 def _payment_signature(overrides=None):
     payload = {
         "x402Version": 2,
+        "resource": {"url": "https://402signal.com/route"},
         "accepted": {
             "scheme": "exact",
             "network": "base",

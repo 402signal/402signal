@@ -1158,9 +1158,48 @@ def _accepted_from_payload(payload: dict) -> dict:
     return out
 
 
+def resource_url_of(obj) -> str | None:
+    """resource.url from PaymentRequired, PaymentPayload, or a v1 accept."""
+    if isinstance(obj, str):
+        text = obj.strip()
+        return text or None
+    if not isinstance(obj, dict):
+        return None
+    raw = obj.get("resource")
+    if isinstance(raw, str):
+        text = raw.strip()
+        return text or None
+    if isinstance(raw, dict):
+        url = raw.get("url")
+        if isinstance(url, str):
+            text = url.strip()
+            return text or None
+    return None
+
+
 def match_accept(payload: dict, required: dict) -> dict | None:
-    """Pick the advertised accept that matches the client's chosen rail."""
-    accepted = _accepted_from_payload(payload or {})
+    """Pick the advertised accept that matches the client's rail and resource.
+
+    SEC-ROUTER-002: bind resource.url. Fail closed when the request resource
+    is missing or the payment's resource.url does not match it. A payment
+    authorized for /route must not match /mcp.
+    """
+    if not isinstance(required, dict):
+        return None
+    required_url = resource_url_of(required)
+    if not required_url:
+        return None
+    payload = payload if isinstance(payload, dict) else {}
+    accepted = _accepted_from_payload(payload)
+    payload_url = resource_url_of(payload)
+    accepted_url = resource_url_of(accepted)
+    if payload_url and payload_url != required_url:
+        return None
+    if accepted_url and accepted_url != required_url:
+        return None
+    claimed = payload_url or accepted_url
+    if claimed != required_url:
+        return None
     rail = rail_of_network(accepted.get("network") or payload.get("network") or "")
     if not rail:
         pay_to = accepted.get("payTo")
@@ -1176,6 +1215,11 @@ def match_accept(payload: dict, required: dict) -> dict | None:
     client_amount = accepted.get("amount")
     client_token = token_of(accepted)
     for item in required.get("accepts") or []:
+        if not isinstance(item, dict):
+            continue
+        item_url = resource_url_of(item)
+        if item_url and item_url != required_url:
+            continue
         if rail_of_network(item.get("network")) != rail:
             continue
         if client_pay and not payto_equal(client_pay, item.get("payTo"), rail):
