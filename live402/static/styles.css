@@ -624,7 +624,7 @@ a.lookup:link, a.lookup:visited { color: var(--ink); text-decoration: none; }
   border-left: 7px solid var(--fox);
 }
 
-.pq-testnet {
+.pq-trust {
   margin: 40px 0 0;
   padding: 20px 22px 18px;
   background: var(--panel);
@@ -642,16 +642,16 @@ a.lookup:link, a.lookup:visited { color: var(--ink); text-decoration: none; }
   padding: 4px 10px;
   margin: 0 0 12px;
 }
-.pq-testnet h2 {
+.pq-trust h2 {
   margin: 0 0 10px;
   font-size: 22px;
 }
-.pq-testnet p { color: var(--muted); }
-.pq-testnet .pq-evidence {
+.pq-trust p { color: var(--muted); }
+.pq-trust .pq-evidence {
   color: var(--ink);
   font-size: 14px;
 }
-.pq-testnet .btn { margin-top: 8px; }
+.pq-trust .btn { margin-top: 8px; }
 
 .status-grid,
 .pq-status {
@@ -1231,7 +1231,7 @@ a.lookup:link, a.lookup:visited { color: var(--ink); text-decoration: none; }
   .status-grid,
   .pq-status { grid-template-columns: 1fr 1fr; padding: 14px 12px; }
   .pq-decode > div { grid-template-columns: 1fr; }
-  .pq-testnet { padding: 16px 14px 14px; }
+  .pq-trust { padding: 16px 14px 14px; }
   .confirm-card { padding: 16px 14px 14px; grid-template-columns: 1fr; }
   .nav { gap: 8px 12px; font-size: 14px; }
 }
