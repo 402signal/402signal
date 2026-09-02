@@ -663,7 +663,7 @@ class SignerClientProtocolTests(unittest.TestCase):
         self.assertNotIn("LIVE402_PQ_FALCON_SK", inspect.getsource(server))
         self.assertNotIn("load_falcon_sk_from_env", inspect.getsource(server))
 
-    def test_homepage_omits_pq_without_confirmed_anchor(self):
+    def test_homepage_does_not_fabricate_anchor_without_confirmed_anchor(self):
         home = Path(__file__).resolve().parent.parent.joinpath("live402", "static", "index.html")
         text = home.read_text(encoding="utf-8")
         self.assertNotIn("Trust the history", text)
@@ -673,7 +673,8 @@ class SignerClientProtocolTests(unittest.TestCase):
         self.assertNotIn("YOUR_TXID", text)
         self.assertIn("A routing history you can check", text)
         self.assertIn("Awaiting anchor", text)
-        self.assertNotIn("PQ Trust", text)
+        self.assertIn("PQ Trust", text)
+        self.assertIn("native Falcon-1024 authorization on Algorand MainNet", text)
         self.assertNotIn("PQ transparency", text)
         self.assertIsNone(worker.public_anchor())
         self.assertEqual(worker.homepage_pq_html(), "")
