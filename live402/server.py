@@ -755,7 +755,7 @@ class Handler(SimpleHTTPRequestHandler):
             marker = pq_view.HOMEPAGE_AWAITING_CHIP
         except Exception:
             section = ""
-            marker = '<p class="pq-chip"><!--PQ_LATEST-->Awaiting checkpoint</p>'
+            marker = '<p class="pq-chip"><!--PQ_LATEST-->Awaiting anchor</p>'
         if not section:
             return None
         if marker in html:

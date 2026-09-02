@@ -182,10 +182,9 @@ class C2SPHttpTests(unittest.TestCase):
         home = (Path(__file__).resolve().parent.parent / "live402" / "static" / "index.html").read_text(
             encoding="utf-8"
         )
-        self.assertIn("PQ Trust", home)
         self.assertIn("Algorand MainNet", home)
-        self.assertIn("Awaiting checkpoint", home)
-        self.assertIn("Falcon anchors checkpoints, not merchant payments.", home)
+        self.assertIn("Awaiting anchor", home)
+        self.assertIn("402Signal commits routing evidence to an append-only log.", home)
         self.assertNotIn("/pq/log", home)
 
 

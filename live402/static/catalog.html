@@ -3,17 +3,17 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Build a 402Signal /route request</title>
-  <meta name="description" content="Describe a capability, preview discovery metadata, and build an exact POST /route request body. Preview does not probe endpoints again." />
+  <title>Explore paid APIs</title>
+  <meta name="description" content="Search the current 402Signal catalog before spending." />
   <link rel="canonical" href="https://402signal.com/catalog" />
-  <meta property="og:title" content="Build a 402Signal /route request" />
-  <meta property="og:description" content="Describe a capability, preview discovery metadata, and build an exact POST /route request body." />
+  <meta property="og:title" content="Explore paid APIs" />
+  <meta property="og:description" content="Search the current 402Signal catalog before spending." />
   <meta property="og:url" content="https://402signal.com/catalog" />
   <meta property="og:type" content="website" />
   <meta property="og:site_name" content="402Signal" />
   <meta name="twitter:card" content="summary" />
-  <meta name="twitter:title" content="Build a 402Signal /route request" />
-  <meta name="twitter:description" content="Describe a capability, preview discovery metadata, and build an exact POST /route request body." />
+  <meta name="twitter:title" content="Explore paid APIs" />
+  <meta name="twitter:description" content="Search the current 402Signal catalog before spending." />
   <meta name="twitter:site" content="@402Signal" />
   <link rel="stylesheet" href="/styles.css" />
 </head>
@@ -29,20 +29,21 @@
         <a href="/how">How it works</a>
         <a href="/catalog" aria-current="page">Explore</a>
         <a href="/developers">Developers</a>
-        <a href="/contact">Contact</a>
+        <a href="/transparency">Transparency</a>
       </nav>
     </header>
 
     <main>
       <section class="hero compact builder">
-        <h1>Build a /route request</h1>
-        <p class="lede">Describe the capability your agent needs, preview current discovery metadata, and compose the exact JSON body for a paid POST /route check.</p>
+        <h1>Explore paid APIs</h1>
+        <p class="lede">Search the current 402Signal catalog before spending.</p>
+        <p class="lede">Preview results use discovery data. A paid route checks the endpoint before recommending it.</p>
       </section>
 
       <form id="search-form" class="policy-builder">
-        <label class="label" for="need">What does your agent need?</label>
+        <label class="label" for="need">What do you need?</label>
         <p class="policy-hint">The capability field accepts free text. The examples below are shortcuts, not a fixed list. Describe any capability in plain English.</p>
-        <input id="need" class="editable" type="text" value="" placeholder="Describe a capability…" autocomplete="off" spellcheck="false" />
+        <input id="need" class="editable" type="text" value="" placeholder="What do you need?" autocomplete="off" spellcheck="false" />
         <p class="label">Example capabilities</p>
         <div class="chips" id="need-chips">
           <button type="button" class="chip" data-need="web search">web search</button>
@@ -162,12 +163,14 @@
     </main>
 
     <footer class="foot">
+      <p>402Signal</p>
       <p>
         <a href="https://github.com/402signalhq/402signal" rel="noopener noreferrer">GitHub</a>
         <a href="https://x.com/402Signal" rel="noopener noreferrer">@402Signal</a>
         <a href="/openapi.json">OpenAPI</a>
         <a href="/mcp.json">MCP</a>
         <a href="/transparency">Transparency</a>
+        <a href="/contact">Contact</a>
         <a href="mailto:ross@402signal.com">ross@402signal.com</a>
       </p>
     </footer>

@@ -3,17 +3,17 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>How 402Signal routing works</title>
-  <meta name="description" content="How 402Signal turns discovery metadata into a paid routing check: discover, probe, evaluate, and select a route or typed miss." />
+  <title>How 402Signal routes a request</title>
+  <meta name="description" content="A route starts with what you need and any constraints you want to enforce." />
   <link rel="canonical" href="https://402signal.com/how" />
-  <meta property="og:title" content="How 402Signal routing works" />
-  <meta property="og:description" content="How 402Signal turns discovery metadata into a paid routing check: discover, probe, evaluate, and select a route or typed miss." />
+  <meta property="og:title" content="How 402Signal routes a request" />
+  <meta property="og:description" content="A route starts with what you need and any constraints you want to enforce." />
   <meta property="og:url" content="https://402signal.com/how" />
   <meta property="og:type" content="website" />
   <meta property="og:site_name" content="402Signal" />
   <meta name="twitter:card" content="summary" />
-  <meta name="twitter:title" content="How 402Signal routing works" />
-  <meta name="twitter:description" content="How 402Signal turns discovery metadata into a paid routing check." />
+  <meta name="twitter:title" content="How 402Signal routes a request" />
+  <meta name="twitter:description" content="A route starts with what you need and any constraints you want to enforce." />
   <meta name="twitter:site" content="@402Signal" />
   <link rel="stylesheet" href="/styles.css" />
 </head>
@@ -29,62 +29,55 @@
         <a href="/how" aria-current="page">How it works</a>
         <a href="/catalog">Explore</a>
         <a href="/developers">Developers</a>
-        <a href="/contact">Contact</a>
+        <a href="/transparency">Transparency</a>
       </nav>
     </header>
 
     <main>
       <section class="hero compact">
-        <h1>How routing works</h1>
-        <p class="lede">Discovery sources publish metadata about x402 services. That metadata can describe an endpoint that no longer returns a usable HTTP 402, that changed its payment terms, or that lacks enough information to construct a call. A paid POST /route check observes the endpoint's current HTTP 402 payment requirements and applies the caller's constraints to those observed options.</p>
+        <h1>How 402Signal routes a request</h1>
+        <p class="lede">A route starts with what you need and any constraints you want to enforce.</p>
       </section>
 
       <section class="block">
-        <h2>Stages of a paid check</h2>
         <dl class="checks compact">
           <div>
-            <dt>DISCOVER</dt>
-            <dd>Search supported discovery sources for the requested capability and assemble a working set of candidate URLs.</dd>
+            <dt>1 Discover</dt>
+            <dd>Find candidates across supported x402 discovery sources.</dd>
           </div>
           <div>
-            <dt>PROBE</dt>
-            <dd>Request each selected candidate and parse the current HTTP 402 payment requirements. A payable hit is a complete observed option. An invocable hit is payable plus enough input-schema information to construct the call.</dd>
+            <dt>2 Check</dt>
+            <dd>Call candidate endpoints and read the payment requirements they return now.</dd>
           </div>
           <div>
-            <dt>EVALUATE</dt>
-            <dd>Apply the caller's constraints to the payment options returned during this request. Discovery listings do not satisfy a network lock or a price bound.</dd>
+            <dt>3 Apply constraints</dt>
+            <dd>Apply your network, price, latency, and invocation constraints.</dd>
           </div>
           <div>
-            <dt>SELECT</dt>
-            <dd>Return the selected route and selected_payment when an observed option qualifies. Otherwise return a typed miss that reports why evaluation stopped.</dd>
+            <dt>4 Select</dt>
+            <dd>Get the best qualifying route, or a typed reason nothing matched.</dd>
+          </div>
+          <div>
+            <dt>5 Execute</dt>
+            <dd>Your application keeps control of its wallet, signs the seller payment, and calls the selected service.</dd>
+          </div>
+          <div>
+            <dt>When nothing matches</dt>
+            <dd>If nothing meets your constraints, 402Signal returns a typed miss instead of guessing.</dd>
           </div>
         </dl>
-      </section>
-
-      <section class="block">
-        <h2>Execution boundary</h2>
-        <dl class="checks compact">
-          <div>
-            <dt>402Signal</dt>
-            <dd>Discovers candidates, probes them, applies constraints, returns a route or typed miss, and commits routing evidence. It does not hold buyer keys, sign the selected service's payment, or execute that service.</dd>
-          </div>
-          <div>
-            <dt>Caller</dt>
-            <dd>Retains custody of keys, signing, the selected service's payment, and execution of the seller request.</dd>
-          </div>
-        </dl>
-        <p>The $0.01 USDC paid on POST /route is a routing fee for this check. It is separate from whatever the selected seller charges.</p>
-        <p>Routing evidence is committed to the PQ Trust log. Production identity is Algorand MainNet. Falcon anchors checkpoints, not merchant payments. Routing does not wait for confirmation. <a href="/transparency">View verification details</a></p>
       </section>
     </main>
 
     <footer class="foot">
+      <p>402Signal</p>
       <p>
         <a href="https://github.com/402signalhq/402signal" rel="noopener noreferrer">GitHub</a>
         <a href="https://x.com/402Signal" rel="noopener noreferrer">@402Signal</a>
         <a href="/openapi.json">OpenAPI</a>
         <a href="/mcp.json">MCP</a>
         <a href="/transparency">Transparency</a>
+        <a href="/contact">Contact</a>
         <a href="mailto:ross@402signal.com">ross@402signal.com</a>
       </p>
     </footer>

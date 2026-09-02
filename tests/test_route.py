@@ -262,7 +262,7 @@ class PaywallTests(unittest.TestCase):
         self.assertNotIn("Catalog said X. We observed Y.", html)
         self.assertNotIn("Index is filling. Preview has no hits yet. Pulse counts are 0. Probe live still 402s /route.", html)
         self.assertNotIn("Facilitator reachability, not seller health.", html)
-        self.assertIn("POST /route · $0.01 USDC per routing check", html)
+        self.assertIn("$0.01 USDC per routing check", html)
         self.assertNotIn("Best capability match in the current index.", html)
         self.assertNotIn("Probe live ($0.01)", html)
         self.assertNotIn('id="preview-btn"', html)

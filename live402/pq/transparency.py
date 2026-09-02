@@ -487,17 +487,19 @@ def page_model() -> dict:
 
 
 HOMEPAGE_AWAITING_CHIP = (
-    '<p class="pq-chip"><!--PQ_LATEST-->Awaiting checkpoint</p>'
+    '<p class="pq-chip"><!--PQ_LATEST-->Awaiting anchor</p>'
 )
 HOMEPAGE_ANCHORED_CHIP = '<p class="pq-chip is-anchored">Anchored</p>'
+# Ross-specified public log identity label for the transparency status panel.
+PUBLIC_LOG_IDENTITY = "e6b81414"
 
 
 def homepage_pq_html() -> str:
-    """Homepage status chip. Anchored only when last_confirmed has a real txid."""
-    conf = confirmed_view()
-    if not conf:
+    """Homepage status chip. Anchored only after confirmed MainNet Falcon anchor."""
+    model = page_model()
+    if model.get("integrity_error"):
         return ""
-    if log_integrity_error(int(store.size() or 0), conf):
+    if not _mainnet_confirmed(model):
         return ""
     return HOMEPAGE_ANCHORED_CHIP
 
@@ -628,7 +630,7 @@ def _confirmed_card(model: dict) -> str:
         return (
             '<section class="block" id="latest-confirmed">\n'
             "  <h2>Latest confirmed checkpoint</h2>\n"
-            "  <p>Awaiting first confirmed MainNet checkpoint.</p>\n"
+            "  <p>Awaiting anchor.</p>\n"
             "</section>\n"
         )
     cta = _confirmed_checkpoint_cta(model)
@@ -777,9 +779,9 @@ def _current_vs_anchored(model: dict) -> str:
         elif model["confirmed"] and growth > 0:
             compare = "%s newer log entries exist after the latest confirmed anchor." % growth
         elif current > 0 and not model["confirmed"]:
-            compare = "The log has entries. Awaiting first confirmed MainNet checkpoint."
+            compare = "The log has entries. Awaiting anchor."
         else:
-            compare = "Awaiting first confirmed MainNet checkpoint."
+            compare = "Awaiting anchor."
         numbers = "Current tree %s · confirmed tree %s · unanchored growth %s." % (
             esc(current),
             esc(confirmed_size if model["confirmed"] else 0),
@@ -910,6 +912,14 @@ def _technical(model: dict) -> str:
     parts.append(
         "<p>Authorization · Falcon-1024 · f1 as native Algorand PQ tx auth "
         "for the checkpoint</p>"
+    )
+    parts.append(
+        "<p>The Algorand transaction authorizes a checkpoint. "
+        "It is not a merchant payment.</p>"
+    )
+    parts.append(
+        "<p>This post-quantum authorization protects the checkpoint transaction. "
+        "It does not make Base or Solana merchant payments post-quantum secure.</p>"
     )
     if note:
         parts.append(
@@ -1063,7 +1073,7 @@ def _chrome_head(title: str, description: str, canonical: str) -> str:
 
 
 def _site_header() -> str:
-    return site_chrome.header_html()
+    return site_chrome.header_html(current="/transparency")
 
 
 def _site_footer(*, current: str = "") -> str:
@@ -1076,11 +1086,10 @@ def render_html() -> str:
 
 def page_html() -> str:
     model = page_model()
-    title = "402Signal transparency log"
+    title = "Verifiable routing history"
     description = (
-        "Verify 402Signal's PQ Trust append-only routing-evidence log. "
-        "Production log identity is Algorand MainNet. "
-        "Awaiting first confirmed MainNet checkpoint."
+        "402Signal records routing evidence in an append-only Merkle log. "
+        "Each checkpoint is signed by 402Signal."
     )
     html = (
         _chrome_head(title, description, "https://402signal.com/transparency")
@@ -1121,6 +1130,7 @@ def _verification_details(model: dict) -> str:
         '<details class="tech-details" id="verification-details">\n'
         "  <summary>Verification details</summary>\n"
         '  <div class="tech-body">\n'
+        + _status_strip(model)
         + _confirmed_detail_fields(model)
         + decoder
         + _pera_views(model)
@@ -1139,25 +1149,78 @@ def _mainnet_confirmed(model: dict) -> bool:
 
 def _hero_badge(model: dict) -> str:
     if _mainnet_confirmed(model):
-        return '        <p class="pq-badge">Algorand MainNet log</p>\n'
+        chip = "Confirmed"
+    else:
+        chip = "Awaiting anchor"
     return (
-        '        <p class="pq-badge">Algorand MainNet log · awaiting first '
-        "confirmed checkpoint</p>\n"
+        '        <div class="pq-status-row">\n'
+        '        <p class="pq-badge">Algorand MainNet</p>\n'
+        '        <p class="pq-chip%s">%s</p>\n'
+        "        </div>\n"
+        % (" is-anchored" if _mainnet_confirmed(model) else "", esc(chip))
     )
 
 
 def _hero_lede(model: dict) -> str:
-    if _mainnet_confirmed(model):
-        return (
-            "        <p class=\"lede\">PQ Trust is 402Signal's append-only transparency layer. "
-            "Confirmed checkpoints are independently anchored to "
-            "Algorand MainNet using native Falcon-1024 post-quantum authorization.</p>\n"
-        )
+    del model
     return (
-        "        <p class=\"lede\">PQ Trust is 402Signal's append-only transparency layer. "
-        "Production log identity is Algorand MainNet. "
-        "Awaiting first confirmed MainNet checkpoint. Checkpoint transactions use native "
-        "Falcon-1024 post-quantum authorization when confirmed on MainNet.</p>\n"
+        "        <p class=\"lede\">402Signal records routing evidence in an "
+        "append-only Merkle log.</p>\n"
+        "        <p>Each checkpoint is signed by 402Signal. Checkpoints can also "
+        "be anchored to Algorand MainNet using a Falcon-1024 account.</p>\n"
+    )
+
+
+def _ross_status_panel(model: dict) -> str:
+    current = model["current_size"]
+    latest = int(model.get("latest_checkpoint_size") or 0)
+    latest_text = str(latest) if latest else "-"
+    mainnet = _mainnet_confirmed(model)
+    conf = model.get("confirmed") if mainnet else None
+    if mainnet and conf:
+        anchor = "Confirmed"
+        extra = (
+            '  <div><p class="pq-kicker">ROUND</p><p class="pq-stat">%s</p></div>\n'
+            '  <div><p class="pq-kicker">TRANSACTION</p><p class="pq-stat">%s</p></div>\n'
+            % (
+                esc(conf["round"]),
+                _mono_copy(conf["txid"], abbreviate(conf["txid"]), "transaction id"),
+            )
+        )
+    else:
+        anchor = "Awaiting anchor"
+        extra = ""
+    return (
+        '<section class="status-grid pq-status" aria-label="Current status">\n'
+        '  <div><p class="pq-kicker">NETWORK</p><p class="pq-stat">Algorand MainNet</p></div>\n'
+        '  <div><p class="pq-kicker">LOG IDENTITY</p><p class="pq-stat">%s</p></div>\n'
+        '  <div><p class="pq-kicker">TREE SIZE</p><p class="pq-stat">%s</p></div>\n'
+        '  <div><p class="pq-kicker">LATEST CHECKPOINT</p><p class="pq-stat">%s</p></div>\n'
+        '  <div><p class="pq-kicker">ANCHOR</p><p class="pq-stat">%s</p></div>\n'
+        "%s"
+        "</section>\n"
+        % (esc(PUBLIC_LOG_IDENTITY), esc(current), esc(latest_text), esc(anchor), extra)
+    )
+
+
+def _how_verification_works() -> str:
+    return (
+        '<section class="block" id="how-verification-works">\n'
+        "  <h2>How verification works</h2>\n"
+        "  <p>Published checkpoints make later changes to the recorded history "
+        "detectable.</p>\n"
+        "  <p>Each checkpoint is signed by 402Signal. A confirmed Algorand MainNet "
+        "anchor can be compared to that signed checkpoint.</p>\n"
+        "</section>\n"
+    )
+
+
+def _anchor_boundary() -> str:
+    return (
+        '<section class="block" id="anchor-boundary">\n'
+        "  <p>The anchor protects the historical checkpoint. It does not make "
+        "seller payments on Base, Solana, or Algorand post-quantum secure.</p>\n"
+        "</section>\n"
     )
 
 
@@ -1165,27 +1228,14 @@ def _main(model: dict) -> str:
     return (
         '      <section class="hero compact">\n'
         + _hero_badge(model)
-        + "        <h1>Verify the transparency log</h1>\n"
+        + "        <h1>Verifiable routing history</h1>\n"
         + _hero_lede(model)
-        + "        <p class=\"note\">Routing does not wait for confirmation.</p>\n"
-        + "        <p class=\"privacy-note\">Public transparency commitments do not expose raw "
-        "needs, wallets, payment signatures, or seller response bodies.</p>\n"
-        '        <details class="tech-details" id="what-is-published">\n'
-        "          <summary>What is published?</summary>\n"
-        '          <div class="tech-body">\n'
-        "            <p>This page publishes 402Signal infrastructure commitments: log size, "
-        "signed checkpoints, and confirmed MainNet anchors when present. It does not publish agent "
-        "needs, wallets, payment signatures, seller response bodies, raw requests, or "
-        "payment credentials. A v2 public leaf includes type, timestamp, nonce, "
-        "commitment hash, and optional live/miss_reason. It does not include salt, "
-        "raw evidence, need, wallet, or payment. Published fields are not a claim of "
-        "anonymous, unlinkable, or fully private traffic.</p>\n"
-        "          </div>\n"
-        "        </details>\n"
-        "      </section>\n"
+        + "      </section>\n"
         + _integrity_banner(model)
         + "      <h2>Current status</h2>\n"
-        + _status_strip(model)
+        + _ross_status_panel(model)
+        + _anchor_boundary()
+        + _how_verification_works()
         + _confirmed_card(model)
         + _current_vs_anchored(model)
         + _history(model)
@@ -1195,20 +1245,20 @@ def _main(model: dict) -> str:
         + "        <p>The prior public TestNet log shard remains available for reference. "
         + "It is not the live production MainNet log.</p>\n"
         + "      </section>\n"
-        + '      <section class="block">\n'
-        + "        <h2>What this proves / does not prove</h2>\n"
-        + "        <p>Anyone can compare the signed checkpoint, Merkle root, and confirmed "
-        + "MainNet transaction. Later rewriting inconsistent with published checkpoints "
-        + "becomes detectable. Detectability is not a claim that the log cannot be "
-        + "rewritten; it is a claim that inconsistent rewriting can be noticed.</p>\n"
-        + "        <p>This page reports 402Signal's committed routing-evidence history. "
-        + "It does not report whether a seller endpoint described its service accurately. "
-        + "The Algorand transaction authorizes a checkpoint. It is not a merchant payment. "
-        + "This post-quantum authorization protects the checkpoint transaction. "
-        + "It does not make Base or Solana merchant payments post-quantum secure. "
-        + "Routing does not wait for confirmation. The caller retains custody of keys, "
-        + "signing, and the selected service's payment.</p>\n"
-        + "      </section>\n"
+        + '      <details class="tech-details" id="what-is-published">\n'
+        + "        <summary>What is published?</summary>\n"
+        + '        <div class="tech-body">\n'
+        + "          <p>Public transparency commitments do not expose raw needs, wallets, "
+        + "payment signatures, or seller response bodies.</p>\n"
+        + "          <p>This page publishes 402Signal infrastructure commitments: log size, "
+        + "signed checkpoints, and confirmed MainNet anchors when present. It does not publish agent "
+        + "needs, wallets, payment signatures, seller response bodies, raw requests, or "
+        + "payment credentials. A v2 public leaf includes type, timestamp, nonce, "
+        + "commitment hash, and optional live/miss_reason. It does not include salt, "
+        + "raw evidence, need, wallet, or payment. Published fields are not a claim of "
+        + "anonymous, unlinkable, or fully private traffic.</p>\n"
+        + "        </div>\n"
+        + "      </details>\n"
     )
 
 
