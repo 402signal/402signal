@@ -1010,7 +1010,7 @@ def openapi_spec(resource_url: str = ROUTE) -> dict:
                 "curl -sS -D - https://402signal.com/route "
                 "-H 'Content-Type: application/json' "
                 "-d '{\"need\":\"YOUR_NEED\"}'\n"
-                "# HTTP 402 + PAYMENT-REQUIRED. Sign accepts[0], then:\n"
+                "# HTTP 402 + PAYMENT-REQUIRED. Select the matched/observed accept, then:\n"
                 "curl -sS https://402signal.com/route "
                 "-H 'Content-Type: application/json' "
                 "-H \"PAYMENT-SIGNATURE: $SIG\" "
@@ -1135,7 +1135,7 @@ HTTP 200 = live URL plus target contract. HTTP 503 = typed miss_reason.
 
 ## Paid retry
 
-Unpaid 402 → sign accepts[0] → PAYMENT-SIGNATURE → 200 or 503.
+Unpaid 402 → select the matched/observed accept → PAYMENT-SIGNATURE → 200 or 503.
 
 curl:
   curl -sS -D - https://402signal.com/route -H 'Content-Type: application/json' -d '{"need":"YOUR_NEED"}'

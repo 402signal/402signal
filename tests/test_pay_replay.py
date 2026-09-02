@@ -31,7 +31,7 @@ def _payload(nonce="11", resource_url="https://402signal.com/route"):
         "x402Version": 2,
         "accepted": {
             "scheme": "exact",
-            "network": "base",
+            "network": payment.BASE_CAIP2,
             "asset": "USDC",
             "currency": payment.USDC_BASE,
             "amount": payment.AMOUNT_ATOMIC,
