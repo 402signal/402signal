@@ -470,6 +470,24 @@ class PaywallTests(unittest.TestCase):
         self.assertEqual(amounts, ["10000", "10000", "10000"])
         self.assertIn("bazaar", body.get("extensions") or {})
 
+    def test_get_route_vary_accept(self):
+        """SEC-PUB-001: GET /route must send Vary: Accept for both Accept modes."""
+        cases = (
+            ({"Accept": "application/json"}, 402, "no-store"),
+            ({"Accept": "text/html"}, 200, "no-cache, must-revalidate"),
+            ({"Accept": "*/*"}, 402, "no-store"),
+        )
+        for extra, status, cache in cases:
+            with self.subTest(accept=extra.get("Accept")):
+                code, _raw, headers = _get_full(
+                    self.port, "/route", extra_headers=extra
+                )
+                self.assertEqual(code, status)
+                vary = headers.get("vary") or ""
+                tokens = [t.strip().lower() for t in vary.split(",") if t.strip()]
+                self.assertIn("accept", tokens)
+                self.assertEqual(headers.get("cache-control"), cache)
+
     def test_unpaid_empty_post_still_402_with_atomic_10000(self):
         status, body = _json_post(self.port, "/route", {})
         self.assertEqual(status, 402)
