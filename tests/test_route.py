@@ -1356,7 +1356,7 @@ def _payment_signature(overrides=None):
         "resource": {"url": "https://402signal.com/route"},
         "accepted": {
             "scheme": "exact",
-            "network": "base",
+            "network": payment.BASE_CAIP2,
             "asset": "USDC",
             "currency": payment.USDC_BASE,
             "amount": payment.AMOUNT_ATOMIC,
