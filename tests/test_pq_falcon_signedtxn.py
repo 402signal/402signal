@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import os
 import unittest
+from pathlib import Path
 from unittest import mock
 
 os.environ.setdefault("LIVE402_FIXTURE", "1")
@@ -17,10 +19,13 @@ from tests.pq_test_env import clear_pq_env
 
 _ADDR = payment.DEFAULT_PAYTO_ALGORAND
 _ROOT = b"\x11" * 32
-# Live QA shape: sch=b"f1" (len 2), pk 1793, sig 1233, no slt key.
+# Synthetic algokey shape: sch=b"f1" (len 2), pk 1793, compressed sig, no slt.
 _PK = bytes((0x80 + (i % 0x40)) for i in range(algo_anchor.FALCON_F1_PK_LEN))
-_SIG = bytes((0xC0 + (i % 0x20)) for i in range(algo_anchor.FALCON_F1_SIG_LIVE))
+_SIG = b"\xba\x00" + bytes((0xC0 + (i % 0x20)) for i in range(algo_anchor.FALCON_F1_SIG_FIXTURE - 2))
 _LIVE_SIG_NOTE = base64.b64encode(b"\x00" * 4 + b"\x22" * 64).decode("ascii")
+_TREE4_TXID = "HIQM6VWDMUWHUTQG7SZF2QW3XYFY4HRLRK3BV22CQLENDRB7AKJQ"
+_TREE4_ADDRESS = "GVIAG3YMJ7OLJ3JAUBNI2YP5JCQQCQYWN25UAGLC2BTPOBUL3ZZTILIMWU"
+_TREE4_FIXTURE = Path(__file__).parent / "fixtures" / "pq_falcon_wire" / "tree4_signedtxn.b64"
 
 
 def _pay_txn(*, size=1, root=_ROOT, network="testnet"):
@@ -145,12 +150,17 @@ class FalconSignedTxnEnvelopeTests(unittest.TestCase):
         out = self._validate(blob)
         self.assertEqual(out["tree_size"], 1)
 
-    def test_salt_byte_and_omitted_pass(self):
-        blob = algo_tx.msgpack_encode(_envelope(sch=b"f1", slt=b"\x00"))
+    def test_canonical_salt_integer_and_omitted_pass(self):
+        blob = algo_tx.msgpack_encode(_envelope(sch=b"f1", slt=0))
         self._validate(blob)
         env = _envelope(sch=b"f1")
         self.assertNotIn("slt", env["pqsig"])
         self._validate(algo_tx.msgpack_encode(env))
+
+    def test_noncanonical_salt_byte_fails_signedtxn_validation(self):
+        blob = algo_tx.msgpack_encode(_envelope(sch=b"f1", slt=b"\x00"))
+        with self.assertRaises(algo_anchor.AnchorError):
+            self._validate(blob)
 
     def test_missing_pqsig_fails_distinct_error(self):
         blob = algo_tx.msgpack_encode({"txn": _pay_txn()})
@@ -227,7 +237,7 @@ class FalconSignedTxnEnvelopeTests(unittest.TestCase):
         self.assertEqual(env["pqsig"]["sch"], b"f1")
         self.assertEqual(len(env["pqsig"]["sch"]), 2)
         self.assertEqual(len(env["pqsig"]["pk"]), 1793)
-        self.assertEqual(len(env["pqsig"]["sig"]), 1233)
+        self.assertEqual(len(env["pqsig"]["sig"]), algo_anchor.FALCON_F1_SIG_FIXTURE)
         blob = algo_tx.msgpack_encode(env)
         decoded = algo_tx.msgpack_decode(blob)
         self.assertEqual(decoded["pqsig"]["sch"], b"f1")
@@ -364,6 +374,27 @@ class AuthorizedPersistenceAndResumeTests(unittest.TestCase):
         self.assertIsNone(store.authorized_at(1))
         self.assertFalse(store.last_authorized_checkpoint().get("signed"))
 
+    def test_persist_authorized_rejects_forgeable_provenance_values(self):
+        for forged in (None, True, "fixture-sign-hook", "response-mac", object()):
+            with self.subTest(forged=repr(forged)):
+                with mock.patch.object(
+                    store,
+                    "save_authorized_checkpoint",
+                    side_effect=AssertionError("must not write"),
+                ) as save:
+                    with self.assertRaises(canary.CanarySecurityError):
+                        canary.persist_authorized(
+                            tree_size=1,
+                            origin=ORIGIN_MAINNET,
+                            root=self.root,
+                            checkpoint="fixture",
+                            request_id="fixture",
+                            signed=self.blob,
+                            at=1,
+                            _capability=forged,
+                        )
+                    save.assert_not_called()
+
     def test_invalid_envelope_does_not_persist_authorized(self):
         bad = algo_tx.msgpack_encode(_envelope(sch=b"f5", txn=algo_tx.msgpack_decode(self.blob)["txn"]))
         with self.assertRaises((algo_anchor.AnchorError, canary.CanaryError)):
@@ -382,26 +413,14 @@ class AuthorizedPersistenceAndResumeTests(unittest.TestCase):
             os.environ["LIVE402_FIXTURE"] = "1"
 
     def test_production_request_signed_fail_closes_before_persist(self):
-        """IPC reply is not response-MAC provenance. Do not persist AUTHORIZED."""
-        reply = {"signed": self.blob, "verified": {}, "policy": {}}
-        with mock.patch("live402.pq.signer_mainnet.request_signed", return_value=reply):
+        """No response provenance: do not dial signer or persist AUTHORIZED."""
+        with mock.patch("live402.pq.signer_mainnet.request_signed") as request_signed:
             with self.assertRaises(canary.CanarySecurityError) as ctx:
                 canary.authorize(params=self.params)
             self.assertIn("provenance", str(ctx.exception))
+            request_signed.assert_not_called()
         self.assertIsNone(store.authorized_at(1))
         self.assertFalse(store.last_authorized_checkpoint().get("signed"))
-
-    def test_response_mac_verified_binding_may_persist(self):
-        reply = {
-            "signed": self.blob,
-            "verified": {},
-            "policy": {},
-            canary.RESPONSE_MAC_VERIFIED_KEY: True,
-        }
-        with mock.patch("live402.pq.signer_mainnet.request_signed", return_value=reply):
-            row = canary.authorize(params=self.params)
-        self.assertEqual(canary.send_state_of(row), canary.STATE_AUTHORIZED)
-        self.assertEqual(bytes(row["signed"]), self.blob)
 
     def test_read_only_inspect_does_not_persist(self):
         out = canary.inspect(params=self.params)
@@ -431,7 +450,7 @@ class FalconShapeAndSchemeMatrixTests(unittest.TestCase):
         env = _envelope(sch=b"f1")
         self.assertEqual(env["pqsig"]["sch"], b"f1")
         self.assertEqual(len(env["pqsig"]["pk"]), algo_anchor.FALCON_F1_PK_LEN)
-        self.assertEqual(len(env["pqsig"]["sig"]), algo_anchor.FALCON_F1_SIG_LIVE)
+        self.assertEqual(len(env["pqsig"]["sig"]), algo_anchor.FALCON_F1_SIG_FIXTURE)
         blob = algo_tx.msgpack_encode(env)
         decoded = algo_tx.msgpack_decode(blob, strict=True)
         self.assertEqual(decoded["pqsig"]["sch"], b"f1")
@@ -492,6 +511,39 @@ class FalconShapeAndSchemeMatrixTests(unittest.TestCase):
         self.assertEqual(after, before)
         self.assertEqual(after["pk"], mutated["pqsig"]["pk"])
         self.assertNotEqual(after["pk"], _PK)
+
+
+class ConfirmedMainNetWireFixtureTests(unittest.TestCase):
+    def test_tree4_algokey_signedtxn_exact_wire_passes(self):
+        """Offline public-chain fixture: genuine b'f1', pk, sig and txn wire."""
+        encoded = b"".join(_TREE4_FIXTURE.read_bytes().split())
+        blob = base64.b64decode(encoded, validate=True)
+        self.assertEqual(len(blob), 3310)
+        self.assertEqual(
+            hashlib.sha256(blob).hexdigest(),
+            "566db3b3efd9db449e5f62e36b7986bcfa87e7875cc3ae1b53605063ae570af3",
+        )
+        decoded = algo_tx.msgpack_decode(blob, strict=True)
+        self.assertEqual(list(decoded), ["pqsig", "txn"])
+        self.assertEqual(list(decoded["pqsig"]), ["pk", "sch", "sig"])
+        self.assertEqual(decoded["pqsig"]["sch"], b"f1")
+        self.assertEqual(len(decoded["pqsig"]["pk"]), 1793)
+        self.assertEqual(len(decoded["pqsig"]["sig"]), 1230)
+        self.assertEqual(decoded["pqsig"]["sig"][:2], b"\xba\x00")
+
+        note = algo_anchor.decode_note(decoded["txn"]["note"])
+        self.assertEqual(note["tree_size"], 4)
+        out = algo_anchor.validate_signed_txn(
+            blob,
+            expected_origin=ORIGIN_MAINNET,
+            expected_size=4,
+            expected_root=note["root"],
+            expected_address=_TREE4_ADDRESS,
+            expected_network="mainnet",
+            require_canonical=False,
+        )
+        self.assertEqual(out["txid"], _TREE4_TXID)
+        self.assertEqual(out["fee"], 3000)
 
 
 class StrictMsgpackSignedTxnTests(unittest.TestCase):
@@ -613,6 +665,72 @@ class StrictMsgpackSignedTxnTests(unittest.TestCase):
             algo_tx.msgpack_decode(blob, strict=True)
         self.assertIn("non-minimal", str(ctx.exception))
 
+    def test_non_minimal_array16_rejected_in_strict(self):
+        blob = _map1(b"\xdc\x00\x01\x01")
+        self.assertEqual(algo_tx.msgpack_decode(blob), {"v": [1]})
+        with self.assertRaises(ValueError) as ctx:
+            algo_tx.msgpack_decode(blob, strict=True)
+        self.assertIn("non-minimal", str(ctx.exception))
+
+    def test_non_bytes_decoder_input_rejected_before_coercion(self):
+        for raw in (8192, object(), "\x80"):
+            with self.assertRaises(TypeError):
+                algo_tx.msgpack_decode(raw, strict=True)
+
+    def test_explicit_zero_amount_is_noncanonical(self):
+        txn = _pay_txn()
+        txn["amt"] = 0
+        blob = algo_tx.msgpack_encode(_envelope(sch=b"f1", txn=txn))
+        with self.assertRaises(algo_anchor.AnchorError) as ctx:
+            algo_anchor.validate_signed_txn(
+                blob,
+                expected_origin=ORIGIN,
+                expected_size=1,
+                expected_root=_ROOT,
+                expected_address=_ADDR,
+                expected_network="testnet",
+            )
+        self.assertIn("canonical zero", str(ctx.exception))
+
+    def test_required_wire_field_types_fail_closed(self):
+        cases = (
+            ("fee", "3000"),
+            ("fv", "1"),
+            ("lv", "1001"),
+            ("snd", "not-wire-bytes"),
+            ("rcv", "not-wire-bytes"),
+            ("note", "00"),
+            ("gh", "not-wire-bytes"),
+        )
+        for key, value in cases:
+            with self.subTest(key=key):
+                txn = _pay_txn()
+                txn[key] = value
+                blob = algo_tx.msgpack_encode(_envelope(sch=b"f1", txn=txn))
+                with self.assertRaises(algo_anchor.AnchorError):
+                    algo_anchor.validate_signed_txn(
+                        blob,
+                        expected_origin=ORIGIN,
+                        expected_size=1,
+                        expected_root=_ROOT,
+                        expected_address=_ADDR,
+                        expected_network="testnet",
+                    )
+
+    def test_signature_header_and_salt_version_fail_closed(self):
+        for sig in (b"\x00\x00" + _SIG[2:], b"\xba\x01" + _SIG[2:]):
+            self.assertFalse(algo_anchor._falcon_f1_shapes_ok(_PK, sig))
+            blob = algo_tx.msgpack_encode(_envelope(sch=b"f1", sig=sig))
+            with self.assertRaises(algo_anchor.AnchorError):
+                algo_anchor.validate_signed_txn(
+                    blob,
+                    expected_origin=ORIGIN,
+                    expected_size=1,
+                    expected_root=_ROOT,
+                    expected_address=_ADDR,
+                    expected_network="testnet",
+                )
+
     def test_unknown_signedtxn_and_txn_fields_rejected(self):
         extra = _envelope(sch=b"f1")
         extra["zzz"] = 1
@@ -667,8 +785,8 @@ class StrictMsgpackSignedTxnTests(unittest.TestCase):
             )
         self.assertIn("falcon authorization missing", str(ctx.exception))
         self.assertFalse(algo_anchor._falcon_f1_shapes_ok(_PK, b"\x01"))
-        self.assertGreaterEqual(algo_anchor.FALCON_F1_SIG_MIN, 600)
-        self.assertLess(algo_anchor.FALCON_F1_SIG_MIN, algo_anchor.FALCON_F1_SIG_LIVE)
+        self.assertEqual(algo_anchor.FALCON_F1_SIG_MIN, 2)
+        self.assertLess(algo_anchor.FALCON_F1_SIG_MIN, algo_anchor.FALCON_F1_SIG_FIXTURE)
 
     def test_raw_byte_size_cap(self):
         with self.assertRaises(ValueError) as ctx:

@@ -358,6 +358,8 @@ def msgpack_decode(raw: bytes, *, strict: bool = False) -> dict:
     is lexicographic. Do not require re-encoding equality until the
     local encoder is proven against genuine algokey/go-algorand bytes.
     """
+    if not isinstance(raw, (bytes, bytearray, memoryview)):
+        raise TypeError("msgpack bytes required")
     blob = bytes(raw)
     if len(blob) > MAX_MSGPACK_BYTES:
         raise ValueError("msgpack too large")

@@ -8,7 +8,7 @@ meta origin/vkey/size/checkpoint
 optional checkpoints(size PK, note TEXT)
 
 Anchor state is split:
-  last_authorized_checkpoint — signer returned a SignedTxn (not on-chain)
+  last_authorized_checkpoint — authenticated signer response persisted (not on-chain)
   last_confirmed_checkpoint  — persisted TestNet inclusion fields (txid/round/root)
 
 Migration: new tables authorized_anchors / confirmed_anchors and meta keys

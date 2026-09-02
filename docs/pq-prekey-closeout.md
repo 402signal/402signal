@@ -212,9 +212,11 @@ import those final functions.
   address, signer probe, confirm probe, fetch suggested params, show
   projected policy). Must not authorize, persist AUTHORIZED, or create
   a SignedTxn.
-- `--prepare`: preflight (every required gate affirmatively true) →
-  fetch frozen policy → signer once → verify → persist AUTHORIZED →
-  print summary / expected txid. No POST.
+- `--prepare`: currently fail-closed before dialing the signer because its
+  response is not response-MAC authenticated. After a separately reviewed,
+  coordinated signer-and-router response-binding change: preflight → fetch
+  frozen policy → signer once → authenticate response → verify → persist
+  AUTHORIZED → print expected txid. No POST.
 - `--go`: send already-persisted AUTHORIZED only. Does not silently
   create a fresh auth.
 - `--discard-authorized`: explicit discard of AUTHORIZED that expired

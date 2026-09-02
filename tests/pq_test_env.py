@@ -59,11 +59,12 @@ def falcon_f1_fixture_pk(tag: bytes = b"") -> bytes:
 
 
 def falcon_f1_fixture_sig(tag: bytes = b"") -> bytes:
-    """Sanitized Falcon-1024 compressed-sig shape (1233 bytes). Not a live sig."""
+    """Sanitized Falcon-1024 compressed-sig shape. Not a live signature."""
     from live402.pq import algo_anchor
 
-    seed = bytes(tag) + bytes((0xC0 + (i % 0x20)) for i in range(algo_anchor.FALCON_F1_SIG_LIVE))
-    return seed[: algo_anchor.FALCON_F1_SIG_LIVE]
+    size = algo_anchor.FALCON_F1_SIG_FIXTURE
+    body = bytes(tag) + bytes((0xC0 + (i % 0x20)) for i in range(size))
+    return bytes((algo_anchor.FALCON_F1_SIG_HEADER, algo_anchor.FALCON_F1_SIG_SALT_VERSION)) + body[: size - 2]
 
 
 def insert_authorized_fixture(

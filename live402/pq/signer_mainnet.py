@@ -26,7 +26,7 @@ Falcon verify, or a signer response-MAC over protocol version,
 request_id, origin, tree size, root, checkpoint/policy digest, and
 SHA-256 of the exact SignedTxn bytes, is required before treating
 IPC bytes as authenticated provenance. Production canary.authorize
-fail-closes before persist_authorized until that binding exists.
+fail-closes before dialing this client until that binding exists.
 Fixture sign_fn / LIVE402_FIXTURE may still persist for tests.
 
 This module never loads a Falcon SK. No Algorand submit.

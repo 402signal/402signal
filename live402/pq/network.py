@@ -36,16 +36,15 @@ PROTOCOL_BASE_MIN = 1000
 FALCON_EXTRA_MIN_MULT = 2
 MIN_FEE = PROTOCOL_BASE_MIN * (1 + FALCON_EXTRA_MIN_MULT)  # 3000
 MAX_FEE = 30000
-# Official Falcon-1024 sizes (Algorand consensus / docs).
-# Consensus publishes MaxFalconSignatureSize=1423 only. There is no
-# official minimum compressed length in this repo or Algorand constants.
-# Compressed Falcon-1024 is header (1) + nonce (40) + compressed s2.
-# Live algokey compressed size is ~1233. A 1-byte blob is not a signature.
-# Conservative floor rejects trivially short encodings while staying
-# below every published compressed Falcon-1024 size.
+# Official Falcon-1024 wire bounds. Algorand publishes a 1423-byte maximum.
+# Its Falcon CompressedSignature parser documents fewer than two bytes as
+# malformed (header + salt-version cannot be present). This is only a
+# structural lower bound; it is not cryptographic verification.
 FALCON_F1_PK_LEN = 1793
 FALCON_F1_SIG_MAX = 1423
-FALCON_F1_SIG_MIN = 600
+FALCON_F1_SIG_MIN = 2
+FALCON_F1_SIG_HEADER = 0xBA
+FALCON_F1_SIG_SALT_VERSION = 0
 
 TESTNET_NAME = "testnet"
 MAINNET_NAME = "mainnet"
