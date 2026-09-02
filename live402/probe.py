@@ -1427,14 +1427,18 @@ def attach_catalog_fields(result: dict, item: dict | None = None) -> dict:
     contract = item.get("_claimed_contract") if isinstance(item, dict) else None
     if isinstance(contract, dict) and contract.get("origin") == "catalog_claimed":
         claimed["schema_present"] = True
+        from live402 import hydrate
+
         claimed["contract"] = {
             "origin": "catalog_claimed",
+            "untrusted": True,
             "method": contract.get("method"),
             "content_type": contract.get("content_type"),
             "tool_name": contract.get("tool_name"),
             "type": contract.get("type"),
             "schema_bytes": contract.get("schema_bytes"),
             "truncated": bool(contract.get("truncated")),
+            "client_warning": contract.get("client_warning") or hydrate.CLIENT_SCHEMA_WARNING,
         }
     fac = _catalog_facilitator(item)
     if fac:
@@ -1448,6 +1452,11 @@ def attach_catalog_fields(result: dict, item: dict | None = None) -> dict:
         claimed["accepts"] = catalog_acc
         claimed["payment_options"] = payment.payment_options_from_accepts(catalog_acc)
     if claimed:
+        from live402 import schema_fields
+
+        claimed.setdefault("origin", schema_fields.ORIGIN_CLAIMED)
+        claimed["untrusted"] = True
+        claimed.setdefault("client_warning", schema_fields.SELLER_TEXT_CLIENT_WARNING)
         result["claimed"] = claimed
     return result
 
