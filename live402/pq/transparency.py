@@ -1176,6 +1176,7 @@ def _ross_status_panel(model: dict) -> str:
     latest_text = str(latest) if latest else "-"
     mainnet = _mainnet_confirmed(model)
     conf = model.get("confirmed") if mainnet else None
+    confirmed_text = str(int(model.get("confirmed_size") or 0)) if conf else "-"
     if mainnet and conf:
         anchor = "Confirmed"
         extra = (
@@ -1193,12 +1194,20 @@ def _ross_status_panel(model: dict) -> str:
         '<section class="status-grid pq-status" aria-label="Current status">\n'
         '  <div><p class="pq-kicker">NETWORK</p><p class="pq-stat">Algorand MainNet</p></div>\n'
         '  <div><p class="pq-kicker">LOG IDENTITY</p><p class="pq-stat">%s</p></div>\n'
-        '  <div><p class="pq-kicker">TREE SIZE</p><p class="pq-stat">%s</p></div>\n'
-        '  <div><p class="pq-kicker">LATEST CHECKPOINT</p><p class="pq-stat">%s</p></div>\n'
-        '  <div><p class="pq-kicker">ANCHOR</p><p class="pq-stat">%s</p></div>\n'
+        '  <div><p class="pq-kicker">CURRENT TREE</p><p class="pq-stat">%s</p></div>\n'
+        '  <div><p class="pq-kicker">SIGNED CHECKPOINT</p><p class="pq-stat">%s</p></div>\n'
+        '  <div><p class="pq-kicker">CONFIRMED TREE</p><p class="pq-stat">%s</p></div>\n'
+        '  <div><p class="pq-kicker">ANCHOR STATUS</p><p class="pq-stat">%s</p></div>\n'
         "%s"
         "</section>\n"
-        % (esc(PUBLIC_LOG_IDENTITY), esc(current), esc(latest_text), esc(anchor), extra)
+        % (
+            esc(PUBLIC_LOG_IDENTITY),
+            esc(current),
+            esc(latest_text),
+            esc(confirmed_text),
+            esc(anchor),
+            extra,
+        )
     )
 
 
