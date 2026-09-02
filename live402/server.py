@@ -782,7 +782,8 @@ class Handler(SimpleHTTPRequestHandler):
         if parsed.path in STATIC_FILES:
             return self._serve_static_asset()
         if parsed.path == "/route":
-            allow = {"Allow": "GET, POST, OPTIONS"}
+            # SEC-PUB-001: JSON 402 vs HTML share this URL; caches must vary on Accept.
+            allow = {"Allow": "GET, POST, OPTIONS", "Vary": "Accept"}
             if self._wants_html():
                 html = (STATIC_DIR / "route.html").read_text(encoding="utf-8")
                 return self._html(200, html, extra_headers=allow)
