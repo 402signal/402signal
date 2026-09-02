@@ -1,16 +1,39 @@
-"""Process-local payment-authorization replay guard. Never persist raw payment material."""
+"""Single-machine payment-authorization replay guard.
+
+In-memory maps cover same-process inflight waiters and a 120s response
+cache. SHA-256(fingerprint) plus settle outcome persist in sqlite with a
+UNIQUE constraint so restart, TTL expiry, and a second process cannot
+settle the same authorization again. Fail closed on a duplicate begin.
+
+Never persist raw payment material. This is not facilitator exactly-once.
+"""
 
 from __future__ import annotations
 
 import hashlib
 import json
+import os
+import sqlite3
 import threading
+import time
 
 from live402 import clock, payment
 
 COMPLETED_TTL_SECONDS = 120.0
 MAX_COMPLETED = 2048
 WAIT_SLICE = 0.05
+
+DEFAULT_DB = "/tmp/live402-replay.sqlite"
+VOLUME_DB = "/data/live402-replay.sqlite"
+
+_SCHEMA = """
+CREATE TABLE IF NOT EXISTS settle_ledger (
+    fp_hash TEXT NOT NULL,
+    outcome_json TEXT,
+    created_at REAL NOT NULL,
+    CONSTRAINT settle_fp_hash_unique UNIQUE (fp_hash)
+);
+"""
 
 
 def canonical_fingerprint(payload: dict, accept: dict) -> str:
@@ -30,6 +53,11 @@ def canonical_fingerprint(payload: dict, accept: dict) -> str:
     return hashlib.sha256(raw).hexdigest()
 
 
+def durable_hash(fp: str) -> str:
+    """SHA-256(fingerprint). This is what sqlite stores. Never the fingerprint."""
+    return hashlib.sha256(str(fp).encode("ascii")).hexdigest()
+
+
 class _Entry:
     __slots__ = ("event", "result")
 
@@ -41,17 +69,176 @@ class _Entry:
 _lock = threading.Lock()
 _inflight: dict[str, _Entry] = {}
 _completed: dict[str, tuple[float, tuple]] = {}
+_conn: sqlite3.Connection | None = None
+_conn_path: str | None = None
+
+
+def db_path() -> str:
+    raw = (os.environ.get("LIVE402_REPLAY_DB") or "").strip()
+    if raw:
+        return raw
+    try:
+        if os.path.isdir("/data") and os.access("/data", os.W_OK):
+            return VOLUME_DB
+    except Exception:
+        pass
+    return DEFAULT_DB
+
+
+def _chmod_db_files(path: str) -> None:
+    for p in (path, path + "-wal", path + "-shm"):
+        try:
+            os.chmod(p, 0o600)
+        except OSError:
+            pass
+
+
+def _connect() -> sqlite3.Connection:
+    global _conn, _conn_path
+    path = db_path()
+    if _conn is not None and _conn_path == path:
+        return _conn
+    if _conn is not None:
+        try:
+            _conn.close()
+        except Exception:
+            pass
+        _conn = None
+        _conn_path = None
+    conn = sqlite3.connect(path, check_same_thread=False, timeout=5.0)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    conn.executescript(_SCHEMA)
+    conn.commit()
+    _conn = conn
+    _conn_path = path
+    _chmod_db_files(path)
+    return conn
+
+
+def _close_conn_locked() -> None:
+    global _conn, _conn_path
+    if _conn is not None:
+        try:
+            _conn.close()
+        except Exception:
+            pass
+    _conn = None
+    _conn_path = None
+
+
+def _clear_memory_locked() -> None:
+    for entry in _inflight.values():
+        entry.event.set()
+    _inflight.clear()
+    _completed.clear()
 
 
 def reset() -> None:
+    """Drop memory and the sqlite file (tests)."""
     with _lock:
-        for entry in _inflight.values():
-            entry.event.set()
-        _inflight.clear()
-        _completed.clear()
+        _clear_memory_locked()
+        path = _conn_path or db_path()
+        _close_conn_locked()
+        for p in (path, path + "-wal", path + "-shm"):
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+
+
+def reset_memory() -> None:
+    """Drop process-local maps only. Sqlite stays. Tests simulate restart."""
+    with _lock:
+        _clear_memory_locked()
+        _close_conn_locked()
+
+
+def _encode_outcome(result: tuple) -> str:
+    code, body, extra = result
+    return json.dumps({"c": code, "b": body, "e": extra}, separators=(",", ":"), default=str)
+
+
+def _decode_outcome(raw: str) -> tuple | None:
+    try:
+        data = json.loads(raw)
+        code = int(data["c"])
+        body = data["b"]
+        extra = data["e"]
+    except (TypeError, ValueError, KeyError, json.JSONDecodeError):
+        return None
+    if not isinstance(body, dict):
+        return None
+    if extra is not None and not isinstance(extra, dict):
+        return None
+    return code, body, extra
+
+
+def _ledger_lookup(fp_hash: str) -> tuple[str, tuple | None]:
+    """Read a durable row. missing / cached / reject. Fail closed on sqlite errors."""
+    try:
+        conn = _connect()
+        row = conn.execute(
+            "SELECT outcome_json FROM settle_ledger WHERE fp_hash = ?",
+            (fp_hash,),
+        ).fetchone()
+    except sqlite3.Error:
+        return "reject", None
+    if row is None:
+        return "missing", None
+    if row[0]:
+        decoded = _decode_outcome(row[0])
+        if decoded is not None:
+            return "cached", decoded
+    return "reject", None
+
+
+def _ledger_reserve(fp_hash: str) -> str:
+    """INSERT reservation. run or reject. UNIQUE is the inter-process lock."""
+    try:
+        conn = _connect()
+        conn.execute(
+            "INSERT INTO settle_ledger (fp_hash, outcome_json, created_at) VALUES (?, NULL, ?)",
+            (fp_hash, time.time()),
+        )
+        conn.commit()
+        return "run"
+    except sqlite3.IntegrityError:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return "reject"
+    except sqlite3.Error:
+        return "reject"
+
+
+def _ledger_finish(fp_hash: str, result: tuple, cache: bool) -> None:
+    try:
+        conn = _connect()
+        if cache:
+            conn.execute(
+                "UPDATE settle_ledger SET outcome_json = ? WHERE fp_hash = ?",
+                (_encode_outcome(result), fp_hash),
+            )
+        else:
+            conn.execute("DELETE FROM settle_ledger WHERE fp_hash = ?", (fp_hash,))
+        conn.commit()
+    except sqlite3.Error:
+        pass
+
+
+def _ledger_release(fp_hash: str) -> None:
+    try:
+        conn = _connect()
+        conn.execute("DELETE FROM settle_ledger WHERE fp_hash = ?", (fp_hash,))
+        conn.commit()
+    except sqlite3.Error:
+        pass
 
 
 def _prune_completed(now: float) -> None:
+    # TTL is the in-memory response cache only. Sqlite uniqueness does not expire.
     stale = [key for key, (exp, _res) in _completed.items() if exp <= now]
     for key in stale:
         _completed.pop(key, None)
@@ -75,8 +262,12 @@ def peek_completed(fp: str) -> tuple | None:
 
 
 def begin(fp: str) -> tuple[str, _Entry | tuple | None]:
-    """Acquire execution, return a cached result, or an in-flight entry to wait on."""
+    """Acquire execution, return a cached result, wait, or reject a duplicate.
+
+    A second process that hits the UNIQUE row is rejected (fail closed).
+    """
     now = clock.monotonic()
+    fp_hash = durable_hash(fp)
     with _lock:
         _prune_completed(now)
         cached = _completed.get(fp)
@@ -85,6 +276,13 @@ def begin(fp: str) -> tuple[str, _Entry | tuple | None]:
         existing = _inflight.get(fp)
         if existing is not None:
             return "wait", existing
+        status, persisted = _ledger_lookup(fp_hash)
+        if status == "cached":
+            return "cached", persisted
+        if status == "reject":
+            return "reject", None
+        if _ledger_reserve(fp_hash) != "run":
+            return "reject", None
         entry = _Entry()
         _inflight[fp] = entry
         return "run", entry
@@ -106,8 +304,13 @@ def wait_result(entry: _Entry, deadline: float | None) -> tuple | None:
 
 
 def finish(fp: str, result: tuple, cache: bool) -> None:
-    """Publish the result to waiters. Cache settled/rejected fingerprints only."""
+    """Publish the result to waiters. Cache settled/rejected fingerprints only.
+
+    cache=True writes the outcome to sqlite. cache=False (400) drops the
+    reservation so a corrected body may retry. TTL still applies to RAM only.
+    """
     now = clock.monotonic()
+    fp_hash = durable_hash(fp)
     with _lock:
         entry = _inflight.get(fp)
         if entry is not None:
@@ -118,11 +321,14 @@ def finish(fp: str, result: tuple, cache: bool) -> None:
             _prune_completed(now)
             _completed[fp] = (now + COMPLETED_TTL_SECONDS, result)
             _prune_completed(now)
+        _ledger_finish(fp_hash, result, cache)
 
 
 def abandon(fp: str) -> None:
     """Release in-flight without caching. Waiters fail closed unless a result was set."""
+    fp_hash = durable_hash(fp)
     with _lock:
         entry = _inflight.pop(fp, None)
         if entry is not None:
             entry.event.set()
+        _ledger_release(fp_hash)

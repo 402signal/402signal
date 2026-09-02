@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
+import sqlite3
+import subprocess
+import sys
+import tempfile
 import threading
 import unittest
 from io import StringIO
@@ -85,6 +90,9 @@ class ReplayFingerprintTests(unittest.TestCase):
 
 class ConcurrentReplayTests(unittest.TestCase):
     def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self._prev_db = os.environ.get("LIVE402_REPLAY_DB")
+        os.environ["LIVE402_REPLAY_DB"] = os.path.join(self.tmp.name, "replay.sqlite")
         replay.reset()
         os.environ["CDP_ACCESS_TOKEN"] = "test-fixture-token"
         os.environ.pop("LOCAL_FREE", None)
@@ -92,6 +100,11 @@ class ConcurrentReplayTests(unittest.TestCase):
     def tearDown(self):
         replay.reset()
         os.environ.pop("CDP_ACCESS_TOKEN", None)
+        if self._prev_db is None:
+            os.environ.pop("LIVE402_REPLAY_DB", None)
+        else:
+            os.environ["LIVE402_REPLAY_DB"] = self._prev_db
+        self.tmp.cleanup()
 
     def test_concurrent_identical_auth_one_probe_one_settle(self):
         probe_started = threading.Event()
@@ -196,6 +209,106 @@ class ConcurrentReplayTests(unittest.TestCase):
         self.assertNotIn("0x" + ("ab" * 65), logged)
         sig = headers.get("PAYMENT-SIGNATURE")
         self.assertNotIn(sig, logged)
+        self.assertNotIn(replay.durable_hash(fp), logged)
+
+    def test_restart_after_settle_does_not_settle_again(self):
+        settle_calls = []
+
+        def fake_post(url, body, headers=None, timeout=20.0):
+            _ = headers, timeout, body
+            if str(url).rstrip("/").endswith("/verify"):
+                return 200, {"isValid": True}
+            if str(url).rstrip("/").endswith("/settle"):
+                settle_calls.append(1)
+                return 200, {"success": True}
+            return 404, {"error": "unexpected"}
+
+        headers = _headers_for(_payload("rs"))
+        body = {"need": "weather", "url": "https://fixture.402signal.local/weather"}
+        with patch("live402.facilitator.post_json", side_effect=fake_post):
+            first = handle_route(body, headers, "https://402signal.com/route")
+            replay.reset_memory()
+            second = handle_route(body, headers, "https://402signal.com/route")
+        self.assertEqual(first[0], 200)
+        self.assertEqual(second[0], 200)
+        self.assertEqual(first[1].get("url"), second[1].get("url"))
+        self.assertEqual(len(settle_calls), 1)
+
+    def test_ttl_expiry_does_not_reopen_settle(self):
+        """TTL drops the RAM cache only. Sqlite uniqueness does not expire."""
+        settle_calls = []
+        t = {"now": 10_000.0}
+
+        def fake_mono():
+            return t["now"]
+
+        def fake_post(url, body, headers=None, timeout=20.0):
+            _ = headers, timeout, body
+            if str(url).rstrip("/").endswith("/verify"):
+                return 200, {"isValid": True}
+            if str(url).rstrip("/").endswith("/settle"):
+                settle_calls.append(1)
+                return 200, {"success": True}
+            return 404, {"error": "unexpected"}
+
+        headers = _headers_for(_payload("tl"))
+        body = {"need": "weather", "url": "https://fixture.402signal.local/weather"}
+        accept = payment.match_accept(
+            payment.extract_payment_payload(headers),
+            payment.payment_required("https://402signal.com/route"),
+        )
+        fp = replay.canonical_fingerprint(payment.extract_payment_payload(headers), accept)
+        with patch("live402.clock.monotonic", fake_mono), patch(
+            "live402.facilitator.post_json", side_effect=fake_post
+        ):
+            first = handle_route(body, headers, "https://402signal.com/route")
+            t["now"] += replay.COMPLETED_TTL_SECONDS + 1
+            self.assertIsNone(replay.peek_completed(fp))
+            second = handle_route(body, headers, "https://402signal.com/route")
+        self.assertEqual(first[0], 200)
+        self.assertEqual(second[0], 200)
+        self.assertEqual(len(settle_calls), 1)
+
+    def test_two_process_begin_duplicate_rejected(self):
+        fp = "ab" * 32
+        kind, _token = replay.begin(fp)
+        self.assertEqual(kind, "run")
+        db = os.environ["LIVE402_REPLAY_DB"]
+        script = (
+            "import os, sys\n"
+            "os.environ['LIVE402_REPLAY_DB'] = %r\n"
+            "from live402 import replay\n"
+            "kind, token = replay.begin(%r)\n"
+            "sys.stdout.write(kind)\n"
+        ) % (db, fp)
+        env = os.environ.copy()
+        env["PYTHONPATH"] = os.pathsep.join(
+            [os.path.abspath(os.path.join(os.path.dirname(__file__), "..")), env.get("PYTHONPATH", "")]
+        )
+        out = subprocess.check_output([sys.executable, "-c", script], env=env, text=True)
+        self.assertEqual(out.strip(), "reject")
+
+    def test_ledger_stores_hash_not_fingerprint(self):
+        headers = _headers_for(_payload("hs"))
+        body = {"need": "weather", "url": "https://fixture.402signal.local/weather"}
+        accept = payment.match_accept(
+            payment.extract_payment_payload(headers),
+            payment.payment_required("https://402signal.com/route"),
+        )
+        fp = replay.canonical_fingerprint(payment.extract_payment_payload(headers), accept)
+        with patch("live402.facilitator.post_json", side_effect=_fake_facilitator):
+            handle_route(body, headers, "https://402signal.com/route")
+        conn = sqlite3.connect(os.environ["LIVE402_REPLAY_DB"])
+        try:
+            rows = conn.execute("SELECT fp_hash, outcome_json FROM settle_ledger").fetchall()
+        finally:
+            conn.close()
+        self.assertEqual(len(rows), 1)
+        stored_hash, outcome = rows[0]
+        self.assertEqual(stored_hash, hashlib.sha256(fp.encode("ascii")).hexdigest())
+        self.assertNotEqual(stored_hash, fp)
+        self.assertNotIn(fp, outcome)
+        self.assertIn("UNIQUE", replay._SCHEMA)
 
 
 if __name__ == "__main__":
