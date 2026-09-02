@@ -779,13 +779,14 @@ class PaywallTests(unittest.TestCase):
             "402Signal is the independent check an AI agent makes right before spending. "
             "It finds the strongest x402 route across Base, Solana, and Algorand, verifies it live, "
             "and shows the evidence behind the choice. Your agent keeps the wallet. "
-            "The decision history is committed to an append-only log with Falcon PQ anchoring "
-            "on Algorand (currently TestNet).",
+            "The decision history is committed to an append-only PQ Trust log. "
+            "Production identity is Algorand MainNet.",
         )
         self.assertIn("Base, Solana, and Algorand", catalog)
         self.assertIn("Your agent keeps the wallet", catalog)
-        self.assertIn("Falcon PQ", catalog)
-        self.assertIn("currently TestNet", catalog)
+        self.assertIn("PQ Trust", catalog)
+        self.assertIn("Algorand MainNet", catalog)
+        self.assertNotIn("currently TestNet", catalog)
         required = payment.payment_required("https://402signal.com/route")
         self.assertEqual(required["resource"]["description"], catalog)
         self.assertEqual(payment.BAZAAR_MCP["info"]["input"]["description"], catalog)

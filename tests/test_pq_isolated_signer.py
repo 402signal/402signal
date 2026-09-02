@@ -671,7 +671,7 @@ class SignerClientProtocolTests(unittest.TestCase):
         self.assertNotIn("View TestNet transaction", text)
         self.assertNotIn("placeholder", text.lower())
         self.assertNotIn("YOUR_TXID", text)
-        self.assertNotIn("PQ Trust", text)
+        self.assertIn("PQ Trust", text)
         self.assertNotIn("PQ transparency", text)
         self.assertIsNone(worker.public_anchor())
         self.assertEqual(worker.homepage_pq_html(), "")

@@ -31,8 +31,8 @@ CATALOG_DESCRIPTION = (
     "402Signal is the independent check an AI agent makes right before spending. "
     "It finds the strongest x402 route across Base, Solana, and Algorand, verifies it live, "
     "and shows the evidence behind the choice. Your agent keeps the wallet. "
-    "The decision history is committed to an append-only log with Falcon PQ anchoring "
-    "on Algorand (currently TestNet)."
+    "The decision history is committed to an append-only PQ Trust log. "
+    "Production identity is Algorand MainNet."
 )
 
 # Spec-shaped bazaar declaration for POST /route.
