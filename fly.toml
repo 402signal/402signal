@@ -58,6 +58,7 @@ primary_region = "iad"
 [env]
   LIVE402_HISTORY_DB = "/data/live402-history.sqlite"
   LIVE402_CATALOG_DB = "/data/catalog.sqlite"
+  LIVE402_REPLAY_DB = "/data/live402-replay.sqlite"
   LIVE402_PQ_LOG_DB = "/data/pq-log-mainnet.sqlite"
   LIVE402_PQ_LOG_EPOCH = "mainnet-v1"
   LIVE402_PQ_LOG_ORIGIN = "402signal.com/pq/log/mainnet-v1"

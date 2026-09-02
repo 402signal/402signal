@@ -413,6 +413,11 @@ def handle_route(body: dict, headers, resource_url: str, bazaar: dict | None = N
     kind, token = replay.begin(fp)
     if kind == "cached" and isinstance(token, tuple) and len(token) == 3:
         return token[0], token[1], token[2]
+    if kind == "reject":
+        required, extra = _required_pair(
+            resource_url, "Payment verification failed", bazaar=bazaar
+        )
+        return 402, required, extra
     if kind == "wait":
         waited = replay.wait_result(token, paid_deadline)
         if isinstance(waited, tuple) and len(waited) == 3:
