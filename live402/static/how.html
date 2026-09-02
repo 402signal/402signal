@@ -43,27 +43,27 @@
         <dl class="checks compact">
           <div>
             <dt>1 Discover</dt>
-            <dd>Find candidates across supported x402 discovery sources.</dd>
+            <dd>402Signal searches supported x402 discovery sources for possible matches.</dd>
           </div>
           <div>
             <dt>2 Check</dt>
-            <dd>Call candidate endpoints and read the payment requirements they return now.</dd>
+            <dd>Candidate endpoints are called before selection. 402Signal reads the payment requirements they return now.</dd>
           </div>
           <div>
             <dt>3 Apply constraints</dt>
-            <dd>Apply your network, price, latency, and invocation constraints.</dd>
+            <dd>Network, amount, latency, invocation requirements, and other requested constraints are applied to the observed options.</dd>
           </div>
           <div>
             <dt>4 Select</dt>
-            <dd>Get the best qualifying route, or a typed reason nothing matched.</dd>
+            <dd>402Signal ranks the qualifying options and returns the best match.</dd>
           </div>
           <div>
             <dt>5 Execute</dt>
-            <dd>Your application keeps control of its wallet, signs the seller payment, and calls the selected service.</dd>
+            <dd>Your application decides whether to use the route. It keeps control of the wallet, signs the seller payment, and calls the service.</dd>
           </div>
           <div>
             <dt>When nothing matches</dt>
-            <dd>If nothing meets your constraints, 402Signal returns a typed miss instead of guessing.</dd>
+            <dd>402Signal returns a typed miss with the reason evaluation stopped.</dd>
           </div>
         </dl>
       </section>

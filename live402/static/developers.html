@@ -4,16 +4,16 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Route before you spend</title>
-  <meta name="description" content="402Signal checks x402 endpoints before you spend. HTTP, MCP, and OpenAPI." />
+  <meta name="description" content="POST /route with what you need and any constraints." />
   <link rel="canonical" href="https://402signal.com/developers" />
   <meta property="og:title" content="Route before you spend" />
-  <meta property="og:description" content="402Signal checks x402 endpoints before you spend. HTTP, MCP, and OpenAPI." />
+  <meta property="og:description" content="POST /route with what you need and any constraints." />
   <meta property="og:url" content="https://402signal.com/developers" />
   <meta property="og:type" content="website" />
   <meta property="og:site_name" content="402Signal" />
   <meta name="twitter:card" content="summary" />
   <meta name="twitter:title" content="Route before you spend" />
-  <meta name="twitter:description" content="402Signal checks x402 endpoints before you spend. HTTP, MCP, and OpenAPI." />
+  <meta name="twitter:description" content="POST /route with what you need and any constraints." />
   <meta name="twitter:site" content="@402Signal" />
   <link rel="stylesheet" href="/styles.css" />
 </head>
@@ -36,21 +36,13 @@
     <main>
       <section class="hero compact">
         <h1>Route before you spend</h1>
-        <p class="lede">402Signal checks x402 endpoints before you spend. It compares the payment terms it sees now against your constraints and returns the best match, or a clear reason nothing qualified.</p>
-        <p class="lede">You keep your wallet and keys. 402Signal never pays the selected service for you.</p>
-        <p>402Signal finds and checks the route. Your application keeps control of its wallet, signs the seller payment, and calls the selected service.</p>
+        <p class="lede">POST /route with what you need and any constraints.</p>
+        <p>An unpaid request returns HTTP 402 for the $0.01 USDC routing fee. After that payment is verified, 402Signal checks candidates and returns the best qualifying route or a typed miss.</p>
+        <p>402Signal recommends the route. Your application keeps control of its wallet, signs the selected service's payment, and calls the service.</p>
       </section>
 
       <section class="block">
-        <h2>Quick start</h2>
-        <p>Request with real supported JSON only.</p>
-        <div class="code-card">
-          <div class="code-toolbar">
-            <span>Example request</span>
-            <button type="button" class="btn secondary" id="copy-curl" aria-label="Copy curl example">Copy</button>
-          </div>
-          <pre class="code" id="curl-route">curl -sS -D - https://402signal.com/route -H 'Content-Type: application/json' -d '{"need":"erc20 token balance","prefer_network":"base"}'</pre>
-        </div>
+        <h2>Request</h2>
         <pre class="code">{"need":"erc20 token balance","prefer_network":"base"}</pre>
       </section>
 
@@ -59,42 +51,42 @@
         <dl class="checks compact">
           <div>
             <dt>POST /route</dt>
-            <dd>Paid routing check. Unpaid calls return HTTP 402.</dd>
+            <dd>Paid live routing check</dd>
           </div>
           <div>
             <dt>GET /preview</dt>
-            <dd>Unpaid catalog search. Preview uses discovery data.</dd>
+            <dd>Free catalog preview</dd>
           </div>
           <div>
             <dt>GET /rails</dt>
-            <dd>Supported pay-in rails.</dd>
+            <dd>Supported payment rails</dd>
           </div>
           <div>
             <dt>GET /openapi.json</dt>
-            <dd>OpenAPI document.</dd>
+            <dd>OpenAPI specification</dd>
           </div>
           <div>
             <dt>GET /mcp.json</dt>
-            <dd>MCP tool document.</dd>
+            <dd>MCP manifest</dd>
           </div>
           <div>
             <dt>POST /mcp</dt>
-            <dd>MCP endpoint.</dd>
+            <dd>MCP JSON-RPC</dd>
           </div>
           <div>
             <dt>GET /transparency</dt>
-            <dd>Human-readable routing history.</dd>
+            <dd>Transparency log</dd>
           </div>
         </dl>
       </section>
 
       <section class="block">
         <h2>Routing fee</h2>
-        <p>$0.01 USDC. The fee pays 402Signal. The selected service payment is separate and stays under caller control.</p>
+        <p>A routing check costs $0.01 USDC.</p>
+        <p>The routing fee pays 402Signal. Any payment required by the selected service is separate and remains under the caller's control.</p>
       </section>
 
       <section class="block quiet">
-        <h2>Reference</h2>
         <p class="link-row">
           <a href="/openapi.json">OpenAPI</a>
           <a href="/mcp.json">MCP</a>

@@ -917,10 +917,6 @@ def _technical(model: dict) -> str:
         "<p>The Algorand transaction authorizes a checkpoint. "
         "It is not a merchant payment.</p>"
     )
-    parts.append(
-        "<p>This post-quantum authorization protects the checkpoint transaction. "
-        "It does not make Base or Solana merchant payments post-quantum secure.</p>"
-    )
     if note:
         parts.append(
             "<p>Canonical PQ1 note · reconstructed from independently verified "
