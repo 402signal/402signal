@@ -62,6 +62,23 @@ def _mainnet_signed(size, root, addr=None, fee=3000, fv=1, lv=1001):
     )
 
 
+def _authenticated_reply(request, signed, token=_TOKEN):
+    reply = {
+        "ok": True,
+        "tree_size": request.get("tree_size"),
+        "root": request.get("root"),
+        "pqsig": "present",
+        "signed": bytes(signed).hex(),
+    }
+    reply["response_hmac"] = signer_mainnet.response_mac_hex(
+        token,
+        request=request,
+        reply=reply,
+        signed=bytes(signed),
+    )
+    return reply
+
+
 class MainNetSignerIsolationTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -176,16 +193,7 @@ class MainNetSignerIsolationTests(unittest.TestCase):
                         raw += chunk
                     data = json.loads(raw.split(b"\n", 1)[0].decode("utf-8"))
                     received.append(data)
-                    reply = json.dumps(
-                        {
-                            "ok": True,
-                            "tree_size": data.get("tree_size"),
-                            "root": data.get("root"),
-                            "pqsig": "present",
-                            "signed": signed.hex(),
-                        },
-                        separators=(",", ":"),
-                    )
+                    reply = json.dumps(_authenticated_reply(data, signed), separators=(",", ":"))
                     conn.sendall((reply + "\n").encode("utf-8"))
                 finally:
                     conn.close()
@@ -201,7 +209,7 @@ class MainNetSignerIsolationTests(unittest.TestCase):
         return port
 
     def test_round_trip_binds_and_verifies(self):
-        root = b"\x11" * 32
+        root = b"\xab" * 32
         blob = _mainnet_signed(1, root)
         received = []
         port = self._serve(blob, received)
@@ -220,13 +228,109 @@ class MainNetSignerIsolationTests(unittest.TestCase):
             params={"minFee": 1000, "fee": 0, "lastRound": 1},
         )
         self.assertEqual(out["signed"], blob)
+        self.assertIs(out["response_authenticated"], True)
         self.assertEqual(out["verified"]["fee"], 3000)
         self.assertEqual(set(received[0]), set(signer_mainnet.REQUEST_KEYS))
-        self.assertEqual(received[0]["v"], 2)
+        self.assertEqual(received[0]["v"], 3)
         self.assertIn("policy", received[0])
         self.assertEqual(received[0]["policy"]["canonical_fee"], 3000)
         for key in ("fee", "sender", "amount", "txn", "unsigned", "pk", "sk"):
             self.assertNotIn(key, received[0])
+
+    def test_response_mac_golden_matches_private_signer(self):
+        canonical = signer_mainnet.response_canonical_bytes(
+            request_version="pq-anchor/3",
+            origin="origin",
+            request_hmac="request-mac",
+            request_id="rid",
+            checkpoint="note\n",
+            tree_size=4,
+            root="AB",
+            pqsig="present",
+            signed=b"\x00\x01\x02",
+        )
+        self.assertEqual(
+            canonical.hex(),
+            "70712d616e63686f722d726573706f6e73652f310a636865636b706f696e743d353a6e6f74650a0a6f726967696e3d363a6f726967696e0a70717369673d373a70726573656e740a726571756573745f686d61633d31313a726571756573742d6d61630a726571756573745f69643d333a7269640a726571756573745f763d31313a70712d616e63686f722f330a726f6f743d323a61620a7369676e65643d333a0001020a747265655f73697a653d313a340a",
+        )
+        self.assertEqual(
+            __import__("hmac").new(b"token", canonical, __import__("hashlib").sha256).hexdigest(),
+            "73ac46aa4fcf4ed07faafebdf4e6b771c9b6e7feaa06213864ab2ee48132a66a",
+        )
+
+    def test_mainnet_router_has_no_v2_downgrade(self):
+        with self.assertRaises(signer_mainnet.SignerClientError):
+            signer_mainnet.canonical_bytes(
+                origin=ORIGIN_MAINNET,
+                tree_size=1,
+                root=b"\xab" * 32,
+                consistency=[],
+                timestamp=1_700_000_000,
+                request_id="no-v2",
+                checkpoint="NOTE",
+                policy=_policy(),
+                v=2,
+            )
+
+    def test_authenticated_reply_fails_closed_matrix(self):
+        root = b"\xab" * 32
+        note = _signed_note(1, root)
+        request = signer_mainnet.build_request(
+            origin=ORIGIN_MAINNET,
+            tree_size=1,
+            root=root,
+            consistency=[],
+            timestamp=1_700_000_000,
+            request_id="response-matrix",
+            checkpoint=note,
+            policy=_policy(),
+            token=_TOKEN,
+        )
+        signed = b"\xab\xcd\x02"
+        valid = _authenticated_reply(request, signed)
+        parsed = signer_mainnet.parse_authenticated_reply(
+            json.dumps(valid, separators=(",", ":")), token=_TOKEN, request=request
+        )
+        self.assertIs(parsed["response_authenticated"], True)
+        self.assertEqual(parsed["signed"], signed)
+
+        cases = []
+        for key, value in (
+            ("response_hmac", None),
+            ("response_hmac", "00" * 32),
+            ("response_hmac", valid["response_hmac"].upper()),
+            ("tree_size", True),
+            ("tree_size", "1"),
+            ("root", valid["root"].upper()),
+            ("pqsig", "Present"),
+            ("signed", valid["signed"].upper()),
+            ("signed", "000103"),
+        ):
+            changed = dict(valid)
+            if value is None:
+                changed.pop(key)
+            else:
+                changed[key] = value
+            cases.append(json.dumps(changed, separators=(",", ":")))
+        extra = dict(valid)
+        extra["fallback"] = "pq-anchor/2"
+        cases.append(json.dumps(extra, separators=(",", ":")))
+        cases.append(
+            json.dumps(valid, separators=(",", ":")).replace(
+                '"ok":true', '"ok":true,"ok":true', 1
+            )
+        )
+        for raw in cases:
+            with self.subTest(raw=raw[:96]):
+                with self.assertRaises(signer_mainnet.SignerClientError):
+                    signer_mainnet.parse_authenticated_reply(raw, token=_TOKEN, request=request)
+
+        substituted = dict(request)
+        substituted["request_id"] = "other"
+        with self.assertRaises(signer_mainnet.SignerClientError):
+            signer_mainnet.parse_authenticated_reply(
+                json.dumps(valid, separators=(",", ":")), token=_TOKEN, request=substituted
+            )
 
     def test_consistency_proof_required_is_surfaced(self):
         def serve(sock):
@@ -372,7 +476,7 @@ class MainNetSignerIsolationTests(unittest.TestCase):
         self.assertTrue(out["reachable"])
         self.assertTrue(out["protocol"])
         self.assertTrue(out["hmac_rejected"])
-        self.assertEqual(out["canonical"], "pq-anchor/2")
+        self.assertEqual(out["canonical"], "pq-anchor/3")
         self.assertEqual(store.size(), 0)
         self.assertFalse(store.last_authorized_checkpoint().get("signed"))
         self.assertIn(b"unsigned", received[0])
@@ -441,11 +545,11 @@ class MainNetSignerIsolationTests(unittest.TestCase):
     def test_signer_identity_points_at_merged_production_signer(self):
         self.assertEqual(
             signer_mainnet.SIGNER_REVIEWED_HEAD,
-            "6d2480ce5a53c9b7dd574a01c257b4faa2f8dac9",
+            "13eba91d9759f7f65229f2456891d8400488b0e8",
         )
         self.assertEqual(
             signer_mainnet.SIGNER_MERGE_SHA,
-            "7e58e39817dce9b74c387ffe3a08536f804dcd05",
+            "8a37e601ca223ce30c56d40321069397237e7cef",
         )
         for stale in ("a901ef7a", "1c3e640a", "9798c38f"):
             self.assertNotEqual(signer_mainnet.SIGNER_MERGE_SHA, stale)

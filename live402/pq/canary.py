@@ -38,8 +38,8 @@ LIVE402_PQ_FALCON_MAINNET_CANARY=1 are required to send. Env flags
 alone are not enough: SEND_ATTEMPTED is the durable one-shot latch.
 Human GO is CONFIRM_MAINNET_CANARY=I_UNDERSTAND.
 Default refuses to send. Fixture mode never dials live algod.
-Production authorization currently stops before AUTHORIZED because the
-private signer does not yet return an authenticated response binding.
+Production authorization requires a verified pq-anchor/3 response HMAC
+before AUTHORIZED persistence.
 """
 
 from __future__ import annotations
@@ -220,9 +220,10 @@ def project_policy(
     }
 
 
-# AUTHORIZED persistence capability. request_signed HMAC-authenticates the
-# request, not the response. Until a response MAC or native Falcon verify is
-# implemented, only the explicit fixture/test sign hook can reach the write.
+# AUTHORIZED persistence capabilities. Production receives its unforgeable
+# in-process capability only after signer_mainnet verifies the pq-anchor/3
+# response HMAC. Fixtures use a separate test-only capability.
+_SIGNER_PERSIST_CAPABILITY = object()
 _FIXTURE_PERSIST_CAPABILITY = object()
 
 
@@ -243,11 +244,9 @@ def persist_existing_signed(
 ) -> dict:
     """Refuse AUTHORIZED from caller-supplied SignedTxn bytes.
 
-    Exact SignedTxn provenance is not authenticated on this router:
-    the IPC reply is not yet response-MAC bound, and this path never
-    saw a signer dial. Do not persist AUTHORIZED from unauthenticated
-    bytes. Residual: Ross-only signer response-MAC (or official native
-    Falcon verify). This function never writes store state.
+    This path never saw a signer dial or verified response HMAC. Do not
+    persist AUTHORIZED from caller bytes even when the bytes are otherwise
+    semantically valid. This function never writes store state.
     """
     del signed, now, request_id, params, fetch_params_fn
     raise CanarySecurityError("unauthenticated caller SignedTxn is not provenance")
@@ -269,12 +268,10 @@ def persist_authorized(
 ) -> dict:
     """DURABLY persist AUTHORIZED exact blob before any send eligibility.
 
-    This internal write is reachable only through the explicit fixture/test
-    sign hook. Production IPC replies cannot manufacture the in-process
-    capability. A future authenticated response path must add real MAC or
-    native Falcon verification before it is allowed here.
+    This internal write is reachable only after an authenticated pq-anchor/3
+    signer reply or through the explicit fixture/test sign hook.
     """
-    if _capability is not _FIXTURE_PERSIST_CAPABILITY:
+    if _capability is not _SIGNER_PERSIST_CAPABILITY and _capability is not _FIXTURE_PERSIST_CAPABILITY:
         raise CanarySecurityError("unauthenticated signer response is not provenance")
     policy = json.dumps(fee_policy) if isinstance(fee_policy, dict) else (fee_policy or "")
     stored = store.save_authorized_checkpoint(
@@ -348,22 +345,15 @@ def authorize(
     operator explicitly discards. Never re-dials around a different
     stored auth. Never silently modifies fee/fv/lv.
 
-    Production persist is fail-closed until authenticated response
-    provenance exists (response-MAC or official native Falcon verify).
-    Fixture sign_fn under LIVE402_FIXTURE / TEST SUPPORT may persist.
+    Production persists only after signer_mainnet verifies the pq-anchor/3
+    response HMAC. Fixture sign_fn under LIVE402_FIXTURE / TEST SUPPORT may persist.
     Unpaid /route and read-only trust are not on this path.
     """
     ident = current_checkpoint_identity()
     existing = store.authorized_at(ident["tree_size"])
     if existing and existing.get("signed"):
         return _existing_authorized_usable(existing, ident, now=now)
-    # request_signed authenticates the router request but the current protocol
-    # does not authenticate the reply. Refuse before dialing: contacting the
-    # signer here could consume another authorization/resign allowance that the
-    # router is deliberately forbidden to persist. Existing exact AUTHORIZED
-    # blobs remain reusable through the branch above.
-    if sign_fn is None:
-        raise CanarySecurityError("unauthenticated signer response is not provenance")
+    from live402.pq import signer_mainnet
 
     rid = request_id or uuid.uuid4().hex
     when = int(now if now is not None else time.time())
@@ -382,12 +372,35 @@ def authorize(
     verify_params.setdefault("genesisID", algo_anchor.MAINNET_GENESIS_ID)
     verify_params.setdefault("genesisHash", algo_anchor.MAINNET_GENESIS_HASH)
     verify_params["require_canonical"] = True
-    if not callable(sign_fn):
-        raise CanaryError("invalid sign hook")
-    if not _test_sign_hook_allowed():
-        raise CanarySecurityError("caller-supplied sign hook forbidden")
-    signed = sign_fn(ident)
-    reply = {"signed": bytes(signed), "verified": {}, "policy": policy}
+    if sign_fn is not None:
+        if not callable(sign_fn):
+            raise CanaryError("invalid sign hook")
+        if not _test_sign_hook_allowed():
+            raise CanarySecurityError("caller-supplied sign hook forbidden")
+        signed = sign_fn(ident)
+        reply = {"signed": bytes(signed), "verified": {}, "policy": policy}
+        persist_capability = _FIXTURE_PERSIST_CAPABILITY
+    else:
+        try:
+            reply = signer_mainnet.request_signed(
+                origin=ident["origin"],
+                tree_size=ident["tree_size"],
+                root=ident["root"],
+                consistency=ident["consistency"],
+                checkpoint=ident["checkpoint"],
+                policy=policy,
+                now=when,
+                request_id=rid,
+                host=host,
+                port=port,
+                params=verify_params,
+            )
+        except SignerClientError as exc:
+            raise _canary_from_signer_error(exc) from exc
+        if reply.get("response_authenticated") is not True:
+            raise CanarySecurityError("unauthenticated signer response is not provenance")
+        signed = reply["signed"]
+        persist_capability = _SIGNER_PERSIST_CAPABILITY
     verified = reply.get("verified")
     if not isinstance(verified, dict) or not verified.get("fee"):
         verified = algo_anchor.validate_signed_txn(
@@ -414,7 +427,7 @@ def authorize(
         request_id=rid,
         signed=bytes(signed),
         at=when,
-        _capability=_FIXTURE_PERSIST_CAPABILITY,
+        _capability=persist_capability,
         fee_policy=policy,
         fv=int(verified.get("fv") or 0),
         lv=int(verified.get("lv") or 0),

@@ -1,4 +1,4 @@
-"""MainNet-only 6PN client for 402signal-pq-signer-mainnet (pq-anchor/2).
+"""MainNet-only 6PN client for 402signal-pq-signer-mainnet (pq-anchor/3).
 
 ABSOLUTELY NO fallback to TestNet config:
   - never reads LIVE402_PQ_SIGNER_TOKEN
@@ -10,7 +10,7 @@ Uses ONLY:
   LIVE402_PQ_SIGNER_MAINNET_HOST  (default 402signal-pq-signer-mainnet.internal)
   LIVE402_PQ_SIGNER_MAINNET_PORT  (default 9091)
 
-pq-anchor/2 HMAC-binds the narrow frozen policy by flattening those
+pq-anchor/3 HMAC-binds the narrow frozen policy by flattening those
 fields into the same sorted k=v MAC as the Go signer (last_round,
 min_fee, fee_per_byte, fv, lv, canonical_fee, snapshot_at, size_rule,
 size_version=1). Never sends fee / sender /
@@ -19,15 +19,10 @@ Reply is bound to tree / root / origin / checkpoint plus expected
 MainNet identity. Full SignedTxn semantic verify runs on the router
 before persist and requires exact equality with the HMAC-bound policy.
 
-Residual (Ross-only): the response SignedTxn bytes themselves are
-not yet response-MAC authenticated. Do not weaken parse_reply or
-bind_mainnet_reply. Do not invent Falcon crypto. Official native
-Falcon verify, or a signer response-MAC over protocol version,
-request_id, origin, tree size, root, checkpoint/policy digest, and
-SHA-256 of the exact SignedTxn bytes, is required before treating
-IPC bytes as authenticated provenance. Production canary.authorize
-fail-closes before dialing this client until that binding exists.
-Fixture sign_fn / LIVE402_FIXTURE may still persist for tests.
+Successful replies require a domain-separated response HMAC over the
+original request HMAC, request identity, and exact raw SignedTxn bytes.
+Missing, malformed, duplicate-key, unknown-field, or mismatched replies
+fail closed. There is no pq-anchor/2 fallback on this MainNet client.
 
 This module never loads a Falcon SK. No Algorand submit.
 """
@@ -48,10 +43,8 @@ from live402.pq import network as netcfg
 from live402.pq.signer_client import (
     IPC_TIMEOUT,
     PQSIG_PRESENT,
-    REPLY_KEYS,
     SignerClientError,
     bind_reply,
-    parse_reply,
     require_signed_note,
 )
 
@@ -64,10 +57,14 @@ _FORBIDDEN_PORTS = frozenset({8080})
 _MAX_LINE = 65536
 # Documented merged signer identity. Not a secret.
 SIGNER_APP = "402signal-pq-signer-mainnet"
-SIGNER_MERGE_SHA = "7e58e39817dce9b74c387ffe3a08536f804dcd05"
-SIGNER_REVIEWED_HEAD = "6d2480ce5a53c9b7dd574a01c257b4faa2f8dac9"
-SIGNER_PROTOCOL = "pq-anchor/2"
-REQUEST_VERSION = 2
+SIGNER_MERGE_SHA = "8a37e601ca223ce30c56d40321069397237e7cef"
+SIGNER_REVIEWED_HEAD = "13eba91d9759f7f65229f2456891d8400488b0e8"
+SIGNER_PROTOCOL = "pq-anchor/3"
+REQUEST_VERSION = 3
+RESPONSE_VERSION = "pq-anchor-response/1"
+AUTHENTICATED_REPLY_KEYS = frozenset(
+    {"ok", "tree_size", "root", "pqsig", "signed", "response_hmac"}
+)
 # Narrow HMAC-bound policy. Flattened into the MAC. Do not add
 # arbitrary txn fields. size_version is required and must be the
 # JSON string "1" on the wire (Go policy.Snapshot.SizeVersion is string).
@@ -110,7 +107,7 @@ REQUEST_KEYS = (
     "hmac",
 )
 # Preferred exact HMAC rejection from the reviewed private signer
-# (valid pq-anchor/2 shape + invalid HMAC). Allowlist is fail-closed.
+# (valid pq-anchor/3 shape + invalid HMAC). Allowlist is fail-closed.
 EXPECTED_HMAC_ERROR = "hmac"
 # Reviewed private-signer wire: only exact error="hmac" proves the protocol.
 # Alternate strings are historical and must FAIL the probe.
@@ -252,7 +249,7 @@ def canonical_bytes(
     policy: dict,
     v: int = REQUEST_VERSION,
 ) -> bytes:
-    """pq-anchor/2 MAC input. Identity + flattened policy, sorted k=v.
+    """pq-anchor/3 MAC input. Identity + flattened policy, sorted k=v.
 
     Matches the Go signer: no nested policy=… blob. size_version=1 is
     required. Field order is sorted(CANONICAL_KEYS).
@@ -281,6 +278,138 @@ def canonical_bytes(
 def mac_hex(token: str, canonical: bytes) -> str:
     key = (token or "").encode("utf-8")
     return hmac.new(key, canonical, hashlib.sha256).hexdigest()
+
+
+def _response_field(key: str, value: bytes) -> bytes:
+    if not isinstance(value, bytes):
+        raise SignerClientError("response hmac")
+    return key.encode("ascii") + b"=" + str(len(value)).encode("ascii") + b":" + value + b"\n"
+
+
+def response_canonical_bytes(
+    *,
+    request_version: str,
+    origin: str,
+    request_hmac: str,
+    request_id: str,
+    checkpoint: str,
+    tree_size: int,
+    root: str,
+    pqsig: str,
+    signed: bytes,
+) -> bytes:
+    """Length-prefixed pq-anchor/3 success-response MAC preimage."""
+    if request_version != SIGNER_PROTOCOL:
+        raise SignerClientError("response hmac")
+    if isinstance(tree_size, bool) or not isinstance(tree_size, int) or tree_size < 0 or tree_size >= 1 << 64:
+        raise SignerClientError("response hmac")
+    if not all(isinstance(value, str) for value in (origin, request_hmac, request_id, checkpoint, root, pqsig)):
+        raise SignerClientError("response hmac")
+    if not isinstance(signed, (bytes, bytearray)):
+        raise SignerClientError("response hmac")
+    fields = (
+        ("checkpoint", checkpoint.encode("utf-8")),
+        ("origin", origin.encode("utf-8")),
+        ("pqsig", pqsig.encode("utf-8")),
+        ("request_hmac", request_hmac.lower().encode("ascii")),
+        ("request_id", request_id.encode("utf-8")),
+        ("request_v", request_version.encode("ascii")),
+        ("root", root.lower().encode("ascii")),
+        ("signed", bytes(signed)),
+        ("tree_size", str(tree_size).encode("ascii")),
+    )
+    return RESPONSE_VERSION.encode("ascii") + b"\n" + b"".join(
+        _response_field(key, value) for key, value in fields
+    )
+
+
+def response_mac_hex(token: str, *, request: dict, reply: dict, signed: bytes) -> str:
+    """HMAC the exact v3 request binding and raw SignedTxn bytes."""
+    if not token or not isinstance(request, dict) or set(request) != set(REQUEST_KEYS):
+        raise SignerClientError("response hmac")
+    if request.get("v") != REQUEST_VERSION or isinstance(request.get("v"), bool):
+        raise SignerClientError("response hmac")
+    for key in ("origin", "hmac", "request_id", "checkpoint"):
+        if not isinstance(request.get(key), str):
+            raise SignerClientError("response hmac")
+    request_mac = request["hmac"]
+    if len(request_mac) != 64 or request_mac != request_mac.lower() or any(c not in "0123456789abcdef" for c in request_mac):
+        raise SignerClientError("response hmac")
+    canonical = response_canonical_bytes(
+        request_version=SIGNER_PROTOCOL,
+        origin=request.get("origin"),
+        request_hmac=request.get("hmac"),
+        request_id=request.get("request_id"),
+        checkpoint=request.get("checkpoint"),
+        tree_size=reply.get("tree_size"),
+        root=reply.get("root"),
+        pqsig=reply.get("pqsig"),
+        signed=signed,
+    )
+    return hmac.new(token.encode("utf-8"), canonical, hashlib.sha256).hexdigest()
+
+
+def _reject_duplicate_keys(pairs):
+    out = {}
+    for key, value in pairs:
+        if key in out:
+            raise SignerClientError("sign_failed")
+        out[key] = value
+    return out
+
+
+def parse_authenticated_reply(raw: str, *, token: str, request: dict) -> dict:
+    """Strictly parse and authenticate one pq-anchor/3 success reply."""
+    try:
+        data = json.loads(raw, object_pairs_hook=_reject_duplicate_keys)
+    except (TypeError, ValueError, json.JSONDecodeError, SignerClientError) as exc:
+        raise SignerClientError("sign_failed") from exc
+    if not isinstance(data, dict) or set(data) != set(AUTHENTICATED_REPLY_KEYS):
+        raise SignerClientError("sign_failed")
+    if data.get("ok") is not True:
+        raise SignerClientError("sign_failed")
+    tree_size = data.get("tree_size")
+    if isinstance(tree_size, bool) or not isinstance(tree_size, int) or tree_size < 0 or tree_size >= 1 << 64:
+        raise SignerClientError("sign_failed")
+    root = data.get("root")
+    if not isinstance(root, str) or root != root.lower() or len(root) != 64 or any(c not in "0123456789abcdef" for c in root):
+        raise SignerClientError("sign_failed")
+    try:
+        if len(bytes.fromhex(root)) != 32:
+            raise SignerClientError("sign_failed")
+    except ValueError as exc:
+        raise SignerClientError("sign_failed") from exc
+    if data.get("pqsig") != PQSIG_PRESENT:
+        raise SignerClientError("sign_failed")
+    signed_hex = data.get("signed")
+    if not isinstance(signed_hex, str) or not signed_hex or signed_hex != signed_hex.lower() or any(c not in "0123456789abcdef" for c in signed_hex):
+        raise SignerClientError("sign_failed")
+    try:
+        signed = bytes.fromhex(signed_hex)
+    except ValueError as exc:
+        raise SignerClientError("sign_failed") from exc
+    if not signed or signed == PQSIG_PRESENT.encode("ascii"):
+        raise SignerClientError("sign_failed")
+    got = data.get("response_hmac")
+    if not isinstance(got, str) or len(got) != 64 or got != got.lower() or any(c not in "0123456789abcdef" for c in got):
+        raise SignerClientError("sign_failed")
+    try:
+        if len(bytes.fromhex(got)) != 32:
+            raise SignerClientError("sign_failed")
+    except ValueError as exc:
+        raise SignerClientError("sign_failed") from exc
+    want = response_mac_hex(token, request=request, reply=data, signed=signed)
+    if not hmac.compare_digest(got, want):
+        raise SignerClientError("sign_failed")
+    return {
+        "ok": True,
+        "tree_size": tree_size,
+        "root": root,
+        "pqsig": PQSIG_PRESENT,
+        "signed": signed,
+        "response_hmac": got,
+        "response_authenticated": True,
+    }
 
 
 def build_request(
@@ -479,8 +608,7 @@ def request_signed(
         error = str(rejected.get("error") or "").strip()
         if error in SURFACE_ERRORS:
             raise SignerClientError(error)
-    data = parse_reply(raw)
-    # Identity bind only. SignedTxn bytes are not response-MAC authenticated.
+    data = parse_authenticated_reply(raw, token=secret, request=payload)
     bind_mainnet_reply(
         data,
         tree_size=tree_size,
@@ -526,9 +654,9 @@ def request_sign(**kwargs) -> bytes:
 
 
 def protocol_probe(*, host: str | None = None, port: int | None = None, timeout: float = 3.0) -> dict:
-    """Prove the MainNet signer is reachable and speaks pq-anchor/2.
+    """Prove the MainNet signer is reachable and speaks pq-anchor/3.
 
-    Sends a well-formed pq-anchor/2 request (valid shape + dummy policy)
+    Sends a well-formed pq-anchor/3 request (valid shape + dummy policy)
     with an invalid HMAC so the signer must reject without creating an
     authorization. Prefers the exact reviewed HMAC rejection
     (`{"ok":false,"error":"hmac"}`). Never uses the TestNet token or
@@ -624,5 +752,5 @@ def protocol_probe(*, host: str | None = None, port: int | None = None, timeout:
         "reviewed_head": SIGNER_REVIEWED_HEAD,
         "canonical": SIGNER_PROTOCOL,
         "pqsig": PQSIG_PRESENT,
-        "reply_keys": sorted(REPLY_KEYS),
+        "reply_keys": sorted(AUTHENTICATED_REPLY_KEYS),
     }
