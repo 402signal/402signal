@@ -105,6 +105,8 @@ EXPECTED_HMAC_ERROR = "hmac"
 # Reviewed private-signer wire: only exact error="hmac" proves the protocol.
 # Alternate strings are historical and must FAIL the probe.
 EXPECTED_HMAC_ERRORS = frozenset({"hmac"})
+# Fail-closed signer reject the MainNet canary may surface (allowlist).
+SURFACE_ERRORS = frozenset({"consistency_proof_required"})
 
 
 def mainnet_signer_token() -> str:
@@ -459,6 +461,14 @@ def request_signed(
         raise
     except Exception as exc:
         raise SignerClientError("unavailable") from exc
+    try:
+        rejected = json.loads(raw)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        rejected = None
+    if isinstance(rejected, dict) and rejected.get("ok") is False:
+        error = str(rejected.get("error") or "").strip()
+        if error in SURFACE_ERRORS:
+            raise SignerClientError(error)
     data = parse_reply(raw)
     bind_mainnet_reply(
         data,
