@@ -120,6 +120,7 @@ class CloseoutStaticTests(unittest.TestCase):
             "docs/backup.md",
             "docs/automation-security-boundaries.md",
             "docs/github-protection.md",
+            "docs/runbooks/mainnet-prelaunch-reset.md",
         ]
         em = "\u2014"
         for rel in authored:

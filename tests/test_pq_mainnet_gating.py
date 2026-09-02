@@ -546,6 +546,27 @@ class FreshLogTests(unittest.TestCase):
         self.assertTrue(v2["not_mainnet_go"])
         self.assertEqual(v2["log_signature"]["reuse_testnet_sk"], False)
 
+    def test_mainnet_epoch_public_descriptor_is_mainnet(self):
+        os.environ["LIVE402_PQ_LOG_EPOCH"] = "mainnet-v1"
+        os.environ["LIVE402_PQ_FALCON_NETWORK"] = "mainnet"
+        os.environ["LIVE402_PQ_LOG_DB"] = self.mainnet_db
+        os.environ["LIVE402_PQ_LOG_ORIGIN"] = ORIGIN_MAINNET
+        os.environ["LIVE402_PQ_FALCON_MAINNET_ADDRESS"] = (
+            "GVIAG3YMJ7OLJ3JAUBNI2YP5JCQQCQYWN25UAGLC2BTPOBUL3ZZTILIMWU"
+        )
+        os.environ["LIVE402_PQ_LOG_VKEY"] = "testnet-must-not-win"
+        os.environ["LIVE402_PQ_LOG_VKEY_MAINNET"] = ""
+        desc = trust.public_descriptor()
+        self.assertEqual(desc["falcon"]["network"], "mainnet-v1.0")
+        self.assertEqual(desc["falcon"]["allowed_broadcast"], "none")
+        self.assertEqual(desc["origin"], ORIGIN_MAINNET)
+        self.assertEqual(
+            desc["falcon"]["address"],
+            "GVIAG3YMJ7OLJ3JAUBNI2YP5JCQQCQYWN25UAGLC2BTPOBUL3ZZTILIMWU",
+        )
+        self.assertNotEqual(desc["log_signature"].get("vkey"), "testnet-must-not-win")
+        self.assertTrue(desc["not_mainnet_go"])
+
     def test_mainnet_ed25519_vkey_must_not_equal_testnet_public(self):
         from live402.pq import checkpoint as ckpt
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
