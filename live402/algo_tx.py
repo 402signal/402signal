@@ -352,11 +352,13 @@ def msgpack_decode(raw: bytes, *, strict: bool = False) -> dict:
 
     Duplicate keys and a raw-byte size cap are always enforced.
     strict=True is the SignedTxn path: negative integers, nil/bools,
-    non-text / empty / unordered keys, non-minimal encodings, trailing
+    non-text / empty / descending keys, non-minimal encodings, trailing
     data, excessive nesting, and unproven alternate forms
-    (str32/bin32/map32/array32) are rejected. Canonical map key order
-    is lexicographic. Do not require re-encoding equality until the
-    local encoder is proven against genuine algokey/go-algorand bytes.
+    (str32/bin32/map32/array32) are rejected. Descending keys are a
+    decoder hygiene rule, not a claim of official Algorand canonical
+    encoding. The confirmed tree-4 algokey fixture happens to be
+    lexicographic (pqsig/txn, pk/sch/sig). Do not require re-encoding
+    equality.
     """
     if not isinstance(raw, (bytes, bytearray, memoryview)):
         raise TypeError("msgpack bytes required")

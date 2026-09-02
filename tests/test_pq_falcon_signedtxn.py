@@ -428,6 +428,16 @@ class AuthorizedPersistenceAndResumeTests(unittest.TestCase):
         self.assertIsNone(store.authorized_at(1))
         self.assertFalse(store.last_authorized_checkpoint().get("signed"))
 
+    def test_prepare_fail_closes_without_authenticated_response(self):
+        """NEW_PREPARE held: production prepare must not dial or persist."""
+        with mock.patch("live402.pq.signer_mainnet.request_signed") as request_signed:
+            with self.assertRaises(canary.CanarySecurityError) as ctx:
+                canary.prepare(params=self.params)
+            self.assertIn("provenance", str(ctx.exception))
+            request_signed.assert_not_called()
+        self.assertIsNone(store.authorized_at(1))
+        self.assertFalse(store.last_authorized_checkpoint().get("signed"))
+
 
 class FalconShapeAndSchemeMatrixTests(unittest.TestCase):
     def setUp(self):
@@ -643,7 +653,47 @@ class StrictMsgpackSignedTxnTests(unittest.TestCase):
             algo_anchor._require_uint(False)
         self.assertIn("boolean-as-integer", str(ctx.exception))
 
+    def test_fee_fv_lv_salt_booleans_rejected(self):
+        for key in ("fee", "fv", "lv"):
+            with self.subTest(key=key):
+                txn = _pay_txn()
+                txn[key] = False
+                blob = algo_tx.msgpack_encode(_envelope(sch=b"f1", txn=txn))
+                with self.assertRaises(ValueError) as ctx:
+                    algo_tx.msgpack_decode(blob, strict=True)
+                self.assertIn("bool", str(ctx.exception))
+                with self.assertRaises(algo_anchor.AnchorError):
+                    algo_anchor.validate_signed_txn(
+                        blob,
+                        expected_origin=ORIGIN,
+                        expected_size=1,
+                        expected_root=_ROOT,
+                        expected_address=_ADDR,
+                        expected_network="testnet",
+                    )
+                with self.assertRaises(algo_anchor.AnchorError) as ctx:
+                    algo_anchor._require_uint(False)
+                self.assertIn("boolean-as-integer", str(ctx.exception))
+        env = _envelope(sch=b"f1", slt=False)
+        blob = algo_tx.msgpack_encode(env)
+        with self.assertRaises(ValueError) as ctx:
+            algo_tx.msgpack_decode(blob, strict=True)
+        self.assertIn("bool", str(ctx.exception))
+        with self.assertRaises(algo_anchor.AnchorError):
+            algo_anchor.validate_signed_txn(
+                blob,
+                expected_origin=ORIGIN,
+                expected_size=1,
+                expected_root=_ROOT,
+                expected_address=_ADDR,
+                expected_network="testnet",
+            )
+        self.assertFalse(algo_anchor._salt_in_range(False))
+        with self.assertRaises(algo_anchor.AnchorError):
+            algo_anchor._require_uint(False)
+
     def test_unordered_keys_rejected_in_strict(self):
+        """Descending keys fail closed. Not a claim of official algokey canonical order."""
         blob = b"\x82" + b"\xa1z" + b"\x01" + b"\xa1a" + b"\x02"
         decoded = algo_tx.msgpack_decode(blob)
         self.assertEqual(decoded, {"z": 1, "a": 2})
@@ -773,6 +823,7 @@ class StrictMsgpackSignedTxnTests(unittest.TestCase):
         self.assertIn("unknown pqsig field", str(ctx.exception))
 
     def test_one_byte_sig_rejected(self):
+        """Structural parser bound: header+salt-version need 2 bytes. Not Falcon verify."""
         blob = algo_tx.msgpack_encode(_envelope(sch=b"f1", sig=b"\x01"))
         with self.assertRaises(algo_anchor.AnchorError) as ctx:
             algo_anchor.validate_signed_txn(
