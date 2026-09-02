@@ -340,7 +340,7 @@ def preflight(
     """Operator-safe health. No secrets. Does not create an authorization.
 
     token configured is not signer available. MainNet signer probe uses
-    an invalid-HMAC pq-anchor/2 line (or an injected hook) and never
+    an invalid-HMAC pq-anchor/3 line (or an injected hook) and never
     persists a SignedTxn. "not probed" is never treated as healthy.
     """
     global _last_preflight, _preflight_count
@@ -448,7 +448,7 @@ ALERTS = (
     },
     {
         "id": "signer_unavailable",
-        "when": "MainNet signer token configured is not sufficient; protocol probe must fail closed if 6PN is unreachable or not pq-anchor/2",
+        "when": "MainNet signer token configured is not sufficient; protocol probe must fail closed if 6PN is unreachable or not pq-anchor/3",
     },
     {
         "id": "confirm_provider_error",

@@ -14,10 +14,9 @@ Does not Fly. Does not set secrets. Does not enable MAINNET_BROADCAST
 or MAINNET_CANARY. Does not print Falcon SK, mnemonic, Ed25519 seed,
 or HMAC token values.
 
---prepare: currently fail-closed before signer dial because signer responses
-are not response-MAC authenticated. After a separately reviewed coordinated
-signer-and-router response binding: preflight → signer once → authenticate →
-verify → persist. NO POST.
+--prepare: preflight → signer once → authenticate the pq-anchor/3 response →
+verify exact SignedTxn semantics → persist AUTHORIZED. NO POST. It fails
+closed if the signer is unavailable, not v3, or the response MAC mismatches.
 
 --go: SEND already-persisted authorization only. Never silently creates
 a fresh auth.

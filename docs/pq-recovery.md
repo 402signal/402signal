@@ -18,10 +18,9 @@ place. No Fly secrets.
 
 ## B. Authorized, not submitted
 
-An authenticated signer response persists AUTHORIZED (request_id + exact
-SignedTxn). The current private-signer response has no response MAC, so new
-production authorization intentionally stops before this state. If a previously
-authenticated AUTHORIZED record exists and the router restarts before POST:
+An authenticated pq-anchor/3 signer response persists AUTHORIZED
+(request_id + exact SignedTxn). If that record exists and the router restarts
+before POST:
 
 - Recover the exact blob when size, origin, root, and signed-note match
 - Do not re-dial the signer

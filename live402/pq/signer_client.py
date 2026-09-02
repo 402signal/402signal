@@ -272,15 +272,11 @@ def _recv_line(sock: socket.socket, timeout: float) -> str:
 
 
 def parse_reply(raw: str) -> dict:
-    """Live reply {ok, tree_size, root, pqsig:"present", signed}. signed is SignedTxn hex.
+    """Legacy/TestNet reply parser; never authenticates MainNet provenance.
 
-    Residual (Ross-only): the response SignedTxn is not yet
-    response-MAC authenticated. This parser does not weaken existing
-    field checks and does not invent Falcon crypto. Router-side
-    persist of AUTHORIZED from these bytes still depends on a future
-    signer MAC (protocol version, request_id, origin, tree size, root,
-    checkpoint/policy digest, SHA-256 of exact SignedTxn bytes) or
-    official native Falcon verify.
+    MainNet pq-anchor/3 uses signer_mainnet.parse_authenticated_reply,
+    which response-MAC binds the exact SignedTxn bytes. Do not route a
+    MainNet success through this compatibility parser.
     """
     try:
         data = json.loads(raw)
