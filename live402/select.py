@@ -246,6 +246,13 @@ def validate_explicit_constraints(body: dict) -> None:
     unresolved and are never guessed.
     """
     src = body if isinstance(body, dict) else {}
+    # The public request schema keeps structured controls at the top level.
+    # A nested container is especially dangerous to ignore: callers may
+    # reasonably believe a price, network, or latency bound was enforced.
+    # Refuse every value (including an empty object) instead of introducing
+    # precedence rules or silently routing without the requested policy.
+    if "constraints" in src:
+        _reject("constraints must be specified as top-level fields")
     if _explicit_present(src, "objective"):
         raw = src.get("objective")
         if not isinstance(raw, str) or not raw.strip():

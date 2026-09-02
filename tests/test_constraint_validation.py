@@ -79,6 +79,30 @@ class ExplicitConstraintTests(unittest.TestCase):
         select.validate_explicit_constraints({})
         select.validate_explicit_constraints({"need": "weather"})
 
+    def test_nested_constraints_container_is_never_ignored(self):
+        for value in (
+            {"max_price_usd": 0.01},
+            {},
+            None,
+            "max_price_usd=0.01",
+        ):
+            with self.assertRaisesRegex(
+                ConstraintError, "constraints must be specified as top-level fields"
+            ):
+                select.validate_explicit_constraints(
+                    {"need": "weather", "constraints": value}
+                )
+
+        # Mixing both shapes is an error too; no ambiguous precedence.
+        with self.assertRaises(ConstraintError):
+            select.validate_explicit_constraints(
+                {
+                    "need": "weather",
+                    "max_price_usd": 0.01,
+                    "constraints": {"max_price_usd": 0.02},
+                }
+            )
+
     def test_null_present_is_400(self):
         for key in select.EXPLICIT_CONSTRAINT_KEYS:
             with self.assertRaises(ConstraintError, msg=key):
@@ -111,6 +135,13 @@ class RouteRejectsMalformedConstraints(unittest.TestCase):
         self.assertEqual(code, 400)
         code, body = route.run_probe({"need": "weather", "max_amount_atomic": True})
         self.assertEqual(code, 400)
+        code, body = route.run_probe(
+            {"need": "weather", "constraints": {"max_price_usd": 0.01}}
+        )
+        self.assertEqual(code, 400)
+        self.assertEqual(
+            body.get("error"), "constraints must be specified as top-level fields"
+        )
 
 
 if __name__ == "__main__":

@@ -617,6 +617,40 @@ class StateMachineReplayTests(unittest.TestCase):
         self.assertEqual(len(settle_calls), 1)
         self.assertEqual(len(verify_calls), 2)
 
+    def test_nested_constraints_400_skips_settle_and_valid_retry_can_run(self):
+        """A plausible but unsupported policy shape must not become unconstrained."""
+        verify_calls = []
+        settle_calls = []
+        headers = _headers_for(_payload("nc"))
+        bad_body = {
+            **_weather_body(),
+            "constraints": {"max_price_usd": 0.01, "networks": ["base"]},
+        }
+        with patch(
+            "live402.facilitator.post_json",
+            side_effect=_counting_facilitator(verify_calls, settle_calls),
+        ):
+            bad = handle_route(bad_body, headers, discover.ROUTE)
+            good = handle_route(
+                {**_weather_body(), "max_price_usd": 0.01, "networks": ["base"]},
+                headers,
+                discover.ROUTE,
+            )
+            replayed = handle_route(
+                {**_weather_body(), "max_price_usd": 0.01, "networks": ["base"]},
+                headers,
+                discover.ROUTE,
+            )
+        self.assertEqual(bad[0], 400)
+        self.assertEqual(
+            bad[1].get("error"),
+            "constraints must be specified as top-level fields",
+        )
+        self.assertEqual(good[0], 200)
+        self.assertEqual(replayed[0], 200)
+        self.assertEqual(len(settle_calls), 1)
+        self.assertEqual(len(verify_calls), 2)
+
     def test_distinct_nonces_each_settle_once(self):
         """Different authorization nonces are different fingerprints (no cache cross-talk)."""
         verify_calls = []
