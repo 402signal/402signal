@@ -1306,7 +1306,9 @@ def validate_signed_txn(
         raise AnchorError("root mismatch")
     pq = _pq_auth_from_obj(obj)
     if not pq:
-        raise AnchorError("falcon authorization missing")
+        if _pqsig_field_present(obj):
+            raise AnchorError("falcon authorization missing: bad pqsig envelope")
+        raise AnchorError("falcon authorization missing: no pqsig key")
     expected_txid = signed_txn_txid(blob)
     return {
         "origin": expected_origin,
@@ -1780,13 +1782,55 @@ def _field_bytes_or_empty(val) -> bytes:
     return _b64(val)
 
 
+def _scheme_text(sch) -> str:
+    """Normalize official sch ([2]byte or str) to ASCII. Empty if unreadable."""
+    if isinstance(sch, (bytes, bytearray)):
+        raw = bytes(sch)
+        if not raw:
+            return ""
+        try:
+            return raw.decode("ascii").strip()
+        except UnicodeDecodeError:
+            return ""
+    if isinstance(sch, str):
+        return sch.strip()
+    return ""
+
+
+def _salt_in_range(slt) -> bool:
+    """slt/salt is optional. Accept 0-255 int or a single salt byte."""
+    if slt is None or slt == "":
+        return True
+    if isinstance(slt, bool):
+        return False
+    if isinstance(slt, (bytes, bytearray)):
+        return len(slt) <= 1
+    try:
+        salt = int(slt)
+    except (TypeError, ValueError):
+        return False
+    return 0 <= salt <= 255
+
+
+def _pqsig_field_present(obj) -> bool:
+    """True when a pqsig key exists (even if the envelope is unusable)."""
+    if not isinstance(obj, dict):
+        return False
+    if "pqsig" in obj:
+        return True
+    sig = obj.get("signature")
+    return isinstance(sig, dict) and "pqsig" in sig
+
+
 def _parse_pqsig_envelope(raw):
     """Official Algorand pqsig envelope. Codec {sch,slt,pk,sig} or indexer REST.
 
-    sch/scheme must be exactly f1 (Falcon-1024). slt/salt if present is
-    0-255. pk/public-key and sig/signature must be non-empty bytes.
-    Fail closed on missing, empty, f5, or any other scheme. A bare
-    blob (including signature.falcon) is not an envelope.
+    sch/scheme must be exactly f1 (Falcon-1024) after normalizing bytes to
+    ASCII (algokey/msgp encodes PQScheme as [2]byte, so sch is b"f1").
+    slt/salt if present is 0-255. pk/public-key and sig/signature must be
+    non-empty bytes (raw or indexer b64). Fail closed on missing, empty,
+    f5, or any other scheme. A bare blob (including signature.falcon) is
+    not an envelope. The IPC marker pqsig="present" is not authorization.
     """
     if not isinstance(raw, dict):
         return None
@@ -1795,17 +1839,12 @@ def _parse_pqsig_envelope(raw):
     sch = raw.get("sch") if "sch" in raw else raw.get("scheme")
     if sch is None:
         return None
-    scheme = str(sch).strip()
+    scheme = _scheme_text(sch)
     if scheme != PQSIG_SCHEME_F1:
         return None
     slt = raw.get("slt") if "slt" in raw else raw.get("salt")
-    if slt is not None and slt != "":
-        try:
-            salt = int(slt)
-        except (TypeError, ValueError):
-            return None
-        if salt < 0 or salt > 255:
-            return None
+    if not _salt_in_range(slt):
+        return None
     pk = _field_bytes_or_empty(raw.get("pk") if "pk" in raw else raw.get("public-key"))
     sig = _field_bytes_or_empty(raw.get("sig") if "sig" in raw else raw.get("signature"))
     if not pk or not sig:
@@ -1840,7 +1879,8 @@ def _pq_auth_from_obj(obj: dict):
 
     Accepts consensus SignedTxn codec tags (pqsig.{sch,slt,pk,sig}) and
     indexer REST TransactionSignaturePQsig (signature.pqsig with
-    scheme/salt/public-key/signature). sch/scheme must be f1.
+    scheme/salt/public-key/signature). sch/scheme must be f1 after
+    normalizing bytes (algokey PQScheme [2]byte) to ASCII.
 
     Fail closed: signature.falcon blobs, Ed25519 signature.sig, missing
     pqsig, empty/other scheme (including f5), missing pk/sig, the 6PN
