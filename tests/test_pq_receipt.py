@@ -203,6 +203,7 @@ class ReceiptTests(unittest.TestCase):
                 "payTo": payment.DEFAULT_PAYTO,
                 "maxTimeoutSeconds": 60,
             },
+            "resource": {"url": "https://402signal.com/route"},
             "payload": {
                 "signature": "0x" + ("ab" * 65),
                 "authorization": {
