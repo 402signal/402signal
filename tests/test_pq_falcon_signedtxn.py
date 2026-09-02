@@ -9,15 +9,17 @@ import unittest
 os.environ.setdefault("LIVE402_FIXTURE", "1")
 
 from live402 import algo_tx, payment
-from live402.pq import ORIGIN, algo_anchor
+from live402.pq import ORIGIN, ORIGIN_MAINNET, algo_anchor, canary, store
+from live402.pq import checkpoint as ckpt
 from tests.pq_test_env import clear_pq_env
 
 
 _ADDR = payment.DEFAULT_PAYTO_ALGORAND
 _ROOT = b"\x11" * 32
-# High-bit payloads: not valid UTF-8, so go-algorand Raw str16 stays bytes.
+# Live QA shape: sch=b"f1" (len 2), pk 1793, sig 1233, no slt key.
 _PK = bytes((0x80 + (i % 0x40)) for i in range(algo_anchor.FALCON_F1_PK_LEN))
-_SIG = bytes((0xC0 + (i % 0x20)) for i in range(320))
+_SIG = bytes((0xC0 + (i % 0x20)) for i in range(algo_anchor.FALCON_F1_SIG_LIVE))
+_LIVE_SIG_NOTE = base64.b64encode(b"\x00" * 4 + b"\x22" * 64).decode("ascii")
 
 
 def _pay_txn(*, size=1, root=_ROOT, network="testnet"):
@@ -31,7 +33,7 @@ def _pay_txn(*, size=1, root=_ROOT, network="testnet"):
     return algo_tx.pay_txn(_ADDR, _ADDR, 0, 3000, 1, 1001, gen, gh, note=note)
 
 
-def _envelope(*, sch="f1", pk=_PK, sig=_SIG, slt=0, txn=None, **extra):
+def _envelope(*, sch="f1", pk=_PK, sig=_SIG, slt=None, txn=None, **extra):
     pqsig = {"pk": pk, "sch": sch, "sig": sig}
     if slt is not None:
         pqsig["slt"] = slt
@@ -145,8 +147,8 @@ class FalconSignedTxnEnvelopeTests(unittest.TestCase):
     def test_salt_byte_and_omitted_pass(self):
         blob = algo_tx.msgpack_encode(_envelope(sch=b"f1", slt=b"\x00"))
         self._validate(blob)
-        env = _envelope(sch="f1")
-        env["pqsig"].pop("slt")
+        env = _envelope(sch=b"f1")
+        self.assertNotIn("slt", env["pqsig"])
         self._validate(algo_tx.msgpack_encode(env))
 
     def test_missing_pqsig_fails_distinct_error(self):
@@ -211,3 +213,143 @@ class FalconSignedTxnEnvelopeTests(unittest.TestCase):
                 {"sch": "f1", "pk": _PK, "sig": "present", "slt": 0}
             )
         )
+
+    def test_real_f1_binary_scheme_live_shape_passes(self):
+        """REAL_F1_BINARY_SCHEME: live algokey keys, no slt, sch=b'f1'."""
+        env = _envelope(sch=b"f1")
+        self.assertEqual(set(env), {"pqsig", "txn"})
+        self.assertEqual(set(env["pqsig"]), {"pk", "sch", "sig"})
+        self.assertEqual(env["pqsig"]["sch"], b"f1")
+        self.assertEqual(len(env["pqsig"]["sch"]), 2)
+        self.assertEqual(len(env["pqsig"]["pk"]), 1793)
+        self.assertEqual(len(env["pqsig"]["sig"]), 1233)
+        blob = algo_tx.msgpack_encode(env)
+        decoded = algo_tx.msgpack_decode(blob)
+        self.assertEqual(decoded["pqsig"]["sch"], b"f1")
+        self.assertEqual(str(decoded["pqsig"]["sch"]), "b'f1'")
+        self.assertEqual(decoded["pqsig"]["sch"], algo_anchor.PQSIG_WIRE_SCH)
+        out = self._validate(blob)
+        self.assertEqual(out["tree_size"], 1)
+
+    def test_invalid_schemes_fail_closed(self):
+        cases = (
+            b"f5",
+            b"F1",
+            b"f1 ",
+            b"",
+            "F1",
+            "f1 ",
+            "b'f1'",
+            None,
+        )
+        for sch in cases:
+            env = _envelope()
+            if sch is None:
+                env["pqsig"].pop("sch")
+            else:
+                env["pqsig"]["sch"] = sch
+            blob = algo_tx.msgpack_encode(env)
+            with self.assertRaises(algo_anchor.AnchorError) as ctx:
+                self._validate(blob)
+            self.assertIn("falcon authorization missing", str(ctx.exception))
+        self.assertIsNone(algo_anchor._parse_pqsig_envelope({"sch": b"\xff\xfe", "pk": _PK, "sig": _SIG}))
+        self.assertIsNone(algo_anchor._parse_pqsig_envelope({"sch": 1, "pk": _PK, "sig": _SIG}))
+        self.assertIsNone(algo_anchor._parse_pqsig_envelope({"sch": ["f", "1"], "pk": _PK, "sig": _SIG}))
+        self.assertIsNone(algo_anchor._parse_pqsig_envelope({"sch": {"f1": True}, "pk": _PK, "sig": _SIG}))
+
+    def test_pqsig_preserved_after_validate(self):
+        blob = algo_tx.msgpack_encode(_envelope(sch=b"f1"))
+        before = algo_tx.msgpack_decode(blob)
+        self._validate(blob)
+        after = algo_tx.msgpack_decode(blob)
+        self.assertEqual(after["pqsig"], before["pqsig"])
+        self.assertEqual(after["pqsig"]["sch"], b"f1")
+        self.assertEqual(after["pqsig"]["pk"], _PK)
+        self.assertEqual(after["pqsig"]["sig"], _SIG)
+        self.assertNotIn("slt", after["pqsig"])
+
+
+class AuthorizedPersistenceAndResumeTests(unittest.TestCase):
+    """receive → validate → persist AUTHORIZED → return. No POST."""
+
+    def setUp(self):
+        self.tmp = __import__("tempfile").TemporaryDirectory()
+        clear_pq_env()
+        os.environ["LIVE402_PQ_LOG_EPOCH"] = "mainnet-v1"
+        os.environ["LIVE402_PQ_FALCON_NETWORK"] = "mainnet"
+        os.environ["LIVE402_PQ_LOG_ORIGIN"] = ORIGIN_MAINNET
+        os.environ["LIVE402_PQ_LOG_DB"] = os.path.join(self.tmp.name, "pq-log-mainnet.sqlite")
+        os.environ["LIVE402_PQ_FALCON_MAINNET_ADDRESS"] = _ADDR
+        os.environ["LIVE402_PQ_SIGNER_MAINNET_TOKEN"] = "named-not-valued"
+        store.reset()
+        store.append(b"tree3-leaf")
+        self.root = store.root(1)
+        body = ckpt.checkpoint_body(ORIGIN_MAINNET, 1, self.root)
+        store.save_checkpoint(1, "%s\n%s %s %s\n" % (body, ckpt.EMDASH, ORIGIN_MAINNET, _LIVE_SIG_NOTE))
+        note = algo_anchor.encode_note(ORIGIN_MAINNET, 1, self.root)
+        gh = base64.b64decode(algo_anchor.MAINNET_GENESIS_HASH)
+        txn = algo_tx.pay_txn(_ADDR, _ADDR, 0, 3000, 1, 1001, algo_anchor.MAINNET_GENESIS_ID, gh, note=note)
+        self.blob = algo_tx.msgpack_encode(_envelope(sch=b"f1", txn=txn))
+        self.params = {
+            "minFee": 1000,
+            "fee": 0,
+            "lastRound": 1,
+            "genesisID": algo_anchor.MAINNET_GENESIS_ID,
+            "genesisHash": algo_anchor.MAINNET_GENESIS_HASH,
+        }
+        self.addCleanup(self._cleanup)
+
+    def _cleanup(self):
+        clear_pq_env()
+        store.reset()
+        self.tmp.cleanup()
+
+    def test_crash_before_authorized_leaves_no_row(self):
+        algo_anchor.validate_signed_txn(
+            self.blob,
+            expected_origin=ORIGIN_MAINNET,
+            expected_size=1,
+            expected_root=self.root,
+            expected_address=_ADDR,
+            expected_network="mainnet",
+            params=self.params,
+            require_canonical=True,
+        )
+        self.assertIsNone(store.authorized_at(1))
+        self.assertFalse(store.last_authorized_checkpoint().get("signed"))
+
+    def test_crash_after_authorized_row_survives(self):
+        row = canary.persist_existing_signed(self.blob, params=self.params)
+        self.assertEqual(canary.send_state_of(row), canary.STATE_AUTHORIZED)
+        self.assertEqual(bytes(row["signed"]), self.blob)
+        again = store.authorized_at(1)
+        self.assertEqual(bytes(again["signed"]), self.blob)
+        self.assertEqual(canary.send_state_of(again), canary.STATE_AUTHORIZED)
+
+    def test_restart_after_authorized_reuses_blob(self):
+        canary.persist_existing_signed(self.blob, params=self.params)
+        restarted = canary.authorize(
+            params=self.params,
+            sign_fn=lambda _i: (_ for _ in ()).throw(AssertionError("must not re-sign")),
+        )
+        self.assertEqual(bytes(restarted["signed"]), self.blob)
+        self.assertEqual(canary.send_state_of(restarted), canary.STATE_AUTHORIZED)
+
+    def test_duplicate_prepare_does_not_sign_again(self):
+        signed = []
+        first = canary.authorize(params=self.params, sign_fn=lambda _i: signed.append(1) or self.blob)
+        second = canary.authorize(params=self.params, sign_fn=lambda _i: signed.append(1) or self.blob)
+        self.assertEqual(len(signed), 1)
+        self.assertEqual(bytes(first["signed"]), bytes(second["signed"]))
+        self.assertEqual(bytes(first["signed"]), self.blob)
+
+    def test_tree3_resume_creates_zero_new_signatures(self):
+        signed = []
+        row = canary.persist_existing_signed(self.blob, params=self.params)
+        again = canary.persist_existing_signed(self.blob, params=self.params)
+        canary.authorize(params=self.params, sign_fn=lambda _i: signed.append("new") or self.blob)
+        self.assertEqual(signed, [])
+        self.assertEqual(bytes(row["signed"]), bytes(again["signed"]))
+        decoded = algo_tx.msgpack_decode(bytes(row["signed"]))
+        self.assertEqual(decoded["pqsig"]["sch"], b"f1")
+        self.assertNotIn("slt", decoded["pqsig"])

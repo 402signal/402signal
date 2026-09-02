@@ -92,6 +92,14 @@ MAINNET_SIGNER_HOST_ENV = netcfg.MAINNET_SIGNER_HOST_ENV
 MAINNET_SIGNER_PORT_ENV = netcfg.MAINNET_SIGNER_PORT_ENV
 PQSIG_MARKER = "present"
 PQSIG_SCHEME_F1 = "f1"
+# Canonical algokey / go-algorand SignedTxn pqsig wire (protocol.Encode/msgp).
+# Top-level keys: pqsig, txn. pqsig keys: pk, sch, sig; slt is optional
+# (omitempty, often absent when 0). sch is protocol.PQScheme [2]byte, msgpack
+# bin, value b"f1" (Falcon-1024). pk is []byte length 1793. sig is []byte
+# (live compressed ~1233; max 1423). Do not rewrite these fields after
+# decode. IPC marker pqsig:"present" is not authorization.
+PQSIG_WIRE_SCH = b"f1"
+FALCON_F1_SIG_LIVE = 1233
 _EXCLUSIVE_SIG_KEYS = frozenset({"sig", "multisig", "logicsig", "msig", "lsig"})
 _TXID_RE = re.compile(r"^[A-Z2-7]{52}$")
 _PLACEHOLDER_TXID = frozenset({"", "your_txid", "placeholder", "txid", "none", "null"})
@@ -569,13 +577,13 @@ def validate_unsigned_anchor(txn: dict, expected_network: str | None = None) -> 
     keys = set(txn)
     if keys & _FORBIDDEN_INBOUND_KEYS or not keys.issubset(_ALLOWED_INBOUND_KEYS):
         raise AnchorError("not pq1 construction")
-    if str(txn.get("type") or "") != "pay":
+    if _ascii_ident(txn.get("type")) != "pay":
         raise AnchorError("not pq1 construction")
     amt = txn.get("amt")
     if amt not in (None, 0):
         raise AnchorError("not pq1 construction")
     cfg = _network_cfg(expected_network)
-    gen = str(txn.get("gen") or "")
+    gen = _ascii_ident(txn.get("gen"))
     if gen != cfg.genesis_id:
         raise AnchorError("not pq1 construction")
     addr = falcon_address_for(cfg.name)
@@ -1218,7 +1226,7 @@ def validate_signed_txn(
     txn = obj.get("txn")
     if not isinstance(txn, dict):
         raise AnchorError("not a signed pq1 txn")
-    tx_type = str(txn.get("type") or "")
+    tx_type = _ascii_ident(txn.get("type"))
     if tx_type in _FORBIDDEN_TXN_TYPES or tx_type != "pay":
         raise AnchorError("not a payment")
     if any(k in txn for k in ("close", "rekey", "lx", "grp", "aamt", "xaid", "apid", "arcv")):
@@ -1231,7 +1239,7 @@ def validate_signed_txn(
     if amt not in (None, 0):
         raise AnchorError("amount must be 0")
     cfg = _network_cfg(expected_network)
-    gen = str(txn.get("gen") or "")
+    gen = _ascii_ident(txn.get("gen"))
     if gen != cfg.genesis_id:
         raise AnchorError("genesis mismatch")
     gh_raw = txn.get("gh")
@@ -1782,19 +1790,21 @@ def _field_bytes_or_empty(val) -> bytes:
     return _b64(val)
 
 
-def _scheme_text(sch) -> str:
-    """Normalize official sch ([2]byte or str) to ASCII. Empty if unreadable."""
-    if isinstance(sch, (bytes, bytearray)):
-        raw = bytes(sch)
-        if not raw:
-            return ""
+def _ascii_ident(val):
+    """Wire identifier as ASCII text. bytes decode strictly; never str(bytes)."""
+    if isinstance(val, (bytes, bytearray)):
         try:
-            return raw.decode("ascii").strip()
+            return bytes(val).decode("ascii")
         except UnicodeDecodeError:
-            return ""
-    if isinstance(sch, str):
-        return sch.strip()
-    return ""
+            return None
+    if isinstance(val, str):
+        return val
+    return None
+
+
+def _scheme_text(sch):
+    """sch/scheme → exact ASCII. bytes are [2]byte; str is used as-is. No strip."""
+    return _ascii_ident(sch)
 
 
 def _salt_in_range(slt) -> bool:
@@ -1825,12 +1835,13 @@ def _pqsig_field_present(obj) -> bool:
 def _parse_pqsig_envelope(raw):
     """Official Algorand pqsig envelope. Codec {sch,slt,pk,sig} or indexer REST.
 
-    sch/scheme must be exactly f1 (Falcon-1024) after normalizing bytes to
-    ASCII (algokey/msgp encodes PQScheme as [2]byte, so sch is b"f1").
-    slt/salt if present is 0-255. pk/public-key and sig/signature must be
-    non-empty bytes (raw or indexer b64). Fail closed on missing, empty,
-    f5, or any other scheme. A bare blob (including signature.falcon) is
-    not an envelope. The IPC marker pqsig="present" is not authorization.
+    sch/scheme must be exactly f1 (Falcon-1024). bytes decode as strict
+    ASCII (algokey PQScheme [2]byte → b"f1"); str is used as-is. No
+    strip, no str(bytes), no case fold. slt/salt if present is 0-255.
+    pk/public-key and sig/signature must be non-empty bytes (raw or
+    indexer b64). Fail closed on missing, empty, f5, F1, padded, or any
+    other scheme. A bare blob (including signature.falcon) is not an
+    envelope. The IPC marker pqsig:"present" is not authorization.
     """
     if not isinstance(raw, dict):
         return None
@@ -1857,7 +1868,9 @@ def _parse_pqsig_envelope(raw):
 def _sig_type_value(obj: dict) -> str:
     for key in ("sig-type", "sigType", "signature-type"):
         if key in obj and obj.get(key) is not None and obj.get(key) != "":
-            return str(obj.get(key)).strip()
+            ident = _ascii_ident(obj.get(key))
+            if ident:
+                return ident
     return ""
 
 
