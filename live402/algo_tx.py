@@ -129,6 +129,11 @@ def encode_unsigned(txn: dict) -> bytes:
     return msgpack_encode(txn)
 
 
+def _mp_need(buf: bytes, i: int, n: int) -> None:
+    if i + n > len(buf):
+        raise ValueError("truncated msgpack")
+
+
 def _mp_read_uint(buf: bytes, i: int) -> tuple[int, int]:
     if i >= len(buf):
         raise ValueError("truncated msgpack")
@@ -136,72 +141,151 @@ def _mp_read_uint(buf: bytes, i: int) -> tuple[int, int]:
     if b < 128:
         return b, i + 1
     if b == 0xCC:
+        _mp_need(buf, i, 2)
         return buf[i + 1], i + 2
     if b == 0xCD:
+        _mp_need(buf, i, 3)
         return int.from_bytes(buf[i + 1 : i + 3], "big"), i + 3
     if b == 0xCE:
+        _mp_need(buf, i, 5)
         return int.from_bytes(buf[i + 1 : i + 5], "big"), i + 5
     if b == 0xCF:
+        _mp_need(buf, i, 9)
         return int.from_bytes(buf[i + 1 : i + 9], "big"), i + 9
     raise ValueError("unsupported msgpack int")
 
 
-def _mp_read(buf: bytes, i: int):
+def _mp_read_sint(buf: bytes, i: int) -> tuple[int, int]:
+    """Signed msgpack ints, including negative fixints (0xE0-0xFF)."""
     if i >= len(buf):
         raise ValueError("truncated msgpack")
     b = buf[i]
+    if b >= 0xE0:
+        return b - 256, i + 1
+    if b == 0xD0:
+        _mp_need(buf, i, 2)
+        return int.from_bytes(buf[i + 1 : i + 2], "big", signed=True), i + 2
+    if b == 0xD1:
+        _mp_need(buf, i, 3)
+        return int.from_bytes(buf[i + 1 : i + 3], "big", signed=True), i + 3
+    if b == 0xD2:
+        _mp_need(buf, i, 5)
+        return int.from_bytes(buf[i + 1 : i + 5], "big", signed=True), i + 5
+    if b == 0xD3:
+        _mp_need(buf, i, 9)
+        return int.from_bytes(buf[i + 1 : i + 9], "big", signed=True), i + 9
+    raise ValueError("unsupported msgpack int")
+
+
+def _mp_str_payload(raw: bytes):
+    """UTF-8 text when valid; raw bytes otherwise (go-algorand Raw []byte)."""
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return bytes(raw)
+
+
+def _mp_map_key(key) -> str:
+    if isinstance(key, (bytes, bytearray)):
+        try:
+            return bytes(key).decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise ValueError("invalid msgpack map key") from exc
+    return str(key)
+
+
+def _mp_read_map(buf: bytes, i: int, n: int):
+    out = {}
+    for _ in range(n):
+        key, i = _mp_read(buf, i)
+        val, i = _mp_read(buf, i)
+        out[_mp_map_key(key)] = val
+    return out, i
+
+
+def _mp_read_array(buf: bytes, i: int, n: int):
+    items = []
+    for _ in range(n):
+        val, i = _mp_read(buf, i)
+        items.append(val)
+    return items, i
+
+
+def _mp_read(buf: bytes, i: int):
+    """Decode one msgpack value. Algorand/go-msgpack types used in SignedTxn."""
+    if i >= len(buf):
+        raise ValueError("truncated msgpack")
+    b = buf[i]
+    if b == 0xC0:
+        return None, i + 1
     if b == 0xC2:
         return False, i + 1
     if b == 0xC3:
         return True, i + 1
     if b < 128 or b in (0xCC, 0xCD, 0xCE, 0xCF):
         return _mp_read_uint(buf, i)
+    if b >= 0xE0 or b in (0xD0, 0xD1, 0xD2, 0xD3):
+        return _mp_read_sint(buf, i)
     if 0xA0 <= b <= 0xBF:
         n = b - 0xA0
-        return buf[i + 1 : i + 1 + n].decode("utf-8"), i + 1 + n
+        _mp_need(buf, i + 1, n)
+        return _mp_str_payload(buf[i + 1 : i + 1 + n]), i + 1 + n
     if b == 0xD9:
+        _mp_need(buf, i, 2)
         n = buf[i + 1]
-        return buf[i + 2 : i + 2 + n].decode("utf-8"), i + 2 + n
+        _mp_need(buf, i + 2, n)
+        return _mp_str_payload(buf[i + 2 : i + 2 + n]), i + 2 + n
+    if b == 0xDA:
+        _mp_need(buf, i, 3)
+        n = int.from_bytes(buf[i + 1 : i + 3], "big")
+        _mp_need(buf, i + 3, n)
+        # str16 is go-algorand Raw []byte for Falcon pk/sig (and similar).
+        return bytes(buf[i + 3 : i + 3 + n]), i + 3 + n
+    if b == 0xDB:
+        _mp_need(buf, i, 5)
+        n = int.from_bytes(buf[i + 1 : i + 5], "big")
+        _mp_need(buf, i + 5, n)
+        return bytes(buf[i + 5 : i + 5 + n]), i + 5 + n
     if b == 0xC4:
+        _mp_need(buf, i, 2)
         n = buf[i + 1]
+        _mp_need(buf, i + 2, n)
         return bytes(buf[i + 2 : i + 2 + n]), i + 2 + n
     if b == 0xC5:
+        _mp_need(buf, i, 3)
         n = int.from_bytes(buf[i + 1 : i + 3], "big")
+        _mp_need(buf, i + 3, n)
         return bytes(buf[i + 3 : i + 3 + n]), i + 3 + n
     if b == 0xC6:
+        _mp_need(buf, i, 5)
         n = int.from_bytes(buf[i + 1 : i + 5], "big")
+        _mp_need(buf, i + 5, n)
         return bytes(buf[i + 5 : i + 5 + n]), i + 5 + n
     if 0x80 <= b <= 0x8F:
-        n = b - 0x80
-        i += 1
-        out = {}
-        for _ in range(n):
-            key, i = _mp_read(buf, i)
-            val, i = _mp_read(buf, i)
-            out[str(key)] = val
-        return out, i
+        return _mp_read_map(buf, i + 1, b - 0x80)
     if b == 0xDE:
+        _mp_need(buf, i, 3)
         n = int.from_bytes(buf[i + 1 : i + 3], "big")
-        i += 3
-        out = {}
-        for _ in range(n):
-            key, i = _mp_read(buf, i)
-            val, i = _mp_read(buf, i)
-            out[str(key)] = val
-        return out, i
+        return _mp_read_map(buf, i + 3, n)
+    if b == 0xDF:
+        _mp_need(buf, i, 5)
+        n = int.from_bytes(buf[i + 1 : i + 5], "big")
+        return _mp_read_map(buf, i + 5, n)
     if 0x90 <= b <= 0x9F:
-        n = b - 0x90
-        i += 1
-        items = []
-        for _ in range(n):
-            val, i = _mp_read(buf, i)
-            items.append(val)
-        return items, i
+        return _mp_read_array(buf, i + 1, b - 0x90)
+    if b == 0xDC:
+        _mp_need(buf, i, 3)
+        n = int.from_bytes(buf[i + 1 : i + 3], "big")
+        return _mp_read_array(buf, i + 3, n)
+    if b == 0xDD:
+        _mp_need(buf, i, 5)
+        n = int.from_bytes(buf[i + 1 : i + 5], "big")
+        return _mp_read_array(buf, i + 5, n)
     raise ValueError("unsupported msgpack type")
 
 
 def msgpack_decode(raw: bytes) -> dict:
-    """Minimal decoder for Algorand SignedTxn maps we encode. Fail closed."""
+    """Decoder for Algorand SignedTxn maps (msgp + go-codec Raw). Fail closed."""
     obj, end = _mp_read(bytes(raw), 0)
     if end != len(raw) or not isinstance(obj, dict):
         raise ValueError("invalid msgpack map")

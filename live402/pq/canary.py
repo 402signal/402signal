@@ -217,6 +217,32 @@ def project_policy(
     }
 
 
+def persist_existing_signed(
+    signed: bytes,
+    *,
+    now: int | None = None,
+    request_id: str | None = None,
+    params: dict | None = None,
+    fetch_params_fn=None,
+) -> dict:
+    """Validate a cached algokey SignedTxn and persist AUTHORIZED.
+
+    Never dials the signer. Never creates a new Falcon signature.
+    Resume path after a router parse miss when IPC already returned
+    ok+SignedTxn (TREE3 reuse). New signatures created: 0.
+    """
+    blob = bytes(signed or b"")
+    if not blob:
+        raise CanaryError("not a signed pq1 txn")
+    return authorize(
+        now=now,
+        request_id=request_id,
+        params=params,
+        sign_fn=lambda _ident: blob,
+        fetch_params_fn=fetch_params_fn,
+    )
+
+
 def persist_authorized(
     *,
     tree_size: int,
