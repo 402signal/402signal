@@ -397,6 +397,8 @@ class PaywallTests(unittest.TestCase):
         self.assertNotIn("For agents", html)
         self.assertIn("POST /route", devs)
         self.assertIn('{"need":"erc20 token balance","prefer_network":"base"}', devs)
+        self.assertIn('{"url":"https://seller.example/x402"}', devs)
+        self.assertIn("Pass url to check one specific seller endpoint, or need to discover and rank.", devs)
         self.assertIn("/openapi.json", html)
         self.assertIn("/mcp.json", devs)
         self.assertIn("https://github.com/402signalhq/402signal", devs)
