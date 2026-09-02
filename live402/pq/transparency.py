@@ -2,9 +2,11 @@
 
 Confirmed evidence comes only from last_confirmed / confirmed_anchors after
 independent verify. Current log size is store.size(). Authorized/submitted
-are never rendered as confirmed. PQ1 note bytes are reconstructed from
-verified fields via encode_note. Does not construct, sign, or broadcast.
-Does not scan leaf bodies on GET.
+are never rendered as confirmed. Explorer links are chosen from independently
+confirmed anchor network, never from env or the presence of MainNet secrets.
+Unverified MainNet explorer URLs are suppressed. PQ1 note bytes are
+reconstructed from verified fields via encode_note. Does not construct,
+sign, or broadcast. Does not scan leaf bodies on GET.
 """
 
 from __future__ import annotations
@@ -46,12 +48,23 @@ def _live_network_name() -> str:
 
 
 def _network_label(network: str | None = None) -> str:
+    """Live identity label. Unknown never becomes TestNet. Confirmed explorers use _confirmed_network_label."""
     name = (network or _live_network_name() or "").strip().lower()
     if name == "mainnet":
         return "MainNet"
     if name == "testnet":
         return "TestNet"
     return "Algorand"
+
+
+def _confirmed_network_label(conf: dict | None) -> str:
+    """Label from independently confirmed fields only. Empty if unknown."""
+    net = algo_anchor.confirmed_anchor_network(conf)
+    if net == "mainnet":
+        return "MainNet"
+    if net == "testnet":
+        return "TestNet"
+    return ""
 
 
 def _live_origin() -> str:
@@ -119,36 +132,32 @@ def _looks_like_txid(txid: str) -> bool:
 
 
 def pera_tx_url(txid: str, network: str | None = None) -> str:
+    """Confirmed-network explorer only. Missing network suppresses the link."""
     if not _looks_like_txid(txid):
         return ""
     net = (network or "").strip().lower()
     if not net:
         return ""
-    try:
-        return algo_anchor.explorer_url(txid.strip(), network=net)
-    except algo_anchor.AnchorError:
-        return ""
+    return algo_anchor.verified_explorer_tx_url(txid.strip(), net)
 
 
 def pera_address_url(address: str, network: str | None = None) -> str:
+    """Account explorer for an explicit network, or configured identity."""
     text = str(address or "").strip()
     if not text or " " in text:
         return ""
-    base = _pera_address_base(network)
-    if not base:
-        return ""
-    return base + text + "/"
+    net = (network or "").strip().lower() or _live_network_name()
+    return algo_anchor.verified_explorer_address_url(text, net)
 
 
 def indexer_tx_url(txid: str, network: str | None = None) -> str:
+    """Confirmed-network indexer JSON only. Missing network suppresses the link."""
     if not _looks_like_txid(txid):
         return ""
     net = (network or "").strip().lower()
-    if net == "mainnet":
-        return algo_anchor.MAINNET_INDEXER_TXN_URL + txid.strip()
-    if net == "testnet":
-        return algo_anchor.TESTNET_INDEXER_TXN_URL + txid.strip()
-    return ""
+    if not net:
+        return ""
+    return algo_anchor.verified_indexer_tx_url(txid.strip(), net)
 
 
 def root_bytes(root) -> bytes | None:
@@ -244,9 +253,11 @@ def confirmed_view() -> dict | None:
     if not conf:
         return None
     txid = str(conf.get("txid") or "").strip()
-    net = _confirmed_network(conf)
-    explorer = str(conf.get("explorer") or "") or pera_tx_url(txid, net)
-    if net == "mainnet" and "testnet.explorer.perawallet.app" in explorer:
+    network = algo_anchor.confirmed_anchor_network(conf) or _confirmed_network(conf)
+    explorer = str(conf.get("explorer") or "") or pera_tx_url(txid, network)
+    if explorer and not algo_anchor.explorer_hint_label(explorer):
+        explorer = ""
+    if network == "mainnet" and "testnet.explorer.perawallet.app" in explorer:
         explorer = ""
     return {
         "size": int(conf.get("size") or 0),
@@ -255,9 +266,9 @@ def confirmed_view() -> dict | None:
         "round": int(conf.get("round") or 0),
         "root": root_hex(conf.get("root")),
         "origin": str(conf.get("origin") or ORIGIN),
-        "network": net,
+        "network": network,
         "explorer": explorer,
-        "indexer": indexer_tx_url(txid, net),
+        "indexer": indexer_tx_url(txid, network),
         "utc": utc_text(int(conf.get("at") or 0)),
         "iso": utc_iso(int(conf.get("at") or 0)),
     }
@@ -379,9 +390,9 @@ def _history_row_ok(row: dict) -> dict | None:
     rnd = int(row.get("round") or 0)
     if size < 1 or rnd < 1 or not _looks_like_txid(txid):
         return None
-    net = _confirmed_network(row)
-    explorer = pera_tx_url(txid, net)
-    if net == "mainnet" and "testnet.explorer.perawallet.app" in explorer:
+    network = algo_anchor.confirmed_anchor_network(row) or _confirmed_network(row)
+    explorer = pera_tx_url(txid, network)
+    if network == "mainnet" and "testnet.explorer.perawallet.app" in explorer:
         explorer = ""
     return {
         "size": size,
@@ -390,8 +401,8 @@ def _history_row_ok(row: dict) -> dict | None:
         "at": int(row.get("at") or 0),
         "utc": utc_text(int(row.get("at") or 0)),
         "iso": utc_iso(int(row.get("at") or 0)),
+        "network": network,
         "explorer": explorer,
-        "network": net,
         "root": root_hex(row.get("root")),
     }
 
@@ -514,12 +525,17 @@ def _time(ts_text: str, iso: str) -> str:
 
 
 def _ext_link(href: str, label: str, network: str | None = None) -> str:
-    if not href:
-        return esc(label)
+    hint = algo_anchor.explorer_hint_label(href)
+    if not hint and network:
+        labeled = _network_label(network)
+        if labeled in {"MainNet", "TestNet"}:
+            hint = labeled
+    if not href or not hint:
+        return ""
     return (
         '<a href="%s" rel="noopener noreferrer">%s '
         '<span class="ext-hint">(Pera Explorer, %s)</span></a>'
-        % (esc(href), esc(label), _network_label(network))
+        % (esc(href), esc(label), esc(hint))
     )
 
 
@@ -569,27 +585,32 @@ def _pera_views(model: dict) -> str:
     addr = model["falcon_address"]
     items = []
     if conf and conf.get("explorer"):
-        items.append(
-            "<li>%s</li>"
-            % _ext_link(conf["explorer"], "View latest anchor on Pera", conf.get("network"))
-        )
+        link = _ext_link(conf["explorer"], "View latest anchor on Pera", conf.get("network"))
+        if link:
+            items.append("<li>%s</li>" % link)
     net = _confirmed_network(conf) if conf else _live_network_name()
     account = pera_address_url(addr, net)
     if account:
-        items.append(
-            "<li>%s. This is the configured Falcon-1024 account. "
-            "Not every transaction on that account is a valid 402Signal checkpoint "
-            "without PQ1 verification. First-party confirmed history is listed below.</li>"
-            % _ext_link(account, "View Falcon account on Pera", net)
-        )
+        link = _ext_link(account, "View Falcon account on Pera", net)
+        if link:
+            items.append(
+                "<li>%s. This is the configured Falcon-1024 account. "
+                "Not every transaction on that account is a valid 402Signal checkpoint "
+                "without PQ1 verification. First-party confirmed history is listed below.</li>"
+                % link
+            )
     if not items:
         return ""
+    heading = "Explorers"
+    conf_label = _confirmed_network_label(conf) if conf else ""
+    if conf_label:
+        heading = "%s explorers" % conf_label
     return (
         '<section class="block" id="pera-views">\n'
-        "  <h2>%s explorers</h2>\n"
+        "  <h2>%s</h2>\n"
         '  <ul class="verify-list">%s</ul>\n'
         "</section>\n"
-        % (_network_label(net), "".join(items))
+        % (esc(heading), "".join(items))
     )
 
 
@@ -610,6 +631,15 @@ def _confirmed_card(model: dict) -> str:
             '    <p class="note">The signed checkpoint for this confirmed tree could not be bound '
             "to the confirmed origin, tree size, and Merkle root.</p>\n"
         )
+    pera = ""
+    if conf.get("explorer") and algo_anchor.explorer_hint_label(conf["explorer"]):
+        pera = (
+            '      <a class="btn" href="%s" rel="noopener noreferrer">View latest anchor on Pera</a>\n'
+            % esc(conf["explorer"])
+        )
+    actions = ""
+    if pera or cta:
+        actions = '    <div class="hero-actions">\n%s%s    </div>\n' % (pera, cta)
     return (
         '<section class="block" id="latest-confirmed">\n'
         "  <h2>Latest confirmed checkpoint</h2>\n"
@@ -626,10 +656,7 @@ def _confirmed_card(model: dict) -> str:
         "    <p>%s</p>\n"
         '    <p class="pq-kicker">AUTHORIZATION</p>\n'
         "    <p>Falcon-1024 (f1)</p>\n"
-        '    <div class="hero-actions">\n'
-        '      <a class="btn" href="%s" rel="noopener noreferrer">View latest anchor on Pera</a>\n'
         "%s"
-        "    </div>\n"
         "%s"
         "  </article>\n"
         "</section>\n"
@@ -638,8 +665,7 @@ def _confirmed_card(model: dict) -> str:
             esc(conf["round"]),
             _time(conf["utc"], conf["iso"]),
             _mono_copy(conf["txid"], abbreviate(conf["txid"]), "transaction id"),
-            esc(conf["explorer"]),
-            cta,
+            actions,
             bind_note,
         )
     )
@@ -694,11 +720,12 @@ def _falcon_account_row(address: str) -> str:
     )
 
 
-def _pq1_decoder(note: dict) -> str:
+def _pq1_decoder(note: dict, network_label: str = "") -> str:
     match = "matches note origin-hash bytes" if note["origin_hash_matches"] else "does not match"
+    net_word = (" " + network_label) if network_label else ""
     return (
         "<p>Canonical PQ1 note. Reconstructed from the fields independently verified "
-        "against the confirmed %s transaction.</p>\n"
+        "against the confirmed%s transaction.</p>\n"
         '<dl class="pq-decode">\n'
         "  <div><dt>FORMAT</dt><dd>%s</dd></div>\n"
         "  <div><dt>VERSION</dt><dd>%s</dd></div>\n"
@@ -709,7 +736,7 @@ def _pq1_decoder(note: dict) -> str:
         "  <div><dt>NOTE LENGTH</dt><dd>%s bytes</dd></div>\n"
         "</dl>\n"
         % (
-            _network_label(),
+            esc(net_word),
             esc(note["format"]),
             esc(note["version"]),
             esc(note["origin"]),
@@ -787,7 +814,9 @@ def _history(model: dict) -> str:
     for row in rows:
         span = (" · %s" % row["span"]) if row.get("span") else ""
         when = _time(row["utc"], row["iso"])
-        link = _ext_link(row["explorer"], abbreviate(row["txid"]), row.get("network"))
+        link = _ext_link(row.get("explorer") or "", abbreviate(row["txid"]), row.get("network"))
+        if not link:
+            link = esc(abbreviate(row["txid"]))
         body.append(
             "<tr>"
             "<td>%s%s</td>"
@@ -844,19 +873,26 @@ def _growth_chart(rows: list[dict]) -> str:
         y = pad_t + inner_h * (1 - ((size - min_s) / span_s))
         points.append("%.1f,%.1f" % (x, y))
         circles.append('<circle cx="%.1f" cy="%.1f" r="3.5" fill="#fec865" />' % (x, y))
-    label = _network_label()
+    networks = {str(r.get("network") or "") for r in rows}
+    if networks == {"testnet"}:
+        label = "TestNet"
+    elif networks == {"mainnet"}:
+        label = "MainNet"
+    else:
+        label = ""
+    caption_net = ("%s " % label) if label else ""
     return (
         '<figure class="growth-chart">\n'
         "  <figcaption>Tree size at each time 402Signal verified a confirmed "
-        "%s anchor. The line joins those observations only.</figcaption>\n"
+        "%sanchor. The line joins those observations only.</figcaption>\n"
         '  <svg viewBox="0 0 %s %s" role="img" '
-        'aria-label="Tree size at each time 402Signal verified a confirmed %s anchor. '
+        'aria-label="Tree size at each time 402Signal verified a confirmed %sanchor. '
         'Points are real confirmed checkpoints. The line joins those observations.">\n'
         '    <polyline fill="none" stroke="#e49c60" stroke-width="1.5" points="%s" />\n'
         "    %s\n"
         "  </svg>\n"
         "</figure>\n"
-        % (label, width, height, label, " ".join(points), "".join(circles))
+        % (caption_net, width, height, caption_net, " ".join(points), "".join(circles))
     )
 
 
@@ -897,10 +933,11 @@ def _technical(model: dict) -> str:
             "<p>The signed checkpoint for this confirmed tree could not be bound "
             "to the confirmed origin, tree size, and Merkle root.</p>"
         )
+    latest_label = _confirmed_network_label(conf) or _network_label()
     parts.append(
         '<p>Latest signed checkpoint. It may be newer than the latest %s anchor. '
         '<a href="/pq/log/checkpoint"><code>GET /pq/log/checkpoint</code></a></p>'
-        % _network_label()
+        % latest_label
     )
     if model["vkey"]:
         parts.append(
@@ -922,11 +959,13 @@ def _technical(model: dict) -> str:
             % _mono_copy(conf["txid"], abbreviate(conf["txid"]), "transaction id")
         )
         parts.append("<p>Confirmed round · %s</p>" % esc(conf["round"]))
-        if conf.get("indexer"):
+        indexer = str(conf.get("indexer") or "")
+        indexer_hint = algo_anchor.explorer_hint_label(indexer)
+        if indexer and indexer_hint:
             parts.append(
                 '<p><a href="%s" rel="noopener noreferrer">View raw %s transaction JSON</a> '
                 '<span class="ext-hint">(Algonode %s indexer)</span></p>'
-                % (esc(conf["indexer"]), _network_label(), _network_label())
+                % (esc(indexer), esc(indexer_hint), esc(indexer_hint))
             )
     body = "\n".join(parts) if parts else "<p>No additional public fields yet.</p>"
     return "<h3>Technical details</h3>\n<div class=\"tech-body\">%s</div>\n" % body
@@ -971,7 +1010,7 @@ def _verify_yourself(model: dict) -> str:
         + (
             '    <li><a href="/pq/log/checkpoint">GET /pq/log/checkpoint</a>. '
             "Latest signed checkpoint. It may be newer than the latest %s anchor.</li>\n"
-            % _network_label()
+            % (_confirmed_network_label(conf) or _network_label())
         )
         + "    <li>C2SP tiles are published under <code>/pq/log/tile/</code> "
         "(hash tiles and entry bundles). Compare them to the signed checkpoint.</li>\n"
@@ -1032,7 +1071,7 @@ def page_html() -> str:
     model = page_model()
     title = "402Signal transparency log"
     description = (
-        "Verify 402Signal's append-only routing-evidence log. "
+        "Verify 402Signal's PQ Trust append-only routing-evidence log. "
         "Production log identity is Algorand MainNet. "
         "Awaiting first confirmed MainNet checkpoint."
     )
@@ -1065,7 +1104,7 @@ def _verification_details(model: dict) -> str:
                 "  <p>Generic explorers may show unreadable text. 402Signal decodes the same "
                 "84-byte PQ1 layout.</p>\n"
                 "%s"
-                "</div>\n" % _pq1_decoder(note)
+                "</div>\n" % _pq1_decoder(note, _confirmed_network_label(model.get("confirmed")))
             )
         else:
             decoder = (
@@ -1097,13 +1136,13 @@ def _hero_badge(model: dict) -> str:
 def _hero_lede(model: dict) -> str:
     if model.get("confirmed"):
         return (
-            "        <p class=\"lede\">402Signal records commitments to its routing evidence in an "
-            "append-only transparency log. Signed checkpoints are periodically anchored to "
+            "        <p class=\"lede\">PQ Trust is 402Signal's append-only transparency layer. "
+            "Signed checkpoints are periodically anchored to "
             "Algorand MainNet using native Falcon-1024 post-quantum authorization.</p>\n"
         )
     return (
-        "        <p class=\"lede\">402Signal records commitments to its routing evidence in an "
-        "append-only transparency log. Production log identity is Algorand MainNet. "
+        "        <p class=\"lede\">PQ Trust is 402Signal's append-only transparency layer. "
+        "Production log identity is Algorand MainNet. "
         "Awaiting first confirmed MainNet checkpoint. Checkpoint transactions use native "
         "Falcon-1024 post-quantum authorization when confirmed on MainNet.</p>\n"
     )

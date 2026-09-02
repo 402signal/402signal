@@ -9,7 +9,11 @@ Tooling is implemented. Scheduled Fly backups are **not** claimed active.
 - pq-log-mainnet (PRODUCTION append-only transparency log)
 - pq-log (archived TestNet shard; TEST SUPPORT only; do not copy leaves into MainNet)
 
-The archived TestNet file `/data/pq-log.sqlite` stays in place. Do not delete it. PRODUCTION uses `/data/pq-log-mainnet.sqlite` with a distinct tree.
+The archived TestNet file `/data/pq-log.sqlite` stays in place. Do not
+delete it. PRODUCTION uses `/data/pq-log-mainnet.sqlite` with a distinct
+tree. That MainNet file starts empty after the Ross-only pre-launch
+reset (`docs/runbooks/mainnet-prelaunch-reset.md`). Do not copy TestNet
+or 2-leaf test leaves into it.
 
 One machine. One writer. Do not attach a second process to the same files.
 

@@ -62,7 +62,11 @@ _VOLUME_DUMP_PATHS = frozenset(
         "/data/pq-log.sqlite",
         "/data/pq-log.sqlite-wal",
         "/data/pq-log.sqlite-shm",
+        "/data/pq-log-mainnet.sqlite",
+        "/data/pq-log-mainnet.sqlite-wal",
+        "/data/pq-log-mainnet.sqlite-shm",
         "/pq-log.sqlite",
+        "/pq-log-mainnet.sqlite",
         "/live402-history.sqlite",
         "/catalog/dump",
         "/catalog/export",
@@ -954,10 +958,11 @@ def default_port() -> int:
 
 
 def boot_optional_log_signer() -> None:
-    """Load LIVE402_PQ_LOG_SK into memory if set. Never generate a key.
+    """Load the epoch Ed25519 log SK into memory if set. Never generate a key.
 
-    Malformed secret fails closed (no signer). /route still serves.
-    Never logs or prints the secret.
+    TestNet reads LIVE402_PQ_LOG_SK. MainNet reads LIVE402_PQ_LOG_SK_MAINNET
+    only. Malformed secret fails closed (no signer). /route still serves.
+    Never logs or prints the secret. Falcon SK is never loaded here.
     """
     from live402.pq import receipt as pq_receipt
 

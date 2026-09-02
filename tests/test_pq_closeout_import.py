@@ -26,6 +26,9 @@ _PY = (
     _ROOT / "live402/pq/mainnet_params.py",
     _ROOT / "live402/algo_tx.py",
     _ROOT / "scripts/pq_mainnet_canary.py",
+    _ROOT / "scripts/pq_derive_vkey.py",
+    _ROOT / "scripts/pq_public_identity_check.py",
+    _ROOT / "scripts/pq_log_fresh_state.py",
 )
 
 

@@ -70,12 +70,14 @@ TESTNET_ALGOD_PENDING_URL = netcfg.TESTNET.pending_url
 TESTNET_INDEXER_HOST = netcfg.TESTNET.confirm_host
 TESTNET_INDEXER_TXN_URL = netcfg.TESTNET.confirm_txn_url
 TESTNET_EXPLORER_TX_URL = netcfg.TESTNET.explorer_tx_url
+TESTNET_EXPLORER_ADDRESS_URL = "https://testnet.explorer.perawallet.app/address/"
 MAINNET_ALGOD_HOST = netcfg.MAINNET.submit_host
 MAINNET_ALGOD_SEND_URL = netcfg.MAINNET.submit_url
 MAINNET_ALGOD_PENDING_URL = netcfg.MAINNET.pending_url
 MAINNET_INDEXER_HOST = netcfg.MAINNET.confirm_host
 MAINNET_INDEXER_TXN_URL = netcfg.MAINNET.confirm_txn_url
 MAINNET_EXPLORER_TX_URL = netcfg.MAINNET.explorer_tx_url
+MAINNET_EXPLORER_ADDRESS_URL = "https://explorer.perawallet.app/address/"
 TESTNET_SEND_TIMEOUT = 8.0
 TESTNET_FETCH_TIMEOUT = 8.0
 USER_AGENT = "402Signal/0.1 (pq falcon testnet; no keys in logs)"
@@ -1043,6 +1045,118 @@ def explorer_url(txid: str, network: str | None = None) -> str:
         raise AnchorError("invalid confirmed fields")
     cfg = _network_cfg(network)
     return cfg.explorer_tx_url + txid.strip()
+
+
+def confirmed_anchor_network(row: dict | None) -> str:
+    """Independently recorded confirmed-anchor network.
+
+    Never reads env. Never treats signer, HMAC, CDP, or other secrets
+    as MainNet evidence. MainNet requires stored network or genesis_id.
+    Historical TestNet origin may recover TestNet only.
+    """
+    if not isinstance(row, dict):
+        return ""
+    net = str(row.get("network") or "").strip().lower()
+    if net == MAINNET_NAME:
+        return MAINNET_NAME
+    if net == TESTNET_NAME:
+        return TESTNET_NAME
+    gen = str(row.get("genesis_id") or row.get("genesisID") or "").strip()
+    mapped = netcfg.network_for_genesis_id(gen)
+    if mapped is not None:
+        return mapped.name
+    from live402.pq import ORIGIN
+
+    if str(row.get("origin") or "").strip() == ORIGIN:
+        return TESTNET_NAME
+    return ""
+
+
+def verified_explorer_tx_url(txid: str, network: str) -> str:
+    """Public Pera tx URL only when network and prefix are independently known.
+
+    Suppresses rather than guessing. Env and secrets are not consulted.
+    MainNet must match the hardcoded Pera MainNet prefix exactly.
+    Official MainNet prefix: https://explorer.perawallet.app/tx/
+    """
+    if not _looks_like_txid(txid):
+        return ""
+    key = (network or "").strip().lower()
+    if key == TESTNET_NAME:
+        prefix = TESTNET_EXPLORER_TX_URL
+    elif key == MAINNET_NAME:
+        prefix = MAINNET_EXPLORER_TX_URL
+    else:
+        return ""
+    try:
+        cfg = netcfg.get_network(key)
+    except netcfg.UnknownNetwork:
+        return ""
+    if cfg.explorer_tx_url != prefix:
+        return ""
+    if key == MAINNET_NAME and ("testnet" in prefix or prefix != MAINNET_EXPLORER_TX_URL):
+        return ""
+    if key == TESTNET_NAME and prefix != TESTNET_EXPLORER_TX_URL:
+        return ""
+    if not prefix.startswith("https://"):
+        return ""
+    return prefix + txid.strip()
+
+
+def verified_indexer_tx_url(txid: str, network: str) -> str:
+    """Allowlisted indexer JSON URL for a confirmed network. Else empty."""
+    if not _looks_like_txid(txid):
+        return ""
+    key = (network or "").strip().lower()
+    try:
+        cfg = netcfg.get_network(key)
+    except netcfg.UnknownNetwork:
+        return ""
+    prefix = cfg.confirm_txn_url
+    if key == TESTNET_NAME and prefix != TESTNET_INDEXER_TXN_URL:
+        return ""
+    if key == MAINNET_NAME and prefix != MAINNET_INDEXER_TXN_URL:
+        return ""
+    if not prefix.startswith("https://"):
+        return ""
+    return prefix + txid.strip()
+
+
+def verified_explorer_address_url(address: str, network: str) -> str:
+    """Public Pera account URL for an explicit network. Else empty."""
+    text = str(address or "").strip()
+    if not text or " " in text:
+        return ""
+    key = (network or "").strip().lower()
+    if key == TESTNET_NAME:
+        prefix = TESTNET_EXPLORER_ADDRESS_URL
+    elif key == MAINNET_NAME:
+        prefix = MAINNET_EXPLORER_ADDRESS_URL
+        if "testnet" in prefix:
+            return ""
+    else:
+        return ""
+    if not prefix.startswith("https://"):
+        return ""
+    return prefix + text + "/"
+
+
+def explorer_hint_label(url: str) -> str:
+    """Label from a verified explorer/indexer URL. Empty if the host is unknown."""
+    raw = str(url or "").strip()
+    if not raw:
+        return ""
+    if raw.startswith(TESTNET_EXPLORER_TX_URL) or raw.startswith(TESTNET_EXPLORER_ADDRESS_URL):
+        return "TestNet"
+    if raw.startswith(TESTNET_INDEXER_TXN_URL):
+        return "TestNet"
+    if raw.startswith(MAINNET_EXPLORER_TX_URL) or raw.startswith(MAINNET_EXPLORER_ADDRESS_URL):
+        if "testnet." in raw:
+            return ""
+        return "MainNet"
+    if raw.startswith(MAINNET_INDEXER_TXN_URL):
+        return "MainNet"
+    return ""
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):

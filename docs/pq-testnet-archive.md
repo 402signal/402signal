@@ -44,7 +44,8 @@ txid/round/size/root rows, and the software SHA together.
 
 ## What this archive is not
 
-- Not a seed for `/data/pq-log-mainnet.sqlite`
+- Not a seed for `/data/pq-log-mainnet.sqlite` (see
+  `docs/runbooks/mainnet-prelaunch-reset.md` for the empty MainNet reset)
 - Not permission to set MainNet broadcast
 - Not a MainNet homepage claim
 - Not a substitute for the later Ed25519 and Falcon ceremonies

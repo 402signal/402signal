@@ -145,9 +145,11 @@ class C2SPHttpTests(unittest.TestCase):
             "/data",
             "/data/",
             "/data/pq-log.sqlite",
+            "/data/pq-log-mainnet.sqlite",
             "/data/catalog.sqlite",
             "/data/live402-history.sqlite",
             "/pq-log.sqlite",
+            "/pq-log-mainnet.sqlite",
             "/catalog.sqlite",
         ):
             status, raw, hdrs = self._get(path)
@@ -180,7 +182,7 @@ class C2SPHttpTests(unittest.TestCase):
         home = (Path(__file__).resolve().parent.parent / "live402" / "static" / "index.html").read_text(
             encoding="utf-8"
         )
-        self.assertNotIn("PQ Trust", home)
+        self.assertIn("PQ Trust", home)
         self.assertIn("post-quantum", home.lower())
         self.assertIn("Falcon-1024 post-quantum transaction authorization.", home)
         self.assertNotIn("/pq/log", home)

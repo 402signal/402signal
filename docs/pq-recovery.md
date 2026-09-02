@@ -48,7 +48,7 @@ signed-note:
 
 ## E. Fresh MainNet identity
 
-After cutover prep:
+After the Ross-only reset in `docs/runbooks/mainnet-prelaunch-reset.md`:
 
 - TestNet tree N stays N on `/data/pq-log.sqlite`
 - MainNet tree starts at 0 on `/data/pq-log-mainnet.sqlite`

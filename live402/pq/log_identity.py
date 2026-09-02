@@ -23,6 +23,7 @@ Do not delete the TestNet DB archive.
 
 from __future__ import annotations
 
+import hashlib
 import os
 
 from live402.pq import (
@@ -48,11 +49,16 @@ MAINNET_SIGNER_TOKEN_ENV = "LIVE402_PQ_SIGNER_MAINNET_TOKEN"
 MAINNET_SK_ENV = "LIVE402_PQ_LOG_SK_MAINNET"
 MAINNET_VKEY_ENV = "LIVE402_PQ_LOG_VKEY_MAINNET"
 TESTNET_SK_ENV = "LIVE402_PQ_LOG_SK"
+TESTNET_VKEY_ENV = "LIVE402_PQ_LOG_VKEY"
 TESTNET_SIGNER_TOKEN_ENV = "LIVE402_PQ_SIGNER_TOKEN"
 TESTNET_ADDRESS_ENV = "LIVE402_PQ_FALCON_ADDRESS"
 TESTNET_BROADCAST_ENV = "LIVE402_PQ_FALCON_BROADCAST"
 TESTNET_DB_NAME = "pq-log.sqlite"
 MAINNET_DB_NAME = "pq-log-mainnet.sqlite"
+# Public TestNet Falcon f1 address. Compare only. Never a keyfile.
+TESTNET_FALCON_PUBLIC_ADDRESS = (
+    "OBHYXCUVOLSTZVBN5JUFIYBD4X4ZFIAFZMWMU2P45VBYGWT26MV34IFFIU"
+)
 
 
 class ConfigError(ValueError):
@@ -255,8 +261,25 @@ def require_mainnet_identity(*, db_path: str, origin: str) -> None:
         raise ConfigError("reuse_testnet_sk must be false")
     if not mainnet_falcon_address_configured():
         raise ConfigError("mainnet falcon address required")
+    mainnet_addr = (os.environ.get(MAINNET_ADDRESS_ENV) or "").strip()
+    reject_reused_falcon_address(TESTNET_FALCON_PUBLIC_ADDRESS, mainnet_addr)
     if not mainnet_signer_configured():
         raise ConfigError("mainnet signer required")
+
+
+def public_string_digest(text: str) -> str:
+    """SHA-256 hex of a public string. Never a secret helper."""
+    return hashlib.sha256((text or "").strip().encode("utf-8")).hexdigest()
+
+
+def reject_reused_falcon_address(testnet_addr: str, mainnet_addr: str) -> None:
+    """Public-address-only. Never opens a Falcon keyfile."""
+    test = (testnet_addr or "").strip()
+    main = (mainnet_addr or "").strip()
+    if not test or not main:
+        raise ConfigError("falcon address required")
+    if test == main:
+        raise ConfigError("mainnet falcon reuses testnet address")
 
 
 def reject_reused_ed25519_vkey(testnet_vkey: str, mainnet_vkey: str) -> None:
@@ -273,6 +296,19 @@ def reject_reused_ed25519_vkey(testnet_vkey: str, mainnet_vkey: str) -> None:
         raise ConfigError("invalid ed25519 vkey") from exc
     if test_pk == main_pk:
         raise ConfigError("mainnet ed25519 reuses testnet public key")
+
+
+def reject_compromised_ed25519_vkey(candidate_vkey: str, compromised_digest: str) -> None:
+    """Digest-only check against a recorded compromised PUBLIC vkey.
+
+    `compromised_digest` is sha256(hex) of the public vkey string.
+    Never takes a secret. Never prints the candidate unless the caller does.
+    """
+    digest = (compromised_digest or "").strip().lower()
+    if len(digest) != 64 or any(ch not in "0123456789abcdef" for ch in digest):
+        raise ConfigError("invalid vkey digest")
+    if public_string_digest(candidate_vkey) == digest:
+        raise ConfigError("mainnet ed25519 matches compromised vkey")
 
 
 def testnet_volume_db() -> str:

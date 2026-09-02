@@ -130,9 +130,37 @@ def origin() -> str:
     return str(desc.get("origin") or "")
 
 
+def _live_mainnet_identity() -> bool:
+    """PRODUCTION and MainNet epoch never fall through to TestNet identity."""
+    from live402.pq import log_identity
+
+    try:
+        if log_identity.is_production_runtime():
+            return True
+        return (
+            log_identity.is_mainnet_epoch()
+            or log_identity.configured_network() == log_identity.NETWORK_MAINNET
+        )
+    except log_identity.ConfigError:
+        return log_identity.is_production_runtime()
+
+
 def vkey() -> str:
-    """Public verifier key. Env wins; descriptor may hold a placeholder."""
-    env = (os.environ.get("LIVE402_PQ_LOG_VKEY") or "").strip()
+    """Public verifier key. Env wins; descriptor may hold a placeholder.
+
+    MainNet epoch / NETWORK=mainnet reads LIVE402_PQ_LOG_VKEY_MAINNET only.
+    It never silently returns the TestNet LIVE402_PQ_LOG_VKEY value.
+    """
+    from live402.pq import log_identity
+
+    if _live_mainnet_identity():
+        env = (os.environ.get(log_identity.MAINNET_VKEY_ENV) or "").strip()
+        if env:
+            return env
+        desc = trust_root_v2()
+        sig = desc.get("log_signature") if isinstance(desc.get("log_signature"), dict) else {}
+        return str(sig.get("vkey") or "").strip()
+    env = (os.environ.get(log_identity.TESTNET_VKEY_ENV) or "").strip()
     if env:
         return env
     desc = trust_root()
@@ -173,6 +201,36 @@ def witness_policy() -> list:
     return list(policy) if isinstance(policy, list) else []
 
 
+def _strip_secrets(desc: dict) -> dict:
+    sig = dict(desc.get("log_signature") or {})
+    sig.pop("sk", None)
+    sig.pop("private_key", None)
+    desc["log_signature"] = sig
+    desc.pop("private_key", None)
+    desc.pop("sk", None)
+    return desc
+
+
+def _public_descriptor_mainnet() -> dict:
+    """Public MainNet-epoch descriptor. Broadcast stays off. No secrets."""
+    from live402.pq import ORIGIN_MAINNET
+    from live402.pq import log_identity
+
+    desc = dict(trust_root_v2())
+    falcon = dict(desc.get("falcon") or {})
+    falcon["network"] = "mainnet-v1.0"
+    falcon["allowed_broadcast"] = "none"
+    falcon["address"] = (os.environ.get(log_identity.MAINNET_ADDRESS_ENV) or "").strip()
+    desc["falcon"] = falcon
+    desc["origin"] = ORIGIN_MAINNET
+    desc["not_mainnet_go"] = True
+    desc["witness_policy"] = []
+    sig = dict(desc.get("log_signature") or {})
+    sig["vkey"] = vkey()
+    desc["log_signature"] = sig
+    return _strip_secrets(desc)
+
+
 def public_descriptor() -> dict:
     """Public trust descriptor. Runtime PUBLIC vkey. Never a private key.
 
@@ -180,36 +238,8 @@ def public_descriptor() -> dict:
     TEST SUPPORT may still expose the archived TestNet v1 descriptor.
     Empty witness_policy stays empty. Never fabricated secrets.
     """
-    from live402.pq import log_identity
-
-    production = False
-    try:
-        production = (
-            log_identity.is_production_runtime()
-            or log_identity.live_network_name() == log_identity.NETWORK_MAINNET
-        )
-    except log_identity.ConfigError:
-        production = log_identity.is_production_runtime()
-    if production:
-        from live402.pq import ORIGIN_MAINNET
-
-        desc = dict(trust_root_v2())
-        falcon = dict(desc.get("falcon") or {})
-        falcon["network"] = "mainnet-v1.0"
-        falcon["allowed_broadcast"] = "none"
-        falcon["address"] = (os.environ.get(log_identity.MAINNET_ADDRESS_ENV) or "").strip()
-        desc["falcon"] = falcon
-        desc["origin"] = ORIGIN_MAINNET
-        desc["not_mainnet_go"] = True
-        runtime = (os.environ.get(log_identity.MAINNET_VKEY_ENV) or "").strip() or vkey()
-        sig = dict(desc.get("log_signature") or {})
-        sig["vkey"] = runtime
-        sig.pop("sk", None)
-        sig.pop("private_key", None)
-        desc["log_signature"] = sig
-        desc.pop("private_key", None)
-        desc.pop("sk", None)
-        return desc
+    if _live_mainnet_identity():
+        return _public_descriptor_mainnet()
     desc = dict(trust_root())
     falcon = dict(desc.get("falcon") or {})
     falcon["network"] = "testnet-v1.0"
@@ -217,12 +247,7 @@ def public_descriptor() -> dict:
     desc["falcon"] = falcon
     desc["not_mainnet_go"] = True
     desc["witness_policy"] = witness_policy()
-    runtime = vkey()
     sig = dict(desc.get("log_signature") or {})
-    sig["vkey"] = runtime
-    sig.pop("sk", None)
-    sig.pop("private_key", None)
+    sig["vkey"] = vkey()
     desc["log_signature"] = sig
-    desc.pop("private_key", None)
-    desc.pop("sk", None)
-    return desc
+    return _strip_secrets(desc)

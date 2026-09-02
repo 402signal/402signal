@@ -286,8 +286,8 @@ class HomepageProductTests(unittest.TestCase):
             css,
             r"@media \(max-width: 720px\)[\s\S]*?\.signal-row\.flow-four\s*\{[^}]*grid-template-columns:\s*1fr",
         )
-        self.assertIn("TRANSPARENCY", html)
-        self.assertIn("Commit route evidence to the append-only log", html)
+        self.assertIn("PQ TRUST", html)
+        self.assertIn("Commit route evidence to the PQ Trust log", html)
         self.assertIn("Production log identity is Algorand MainNet. Awaiting first confirmed MainNet checkpoint.", html)
         self.assertNotIn("Signed checkpoints are periodically anchored to Algorand MainNet.", html)
         self.assertIn("Falcon-1024 post-quantum transaction authorization.", html)
@@ -297,7 +297,10 @@ class HomepageProductTests(unittest.TestCase):
             html,
         )
         self.assertIn("Verifiable routing history", html)
+        self.assertIn("PQ Trust is 402Signal's append-only transparency layer", html)
         self.assertIn("append-only Merkle log", html)
+        self.assertIn('class="pq-trust"', html)
+        self.assertNotIn("pq-testnet", html)
         self.assertIn("View verification details", html)
         self.assertIn("Algorand MainNet", html)
         self.assertIn('class="signal-flow"', html)
@@ -574,7 +577,7 @@ class HomepageProductTests(unittest.TestCase):
         self.assertNotIn("HEALTHY", html)
         self.assertNotIn("honest", html.lower())
         self.assertIn(
-            "Routing evidence committed to append-only log. Production log identity "
+            "Routing evidence committed to the PQ Trust log. Production log identity "
             "is Algorand MainNet. Awaiting first confirmed MainNet checkpoint. "
             "Falcon-1024 post-quantum authorization protects confirmed MainNet "
             "checkpoint transactions when present.",
@@ -636,11 +639,11 @@ class HomepageProductTests(unittest.TestCase):
             self.assertFalse(href.rstrip("/").endswith("/validate"), href)
             self.assertFalse(href.rstrip("/") == "https://402signal.com/mcp", href)
             self.assertFalse(href.rstrip("/") == "/mcp", href)
-        self.assertNotIn("PQ Trust", html)
+        self.assertIn("PQ Trust", html)
         self.assertNotIn("post-quantum", html.lower())
         self.assertNotIn("algo_bonus", html)
         self.assertNotIn("TestNet Falcon broadcast is off unless explicitly enabled.", html)
-        self.assertIn("402Signal maintains a public append-only transparency log", html)
+        self.assertIn("402Signal maintains a public append-only PQ Trust log", html)
         self.assertIn("Production log identity is Algorand MainNet", html)
         self.assertIn("The human-readable transparency view is available at", html)
         self.assertIn('href="/transparency"', html)
@@ -920,7 +923,7 @@ class HomepageProductTests(unittest.TestCase):
         self.assertIn("LIVE CHECK", html)
         self.assertIn("POLICY", html)
         self.assertIn("RESULT", html)
-        self.assertIn("TRANSPARENCY", html)
+        self.assertIn("PQ TRUST", html)
         self.assertNotIn("YOUR AGENT", html)
         self.assertNotIn("What catalogs claim", html)
         self.assertNotIn("Check it now", html)

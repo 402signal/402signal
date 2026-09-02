@@ -89,14 +89,17 @@ def public_anchor() -> dict | None:
     if int(conf.get("round") or 0) < 1:
         return None
     conf = dict(conf)
-    net = algo_anchor.recorded_network_name(conf)
-    if not net:
+    network = algo_anchor.confirmed_anchor_network(conf)
+    if network:
+        conf["network"] = network
+    else:
+        network = algo_anchor.recorded_network_name(conf)
+        if network:
+            conf["network"] = network
+    if not network:
         conf["explorer"] = ""
         return conf
-    try:
-        conf["explorer"] = algo_anchor.explorer_url(text, network=net)
-    except algo_anchor.AnchorError:
-        conf["explorer"] = ""
+    conf["explorer"] = algo_anchor.verified_explorer_tx_url(text, network)
     return conf
 
 
@@ -497,8 +500,8 @@ def confirm_testnet_anchor(
         txid=verified["txid"],
         confirmed_round=int(verified["confirmed_round"]),
         at=when,
-        network=algo_anchor.TESTNET_NAME,
-        genesis_id=algo_anchor.TESTNET_GENESIS_ID,
+        network=str(verified.get("network") or algo_anchor.TESTNET_NAME),
+        genesis_id=str(verified.get("genesis_id") or algo_anchor.TESTNET_GENESIS_ID),
     )
 
 

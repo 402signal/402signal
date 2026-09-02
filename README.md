@@ -1,6 +1,6 @@
 # 402Signal
 
-402Signal is the independent check an AI agent makes right before spending. It finds the strongest x402 route across Base, Solana, and Algorand, verifies it live, and shows the evidence behind the choice. Your agent keeps the wallet. The decision history is committed to an append-only log with Falcon PQ anchoring on Algorand (currently TestNet). Falcon authorizes a checkpoint transaction, not a merchant payment. This is not a PQ payment rail and not a claim that the product is fully quantum-proof.
+402Signal is the independent check an AI agent makes right before spending. It finds the strongest x402 route across Base, Solana, and Algorand, verifies it live, and shows the evidence behind the choice. Your agent keeps the wallet. The decision history is committed to an append-only PQ Trust log. Production identity is Algorand MainNet. Falcon authorizes a checkpoint transaction, not a merchant payment. This is not a PQ payment rail and not a claim that the product is fully quantum-proof.
 
 - **Live site:** https://402signal.com
 - **Paid API:** `POST /route` — $0.01 USDC
@@ -149,18 +149,19 @@ Base CDP calls need `CDP_API_KEY_ID` + `CDP_API_KEY_SECRET` (or `CDP_ACCESS_TOKE
 | `LIVE402_PROBE_TIMEOUT` | `4` | probe timeout seconds |
 | `LIVE402_HISTORY_DB` | `/data/live402-history.sqlite` on Fly (`/tmp` fallback) | sqlite probe history (WAL, 0600, capped). Observed only. |
 | `LIVE402_CATALOG_DB` | `/data/catalog.sqlite` on Fly (`/tmp` fallback) | sqlite shadow catalog of CDP/PayAI/GoPlausible **claims**. Process-local on the existing `/data` volume. **Not HTTP-exposed** (no dump/download endpoint, not under `static/`, not in OpenAPI). Separate file from history. FTS5. Never a 44k RAM list. |
-| `LIVE402_PQ_LOG_DB` | `/data/pq-log-mainnet.sqlite` on Fly | PRODUCTION C2SP log. Separate file from catalog and history. **Not HTTP-exposed** as a sqlite dump; read API is `/pq/log/*` only. `/data/pq-log.sqlite` is the archived TestNet shard (TEST SUPPORT only). |
+| `LIVE402_PQ_LOG_DB` | `/data/pq-log-mainnet.sqlite` on Fly (`/tmp` fallback) | PRODUCTION C2SP log. Separate from catalog, history, and the TestNet archive `/data/pq-log.sqlite` (TEST SUPPORT only). **Not HTTP-exposed** as a sqlite dump; read API is `/pq/log/*` only. Ross-only empty reset: `docs/runbooks/mainnet-prelaunch-reset.md`. |
 | `LIVE402_PQ_LOG_EPOCH` | `mainnet-v1` in fly.toml | PRODUCTION requires `mainnet-v1`. Unset/unknown fail closed. `testnet-v1` is TEST SUPPORT only. |
 | `LIVE402_PQ_LOG_ORIGIN` | `402signal.com/pq/log/mainnet-v1` in fly.toml | PRODUCTION origin. TestNet origin is archive/TEST SUPPORT only. |
-| `LIVE402_PQ_LOG_VKEY` | unset | TEST SUPPORT Ed25519 log verifier key (public). Production uses `LIVE402_PQ_LOG_VKEY_MAINNET`. Never a private key. |
+| `LIVE402_PQ_LOG_VKEY` | unset | TEST SUPPORT Ed25519 log verifier key (public). Production never uses this. Never a private key. |
+| `LIVE402_PQ_LOG_VKEY_MAINNET` | unset | PRODUCTION Ed25519 log verifier key (public). Set on boot from the public half of `LIVE402_PQ_LOG_SK_MAINNET`. Never a private key. |
 | `LIVE402_PQ_LOG_SK` | unset | TEST SUPPORT Ed25519 seed only. Production never loads this. Never commit, never paste into chat. |
-| `LIVE402_PQ_LOG_SK_MAINNET` | unset | PRODUCTION Ed25519 seed only. Code rejects silent fallback to `LIVE402_PQ_LOG_SK`. Fly secret later. Never set from this PR. |
+| `LIVE402_PQ_LOG_SK_MAINNET` | unset | PRODUCTION Ed25519 seed only. Code rejects silent fallback to `LIVE402_PQ_LOG_SK`. Install via stdin/file (`NAME=-`); never a CLI secret argument. Never set from this PR. |
 | `LIVE402_PQ_FALCON_ADDRESS` | unset | TEST SUPPORT TestNet Falcon address. Not a production default. Never a private key. |
 | `LIVE402_PQ_FALCON_NETWORK` | `mainnet` in fly.toml | PRODUCTION requires `mainnet`. Unset/unknown fail closed. `testnet` is TEST SUPPORT only. |
 | `LIVE402_PQ_FALCON_BROADCAST` | unset | TEST SUPPORT 402signal (router) env. `1` allows POST of a signer-approved SignedTxn to pinned TestNet algod. Production never uses this. Default unset: never POST. 402security must GO before anyone sets it to `1`. Signer never reads BROADCAST. This flag never sends MainNet. |
 | `LIVE402_PQ_FALCON_MAINNET_BROADCAST` | unset | Distinct MainNet flag. Default off. Automatic MainNet stays off. Unset is the kill switch: MainNet submit stops, routing continues. |
 | `LIVE402_PQ_FALCON_MAINNET_CANARY` | unset | One-shot human canary gate. Default off. Worker, tick, and boot never read this. Live POST still needs this `=1` and `LIVE402_PQ_FALCON_MAINNET_BROADCAST=1`. |
-| `LIVE402_PQ_FALCON_MAINNET_ADDRESS` | fly.toml (public MainNet address) | PRODUCTION public MainNet Falcon f1 address. Never a private key. |
+| `LIVE402_PQ_FALCON_MAINNET_ADDRESS` | fly.toml (public MainNet address) | PRODUCTION public MainNet Falcon f1 address. Distinct from the archived TestNet address. Never a private key. |
 | `LIVE402_PQ_SIGNER_TOKEN` | unset | TEST SUPPORT HMAC for the TestNet pq-anchor/1 client. Production never dials that signer. |
 | `LIVE402_PQ_SIGNER_MAINNET_TOKEN` | unset | PRODUCTION HMAC for `402signal-pq-signer-mainnet` (pq-anchor/2). Named, never valued in git. |
 | `LIVE402_PQ_LOG` | unset | `0` forces transparency `unavailable` even if a signer is configured. |
