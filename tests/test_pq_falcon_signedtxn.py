@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import os
 import unittest
+from unittest import mock
 
 os.environ.setdefault("LIVE402_FIXTURE", "1")
 
@@ -202,7 +203,11 @@ class FalconSignedTxnEnvelopeTests(unittest.TestCase):
         )
         with self.assertRaises(algo_anchor.AnchorError) as ctx:
             self._validate(blob)
-        self.assertIn("falcon authorization missing", str(ctx.exception))
+        err = str(ctx.exception)
+        self.assertTrue(
+            "unknown SignedTxn field" in err or "falcon authorization missing" in err,
+            err,
+        )
 
     def test_ipc_marker_present_is_not_auth(self):
         self.assertIsNone(
@@ -376,6 +381,34 @@ class AuthorizedPersistenceAndResumeTests(unittest.TestCase):
         finally:
             os.environ["LIVE402_FIXTURE"] = "1"
 
+    def test_production_request_signed_fail_closes_before_persist(self):
+        """IPC reply is not response-MAC provenance. Do not persist AUTHORIZED."""
+        reply = {"signed": self.blob, "verified": {}, "policy": {}}
+        with mock.patch("live402.pq.signer_mainnet.request_signed", return_value=reply):
+            with self.assertRaises(canary.CanarySecurityError) as ctx:
+                canary.authorize(params=self.params)
+            self.assertIn("provenance", str(ctx.exception))
+        self.assertIsNone(store.authorized_at(1))
+        self.assertFalse(store.last_authorized_checkpoint().get("signed"))
+
+    def test_response_mac_verified_binding_may_persist(self):
+        reply = {
+            "signed": self.blob,
+            "verified": {},
+            "policy": {},
+            canary.RESPONSE_MAC_VERIFIED_KEY: True,
+        }
+        with mock.patch("live402.pq.signer_mainnet.request_signed", return_value=reply):
+            row = canary.authorize(params=self.params)
+        self.assertEqual(canary.send_state_of(row), canary.STATE_AUTHORIZED)
+        self.assertEqual(bytes(row["signed"]), self.blob)
+
+    def test_read_only_inspect_does_not_persist(self):
+        out = canary.inspect(params=self.params)
+        self.assertTrue(out.get("read_only"))
+        self.assertIsNone(store.authorized_at(1))
+        self.assertFalse(store.last_authorized_checkpoint().get("signed"))
+
 
 class FalconShapeAndSchemeMatrixTests(unittest.TestCase):
     def setUp(self):
@@ -393,7 +426,8 @@ class FalconShapeAndSchemeMatrixTests(unittest.TestCase):
             expected_network="testnet",
         )
 
-    def test_genuine_algokey_shaped_f1_bytes_passes(self):
+    def test_local_encoder_algokey_shaped_f1_bytes_passes(self):
+        """Local encoder + synthetic pk/sig. Not byte-for-byte live algokey wire."""
         env = _envelope(sch=b"f1")
         self.assertEqual(env["pqsig"]["sch"], b"f1")
         self.assertEqual(len(env["pqsig"]["pk"]), algo_anchor.FALCON_F1_PK_LEN)
@@ -441,11 +475,12 @@ class FalconShapeAndSchemeMatrixTests(unittest.TestCase):
         txn = _pay_txn()
         truncated_pk = algo_tx.msgpack_encode(_envelope(sch=b"f1", pk=_PK[:-1], txn=txn))
         empty_sig = algo_tx.msgpack_encode(_envelope(sch=b"f1", sig=b"", txn=txn))
+        one_byte_sig = algo_tx.msgpack_encode(_envelope(sch=b"f1", sig=b"\x01", txn=txn))
         oversized_sig = algo_tx.msgpack_encode(
             _envelope(sch=b"f1", sig=b"\x01" * (algo_anchor.FALCON_F1_SIG_MAX + 1), txn=txn)
         )
         substituted_pk = algo_tx.msgpack_encode(_envelope(sch=b"f1", pk=b"\x00" * 32, txn=txn))
-        for blob in (truncated_pk, empty_sig, oversized_sig, substituted_pk):
+        for blob in (truncated_pk, empty_sig, one_byte_sig, oversized_sig, substituted_pk):
             with self.assertRaises(algo_anchor.AnchorError) as ctx:
                 self._validate(blob)
             self.assertIn("falcon authorization missing", str(ctx.exception))
@@ -527,6 +562,120 @@ class StrictMsgpackSignedTxnTests(unittest.TestCase):
                 expected_address=_ADDR,
                 expected_network="testnet",
             )
+
+    def test_strict_rejects_bool_and_nil(self):
+        with self.assertRaises(ValueError) as ctx:
+            algo_tx.msgpack_decode(_map1(b"\xc2"), strict=True)
+        self.assertIn("bool", str(ctx.exception))
+        with self.assertRaises(ValueError) as ctx:
+            algo_tx.msgpack_decode(_map1(b"\xc0"), strict=True)
+        self.assertIn("nil", str(ctx.exception))
+
+    def test_amt_false_rejected_as_boolean_integer(self):
+        txn = _pay_txn()
+        txn["amt"] = False
+        blob = algo_tx.msgpack_encode(_envelope(sch=b"f1", txn=txn))
+        with self.assertRaises(ValueError) as ctx:
+            algo_tx.msgpack_decode(blob, strict=True)
+        self.assertIn("bool", str(ctx.exception))
+        with self.assertRaises(algo_anchor.AnchorError):
+            algo_anchor.validate_signed_txn(
+                blob,
+                expected_origin=ORIGIN,
+                expected_size=1,
+                expected_root=_ROOT,
+                expected_address=_ADDR,
+                expected_network="testnet",
+            )
+        with self.assertRaises(algo_anchor.AnchorError) as ctx:
+            algo_anchor._require_uint(False)
+        self.assertIn("boolean-as-integer", str(ctx.exception))
+
+    def test_unordered_keys_rejected_in_strict(self):
+        blob = b"\x82" + b"\xa1z" + b"\x01" + b"\xa1a" + b"\x02"
+        decoded = algo_tx.msgpack_decode(blob)
+        self.assertEqual(decoded, {"z": 1, "a": 2})
+        with self.assertRaises(ValueError) as ctx:
+            algo_tx.msgpack_decode(blob, strict=True)
+        self.assertIn("unordered", str(ctx.exception))
+
+    def test_non_text_key_rejected_in_strict(self):
+        blob = b"\x81" + b"\x01" + b"\x02"
+        self.assertEqual(algo_tx.msgpack_decode(blob), {"1": 2})
+        with self.assertRaises(ValueError) as ctx:
+            algo_tx.msgpack_decode(blob, strict=True)
+        self.assertIn("non-text", str(ctx.exception))
+
+    def test_non_minimal_map16_rejected_in_strict(self):
+        blob = b"\xde\x00\x01" + b"\xa1a" + b"\x01"
+        self.assertEqual(algo_tx.msgpack_decode(blob), {"a": 1})
+        with self.assertRaises(ValueError) as ctx:
+            algo_tx.msgpack_decode(blob, strict=True)
+        self.assertIn("non-minimal", str(ctx.exception))
+
+    def test_unknown_signedtxn_and_txn_fields_rejected(self):
+        extra = _envelope(sch=b"f1")
+        extra["zzz"] = 1
+        blob = algo_tx.msgpack_encode(extra)
+        with self.assertRaises(algo_anchor.AnchorError) as ctx:
+            algo_anchor.validate_signed_txn(
+                blob,
+                expected_origin=ORIGIN,
+                expected_size=1,
+                expected_root=_ROOT,
+                expected_address=_ADDR,
+                expected_network="testnet",
+            )
+        self.assertIn("unknown SignedTxn field", str(ctx.exception))
+        txn = _pay_txn()
+        txn["zzz"] = 1
+        blob = algo_tx.msgpack_encode(_envelope(sch=b"f1", txn=txn))
+        with self.assertRaises(algo_anchor.AnchorError) as ctx:
+            algo_anchor.validate_signed_txn(
+                blob,
+                expected_origin=ORIGIN,
+                expected_size=1,
+                expected_root=_ROOT,
+                expected_address=_ADDR,
+                expected_network="testnet",
+            )
+        self.assertIn("unknown txn field", str(ctx.exception))
+        env = _envelope(sch=b"f1")
+        env["pqsig"]["zzz"] = 1
+        blob = algo_tx.msgpack_encode(env)
+        with self.assertRaises(algo_anchor.AnchorError) as ctx:
+            algo_anchor.validate_signed_txn(
+                blob,
+                expected_origin=ORIGIN,
+                expected_size=1,
+                expected_root=_ROOT,
+                expected_address=_ADDR,
+                expected_network="testnet",
+            )
+        self.assertIn("unknown pqsig field", str(ctx.exception))
+
+    def test_one_byte_sig_rejected(self):
+        blob = algo_tx.msgpack_encode(_envelope(sch=b"f1", sig=b"\x01"))
+        with self.assertRaises(algo_anchor.AnchorError) as ctx:
+            algo_anchor.validate_signed_txn(
+                blob,
+                expected_origin=ORIGIN,
+                expected_size=1,
+                expected_root=_ROOT,
+                expected_address=_ADDR,
+                expected_network="testnet",
+            )
+        self.assertIn("falcon authorization missing", str(ctx.exception))
+        self.assertFalse(algo_anchor._falcon_f1_shapes_ok(_PK, b"\x01"))
+        self.assertGreaterEqual(algo_anchor.FALCON_F1_SIG_MIN, 600)
+        self.assertLess(algo_anchor.FALCON_F1_SIG_MIN, algo_anchor.FALCON_F1_SIG_LIVE)
+
+    def test_raw_byte_size_cap(self):
+        with self.assertRaises(ValueError) as ctx:
+            algo_tx.msgpack_decode(b"\x80" + b"\x00" * algo_tx.MAX_MSGPACK_BYTES, strict=True)
+        self.assertIn("too large", str(ctx.exception))
+        with self.assertRaises(ValueError):
+            algo_tx.msgpack_decode(b"\x00" * (algo_tx.MAX_MSGPACK_BYTES + 1))
 
 
 class CeremonyMetadataNotConfirmationTests(unittest.TestCase):

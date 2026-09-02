@@ -197,7 +197,13 @@ def _mp_str_payload(raw: bytes):
         return bytes(raw)
 
 
-def _mp_map_key(key) -> str:
+def _mp_map_key(key, *, strict: bool = False) -> str:
+    if isinstance(key, str):
+        if not key:
+            raise ValueError("empty msgpack map key")
+        return key
+    if strict:
+        raise ValueError("non-text msgpack map key")
     if isinstance(key, (bytes, bytearray)):
         try:
             return bytes(key).decode("utf-8")
@@ -207,19 +213,26 @@ def _mp_map_key(key) -> str:
 
 
 _MAX_MSGPACK_DEPTH = 8
+# Hard cap on inbound decode. Falcon-1024 SignedTxn estimate is ~3.5KiB
+# (max pk 1793 + max sig 1423 + pay fields). 8192 rejects hostile blobs.
+MAX_MSGPACK_BYTES = 8192
 
 
 def _mp_read_map(buf: bytes, i: int, n: int, *, depth: int = 0, strict: bool = False):
     if depth > _MAX_MSGPACK_DEPTH:
         raise ValueError("excessive msgpack nesting")
     out = {}
+    prev = None
     for _ in range(n):
         key, i = _mp_read(buf, i, depth=depth + 1, strict=strict)
         val, i = _mp_read(buf, i, depth=depth + 1, strict=strict)
-        mapped = _mp_map_key(key)
+        mapped = _mp_map_key(key, strict=strict)
         if mapped in out:
             raise ValueError("duplicate msgpack key")
+        if strict and prev is not None and mapped < prev:
+            raise ValueError("unordered msgpack key")
         out[mapped] = val
+        prev = mapped
     return out, i
 
 
@@ -241,10 +254,16 @@ def _mp_read(buf: bytes, i: int, *, depth: int = 0, strict: bool = False):
         raise ValueError("truncated msgpack")
     b = buf[i]
     if b == 0xC0:
+        if strict:
+            raise ValueError("msgpack nil forbidden")
         return None, i + 1
     if b == 0xC2:
+        if strict:
+            raise ValueError("msgpack bool forbidden")
         return False, i + 1
     if b == 0xC3:
+        if strict:
+            raise ValueError("msgpack bool forbidden")
         return True, i + 1
     if b < 128 or b in (0xCC, 0xCD, 0xCE, 0xCF):
         return _mp_read_uint(buf, i, strict=strict)
@@ -259,13 +278,17 @@ def _mp_read(buf: bytes, i: int, *, depth: int = 0, strict: bool = False):
     if b == 0xD9:
         _mp_need(buf, i, 2)
         n = buf[i + 1]
+        if strict and n < 32:
+            raise ValueError("non-minimal msgpack str")
         _mp_need(buf, i + 2, n)
         return _mp_str_payload(buf[i + 2 : i + 2 + n]), i + 2 + n
     if b == 0xDA:
         _mp_need(buf, i, 3)
         n = int.from_bytes(buf[i + 1 : i + 3], "big")
+        if strict and n < 256:
+            raise ValueError("non-minimal msgpack str")
         _mp_need(buf, i + 3, n)
-        # str16 is go-algorand Raw []byte for Falcon pk/sig (and similar).
+        # str16 is go-algorand Raw []byte for Falcon pk/sig (n >= 256).
         return bytes(buf[i + 3 : i + 3 + n]), i + 3 + n
     if b == 0xDB:
         if strict:
@@ -282,6 +305,8 @@ def _mp_read(buf: bytes, i: int, *, depth: int = 0, strict: bool = False):
     if b == 0xC5:
         _mp_need(buf, i, 3)
         n = int.from_bytes(buf[i + 1 : i + 3], "big")
+        if strict and n < 256:
+            raise ValueError("non-minimal msgpack bin")
         _mp_need(buf, i + 3, n)
         return bytes(buf[i + 3 : i + 3 + n]), i + 3 + n
     if b == 0xC6:
@@ -296,6 +321,8 @@ def _mp_read(buf: bytes, i: int, *, depth: int = 0, strict: bool = False):
     if b == 0xDE:
         _mp_need(buf, i, 3)
         n = int.from_bytes(buf[i + 1 : i + 3], "big")
+        if strict and n < 16:
+            raise ValueError("non-minimal msgpack map")
         return _mp_read_map(buf, i + 3, n, depth=depth, strict=strict)
     if b == 0xDF:
         if strict:
@@ -308,6 +335,8 @@ def _mp_read(buf: bytes, i: int, *, depth: int = 0, strict: bool = False):
     if b == 0xDC:
         _mp_need(buf, i, 3)
         n = int.from_bytes(buf[i + 1 : i + 3], "big")
+        if strict and n < 16:
+            raise ValueError("non-minimal msgpack array")
         return _mp_read_array(buf, i + 3, n, depth=depth, strict=strict)
     if b == 0xDD:
         if strict:
@@ -321,13 +350,17 @@ def _mp_read(buf: bytes, i: int, *, depth: int = 0, strict: bool = False):
 def msgpack_decode(raw: bytes, *, strict: bool = False) -> dict:
     """Decoder for Algorand SignedTxn maps (msgp + go-codec Raw). Fail closed.
 
-    Duplicate keys are always rejected. strict=True is the SignedTxn path:
-    negative integers, non-minimal unsigned encodings, trailing data,
-    excessive nesting, and unproven alternate forms (str32/bin32/map32/
-    array32) are rejected. Do not require re-encoding equality until the
+    Duplicate keys and a raw-byte size cap are always enforced.
+    strict=True is the SignedTxn path: negative integers, nil/bools,
+    non-text / empty / unordered keys, non-minimal encodings, trailing
+    data, excessive nesting, and unproven alternate forms
+    (str32/bin32/map32/array32) are rejected. Canonical map key order
+    is lexicographic. Do not require re-encoding equality until the
     local encoder is proven against genuine algokey/go-algorand bytes.
     """
     blob = bytes(raw)
+    if len(blob) > MAX_MSGPACK_BYTES:
+        raise ValueError("msgpack too large")
     obj, end = _mp_read(blob, 0, depth=0, strict=strict)
     if end != len(blob) or not isinstance(obj, dict):
         raise ValueError("invalid msgpack map")

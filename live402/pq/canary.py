@@ -217,11 +217,30 @@ def project_policy(
     }
 
 
+# persist_authorized provenance. request_signed HMAC-authenticates the
+# request, not the response. Semantic/length checks are not Falcon verify.
+# Residual (Ross-only): signer response-MAC or official native Falcon verify.
+PROVENANCE_FIXTURE_SIGN_HOOK = "fixture-sign-hook"
+PROVENANCE_RESPONSE_MAC = "response-mac"
+_PERSIST_PROVENANCE = frozenset({PROVENANCE_FIXTURE_SIGN_HOOK, PROVENANCE_RESPONSE_MAC})
+RESPONSE_MAC_VERIFIED_KEY = "response_mac_verified"
+
+
 def _test_sign_hook_allowed() -> bool:
     """Fixture / TEST SUPPORT only. Production never accepts caller bytes."""
     fixture = (os.environ.get("LIVE402_FIXTURE") or "").strip()
     support = (os.environ.get("LIVE402_PQ_TEST_SUPPORT") or "").strip()
     return fixture in {"1", "true", "TRUE", "yes"} or support in {"1", "true", "TRUE", "yes"}
+
+
+def response_provenance_authenticated(reply) -> bool:
+    """True only when the signer reply carries a verified response-binding.
+
+    request_signed authenticates the request HMAC, not the SignedTxn
+    bytes. Until Ross adds a response-MAC (or official native Falcon
+    verify) this is False. Do not treat semantic verify as provenance.
+    """
+    return isinstance(reply, dict) and reply.get(RESPONSE_MAC_VERIFIED_KEY) is True
 
 
 def persist_existing_signed(
@@ -253,11 +272,19 @@ def persist_authorized(
     request_id: str,
     signed: bytes,
     at: int,
+    provenance: str,
     fee_policy: dict | None = None,
     fv: int = 0,
     lv: int = 0,
 ) -> dict:
-    """DURABLY persist AUTHORIZED exact blob before any send eligibility."""
+    """DURABLY persist AUTHORIZED exact blob before any send eligibility.
+
+    Fail closed unless provenance is fixture-sign-hook (LIVE402_FIXTURE /
+    TEST SUPPORT sign_fn) or response-mac (verified response-binding).
+    Unauthenticated IPC bytes must not reach this write.
+    """
+    if provenance not in _PERSIST_PROVENANCE:
+        raise CanarySecurityError("unauthenticated signer response is not provenance")
     policy = json.dumps(fee_policy) if isinstance(fee_policy, dict) else (fee_policy or "")
     stored = store.save_authorized_checkpoint(
         tree_size=int(tree_size),
@@ -329,6 +356,11 @@ def authorize(
     snapshot is still fresh. Stale AUTHORIZED fail-closes until the
     operator explicitly discards. Never re-dials around a different
     stored auth. Never silently modifies fee/fv/lv.
+
+    Production persist is fail-closed until authenticated response
+    provenance exists (response-MAC or official native Falcon verify).
+    Fixture sign_fn under LIVE402_FIXTURE / TEST SUPPORT may persist.
+    Unpaid /route and read-only trust are not on this path.
     """
     ident = current_checkpoint_identity()
     existing = store.authorized_at(ident["tree_size"])
@@ -396,6 +428,12 @@ def authorize(
         raise CanarySecurityError("canonical fv mismatch")
     if int(verified.get("lv") or 0) != int(policy["lv"]):
         raise CanarySecurityError("canonical lv mismatch")
+    if sign_fn is not None and _test_sign_hook_allowed():
+        provenance = PROVENANCE_FIXTURE_SIGN_HOOK
+    elif response_provenance_authenticated(reply):
+        provenance = PROVENANCE_RESPONSE_MAC
+    else:
+        raise CanarySecurityError("unauthenticated signer response is not provenance")
     stored = persist_authorized(
         tree_size=ident["tree_size"],
         origin=ident["origin"],
@@ -404,6 +442,7 @@ def authorize(
         request_id=rid,
         signed=bytes(signed),
         at=when,
+        provenance=provenance,
         fee_policy=policy,
         fv=int(verified.get("fv") or 0),
         lv=int(verified.get("lv") or 0),
