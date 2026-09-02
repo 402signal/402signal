@@ -180,11 +180,16 @@ def root_hex(root) -> str:
 
 
 def public_vkey() -> str:
-    for source in (store.meta_get("vkey"), trust.vkey()):
-        text = str(source or "").strip()
-        if text:
-            return text
-    return ""
+    """Epoch env vkey wins over sqlite meta.vkey (SEC-ROUTER-004 / A-14).
+
+    A stale persisted meta.vkey is not advertised or used to bind a
+    checkpoint when trust.vkey() is set. Empty env still falls back to
+    sqlite so in-process configure_signer tests keep working.
+    """
+    env = str(trust.vkey() or "").strip()
+    if env:
+        return env
+    return str(store.meta_get("vkey") or "").strip()
 
 
 def public_falcon_address() -> str:
@@ -1162,7 +1167,9 @@ def _main(model: dict) -> str:
         + _hero_badge(model)
         + "        <h1>Verify the transparency log</h1>\n"
         + _hero_lede(model)
-        + "        <p class=\"note\">Routing does not wait for confirmation.</p>\n"
+        + "        <p class=\"note\">Routing does not wait for confirmation. "
+        "Paid HTTP 200 or 503 does not require a durable signed leaf unless "
+        "require_transparency is set.</p>\n"
         + "        <p class=\"privacy-note\">Public transparency commitments do not expose raw "
         "needs, wallets, payment signatures, or seller response bodies.</p>\n"
         '        <details class="tech-details" id="what-is-published">\n'

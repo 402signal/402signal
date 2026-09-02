@@ -49,7 +49,8 @@ ACCEPT_PAYTO_CHANGE_DESC = (
 )
 REQUIRE_TRANSPARENCY_DESC = (
     "If true, paid /route fails when a signed checkpoint receipt cannot be produced. "
-    "Default false: routing continues if signing or anchoring is down."
+    "Default false: HTTP 200/503 does not require a durable signed leaf "
+    "(SEC-ROUTER-004 / A-14). logged_uncheckpointed is not success under this gate."
 )
 SELLER_SCHEMA_CLIENT_WARNING = (
     "Seller inputSchema/outputSchema values are catalog_claimed and untrusted. "

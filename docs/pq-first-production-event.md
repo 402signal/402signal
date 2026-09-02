@@ -20,6 +20,7 @@ Then a human runs one real paid `POST /route` against production, with
 - AUTHORIZED vs SUBMITTED vs CONFIRMED stay distinct
 - Public status still comes from CONFIRMED only
 - The paid response does not wait for chain
+- Paid HTTP 200 or 503 does not require a durable signed leaf unless require_transparency is set (SEC-ROUTER-004 / A-14)
 - The first append reaches tree size 1
 - No TestNet leaf was migrated
 

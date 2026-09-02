@@ -184,6 +184,112 @@ class ReceiptTests(unittest.TestCase):
         finally:
             os.environ.pop("LOCAL_FREE", None)
 
+    def _paid_headers(self):
+        import base64
+
+        from live402 import payment, replay
+
+        replay.reset()
+        os.environ["CDP_ACCESS_TOKEN"] = "test-fixture-token"
+        os.environ.pop("LOCAL_FREE", None)
+        payload = {
+            "x402Version": 2,
+            "accepted": {
+                "scheme": "exact",
+                "network": "base",
+                "asset": "USDC",
+                "currency": payment.USDC_BASE,
+                "amount": payment.AMOUNT_ATOMIC,
+                "payTo": payment.DEFAULT_PAYTO,
+                "maxTimeoutSeconds": 60,
+            },
+            "payload": {
+                "signature": "0x" + ("ab" * 65),
+                "authorization": {
+                    "from": "0x1111111111111111111111111111111111111111",
+                    "to": payment.DEFAULT_PAYTO,
+                    "value": payment.AMOUNT_ATOMIC,
+                    "validAfter": "0",
+                    "validBefore": "9999999999",
+                    "nonce": "0x" + ("c4" * 32),
+                },
+            },
+        }
+        raw = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+
+        class _Headers(dict):
+            def get(self, key, default=None):
+                for name, val in self.items():
+                    if str(name).lower() == str(key).lower():
+                        return val
+                return default
+
+        return _Headers({"PAYMENT-SIGNATURE": base64.b64encode(raw).decode("ascii")})
+
+    def _fake_facilitator(self, url, body, headers=None, timeout=20.0):
+        _ = headers, timeout, body
+        if str(url).rstrip("/").endswith("/verify"):
+            return 200, {"isValid": True}
+        if str(url).rstrip("/").endswith("/settle"):
+            return 200, {"success": True, "network": "eip155:8453"}
+        return 404, {"error": "unexpected"}
+
+    def test_paid_require_transparency_never_succeeds_logged_uncheckpointed(self):
+        """SEC-ROUTER-004 / A-14: paid path + require_transparency is not 200."""
+        from unittest.mock import patch
+
+        from live402 import replay
+
+        receipt.configure_signer(None)
+        headers = self._paid_headers()
+        try:
+            with patch("live402.facilitator.post_json", side_effect=self._fake_facilitator):
+                code, body, _extra = handle_route(
+                    {
+                        "need": "weather",
+                        "url": "https://fixture.402signal.local/weather",
+                        "require_transparency": True,
+                    },
+                    headers,
+                    "https://402signal.com/route",
+                )
+            self.assertEqual(code, 503)
+            self.assertNotEqual(code, 200)
+            self.assertIn("transparency", (body.get("error") or "").lower())
+            tr = ((body.get("pq_trust") or {}).get("transparency") or {})
+            self.assertEqual(tr.get("status"), "logged_uncheckpointed")
+            self.assertFalse(body.get("live"))
+        finally:
+            replay.reset()
+            os.environ.pop("CDP_ACCESS_TOKEN", None)
+            os.environ.pop("LOCAL_FREE", None)
+
+    def test_paid_without_gate_allows_logged_uncheckpointed(self):
+        """SEC-ROUTER-004 / A-14: paid 200 does not require a signed leaf."""
+        from unittest.mock import patch
+
+        from live402 import replay
+
+        receipt.configure_signer(None)
+        headers = self._paid_headers()
+        try:
+            with patch("live402.facilitator.post_json", side_effect=self._fake_facilitator):
+                code, body, _extra = handle_route(
+                    {
+                        "need": "weather",
+                        "url": "https://fixture.402signal.local/weather",
+                    },
+                    headers,
+                    "https://402signal.com/route",
+                )
+            self.assertEqual(code, 200)
+            self.assertTrue(body.get("live"))
+            self.assertEqual(body["pq_trust"]["transparency"]["status"], "logged_uncheckpointed")
+        finally:
+            replay.reset()
+            os.environ.pop("CDP_ACCESS_TOKEN", None)
+            os.environ.pop("LOCAL_FREE", None)
+
 
 if __name__ == "__main__":
     unittest.main()

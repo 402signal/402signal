@@ -183,7 +183,12 @@ BAZAAR_MCP = {
                     },
                     "require_transparency": {
                         "type": "boolean",
-                        "description": "If true, paid /route fails when a signed checkpoint receipt cannot be produced.",
+                        "description": (
+                            "If true, paid /route fails when a signed checkpoint "
+                            "receipt cannot be produced. Default false: HTTP 200/503 "
+                            "does not require a durable signed leaf "
+                            "(SEC-ROUTER-004 / A-14)."
+                        ),
                     },
                 },
                 "anyOf": [{"required": ["need"]}, {"required": ["url"]}],

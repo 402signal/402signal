@@ -586,6 +586,7 @@ class HomepageProductTests(unittest.TestCase):
         self.assertNotIn("periodically anchored to Algorand TestNet", html)
         self.assertNotIn("Currently Algorand TestNet", html)
         self.assertIn("Routing does not wait for confirmation.", html)
+        self.assertIn("does not require a durable signed leaf unless require_transparency is set", html)
         self.assertNotIn("may later be anchored", html)
 
     def test_developers_page_renders(self):
@@ -652,6 +653,8 @@ class HomepageProductTests(unittest.TestCase):
         self.assertNotIn("periodically anchored to Algorand TestNet", html)
         self.assertIn("The human-readable transparency view is available at", html)
         self.assertIn('href="/transparency"', html)
+        self.assertIn("does not require a durable signed leaf unless", html)
+        self.assertIn("require_transparency", html)
 
     def test_developers_example_fields_are_in_openapi_route_schema(self):
         spec = json.loads(_get_full(self.port, "/openapi.json")[1])
@@ -985,6 +988,7 @@ class HomepageProductTests(unittest.TestCase):
         self.assertNotIn("quantum-proof", html.lower())
         self.assertIn("Authorization · Falcon-1024 · f1 as native Algorand PQ tx auth for the checkpoint", html)
         self.assertIn("Routing does not wait for confirmation.", html)
+        self.assertIn("does not require a durable signed leaf unless require_transparency is set", html)
         self.assertIn("Later rewriting inconsistent with published checkpoints becomes detectable.", html)
         self.assertNotIn("See the check-first flow on the", html)
         self.assertNotIn("Currently Algorand TestNet", html)

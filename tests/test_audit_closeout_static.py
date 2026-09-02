@@ -129,11 +129,32 @@ class CloseoutStaticTests(unittest.TestCase):
             "docs/github-protection.md",
             "docs/runbooks/mainnet-prelaunch-reset.md",
             "docs/settle-idempotency.md",
+            "docs/route-transparency.md",
         ]
         em = "\u2014"
         for rel in authored:
             text = _read(rel)
             self.assertNotIn(em, text, msg=rel)
+
+    def test_sec_router_004_route_vs_append(self):
+        text = _read("docs/route-transparency.md")
+        self.assertIn("SEC-ROUTER-004", text)
+        self.assertIn("A-14", text)
+        self.assertIn("require_transparency", text)
+        self.assertIn("logged_uncheckpointed", text)
+        self.assertIn("public_vkey", text)
+        self.assertIn("meta.vkey", text)
+        self.assertNotIn("Fly", text)
+        self.assertNotIn("ENABLE", text)
+        route = _read("live402/route.py")
+        self.assertIn("logged_uncheckpointed is never success under require_transparency", route)
+        view = _read("live402/pq/transparency.py")
+        self.assertIn("Epoch env vkey wins over sqlite meta.vkey", view)
+        self.assertIn("store.meta_get(\"vkey\")", view.split("def public_vkey")[1][:500])
+        self.assertIn("trust.vkey()", view.split("def public_vkey")[1][:500])
+        env_first = view.split("def public_vkey")[1].find("trust.vkey()")
+        sqlite_later = view.split("def public_vkey")[1].find("store.meta_get(\"vkey\")")
+        self.assertGreater(sqlite_later, env_first)
 
     def test_sec_router_001_single_machine_ledger(self):
         text = _read("docs/settle-idempotency.md")

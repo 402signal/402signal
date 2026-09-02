@@ -530,6 +530,47 @@ class BoundCheckpointFailClosedTests(unittest.TestCase):
         self.assertEqual(bound["root_hex"], self.root.hex())
         self.assertEqual(bound["href"], "/pq/log/checkpoint/1")
 
+    def test_env_vkey_wins_over_stale_sqlite_meta(self):
+        """SEC-ROUTER-004 / A-14: env wins; stale meta.vkey is not used to bind."""
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+        from live402.pq import checkpoint as ckpt
+        from live402.pq import receipt
+
+        stale = Ed25519PrivateKey.generate()
+        current = Ed25519PrivateKey.generate()
+        stale_vkey = receipt.configure_signer(stale)
+        self.assertEqual(store.meta_get("vkey"), stale_vkey)
+        note = ckpt.sign_checkpoint(ORIGIN, 1, self.root, stale)
+        store.save_checkpoint(1, note)
+        current_pk = current.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+        current_vkey = ckpt.vkey_encode(ORIGIN, current_pk)
+        os.environ["LIVE402_PQ_LOG_VKEY"] = current_vkey
+        self.assertEqual(pq_view.public_vkey(), current_vkey)
+        self.assertNotEqual(pq_view.public_vkey(), stale_vkey)
+        self.assertEqual(store.meta_get("vkey"), stale_vkey)
+        self.assertIsNone(pq_view.bound_checkpoint(self.conf))
+
+    def test_env_vkey_binds_despite_stale_sqlite(self):
+        """SEC-ROUTER-004 / A-14: env-matching signature binds even if sqlite is stale."""
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        from live402.pq import checkpoint as ckpt
+        from live402.pq import receipt
+
+        stale = Ed25519PrivateKey.generate()
+        current = Ed25519PrivateKey.generate()
+        receipt.configure_signer(stale)
+        current_vkey = receipt.configure_signer(current)
+        store.meta_set("vkey", receipt.configure_signer(stale))
+        note = ckpt.sign_checkpoint(ORIGIN, 1, self.root, current)
+        store.save_checkpoint(1, note)
+        os.environ["LIVE402_PQ_LOG_VKEY"] = current_vkey
+        self.assertEqual(pq_view.public_vkey(), current_vkey)
+        self.assertNotEqual(store.meta_get("vkey"), current_vkey)
+        bound = pq_view.bound_checkpoint(self.conf)
+        self.assertIsNotNone(bound)
+        self.assertEqual(bound["size"], 1)
+
 
 class TransparencyPrivacyTests(unittest.TestCase):
     def setUp(self):
