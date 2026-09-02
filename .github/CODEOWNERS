@@ -4,6 +4,7 @@
 /.github/ @ross402signal
 /Dockerfile @ross402signal
 /fly.toml @ross402signal
+/requirements.in @ross402signal
 /requirements.txt @ross402signal
 /live402/server.py @ross402signal
 /live402/route.py @ross402signal

@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DOCKERFILE = (ROOT / "Dockerfile").read_text(encoding="utf-8")
 FLY = (ROOT / "fly.toml").read_text(encoding="utf-8")
 REQ = (ROOT / "requirements.txt").read_text(encoding="utf-8")
+REQ_IN = (ROOT / "requirements.in").read_text(encoding="utf-8")
 EVENTS = (ROOT / "live402" / "pq" / "events.py").read_text(encoding="utf-8")
 RECEIPT = (ROOT / "live402" / "pq" / "receipt.py").read_text(encoding="utf-8")
 
@@ -31,9 +32,15 @@ class CloseoutStaticTests(unittest.TestCase):
         self.assertNotIn("LIVE402_PQ_FALCON_SK", DOCKERFILE)
         self.assertFalse(any(ln.startswith("USER ") for ln in DOCKERFILE.splitlines()))
 
-    def test_cryptography_stays_exact_pin(self):
-        self.assertRegex(REQ.strip(), r"^cryptography==50\.0\.1$")
-        self.assertNotIn("--require-hashes", DOCKERFILE)
+    def test_python_dependencies_are_hash_locked(self):
+        self.assertRegex(REQ_IN.strip(), r"^cryptography==50\.0\.1$")
+        self.assertIn("\ncryptography==50.0.1 \\\n", REQ)
+        self.assertIn("\ncffi==", REQ)
+        self.assertIn("\npycparser==", REQ)
+        self.assertGreaterEqual(REQ.count("--hash=sha256:"), 3)
+        self.assertIn("pip install --no-cache-dir --require-hashes -r requirements.txt", DOCKERFILE)
+        workflow = _read(".github/workflows/test.yml")
+        self.assertIn("pip install --require-hashes -r requirements.txt", workflow)
 
     def test_fly_liveness_and_readiness_checks_and_broadcast_unset(self):
         self.assertIn('path = "/health"', FLY)
