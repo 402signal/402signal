@@ -557,6 +557,7 @@ class HomepageProductTests(unittest.TestCase):
         html = self.how
         self.assertIn("How 402Signal routes a request", html)
         self.assertIn("A route starts with what you need and any constraints you want to enforce.", html)
+        self.assertIn("A route can start from a pinned url, or from need and constraints (discovery).", html)
         self.assertIn(">1 Discover<", html)
         self.assertIn(">2 Check<", html)
         self.assertIn(">3 Apply constraints<", html)
@@ -594,7 +595,9 @@ class HomepageProductTests(unittest.TestCase):
         self.assertIn("402Signal recommends the route. Your application keeps control of its wallet, signs the selected service's payment, and calls the service.", html)
         self.assertIn("<h2>Request</h2>", html)
         self.assertNotIn("Quick start", html)
+        self.assertIn("Pass url to check one specific seller endpoint, or need to discover and rank. Either field is enough; both are allowed.", html)
         self.assertIn('{"need":"erc20 token balance","prefer_network":"base"}', html)
+        self.assertIn('{"url":"https://seller.example/x402"}', html)
         self.assertIn("POST /route", html)
         self.assertIn("Paid live routing check", html)
         self.assertIn("GET /preview", html)
@@ -662,6 +665,10 @@ class HomepageProductTests(unittest.TestCase):
         self.assertIn("selected", compared_props)
         self.assertIn("POST /route", self.devs)
         self.assertIn('{"need":"erc20 token balance","prefer_network":"base"}', self.devs)
+        self.assertIn('{"url":"https://seller.example/x402"}', self.devs)
+        req_schema = spec["paths"]["/route"]["post"]["requestBody"]["content"]["application/json"]["schema"]
+        self.assertIn("url", req_schema["properties"])
+        self.assertIn("need", req_schema["properties"])
 
     def test_listed_on_footer_verified_only(self):
         forbidden = (
