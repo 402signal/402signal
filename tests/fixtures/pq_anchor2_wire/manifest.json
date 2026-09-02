@@ -1,0 +1,15 @@
+{
+  "protocol": "pq-anchor/2",
+  "json_v": 2,
+  "size_version_json": "1",
+  "size_version_json_type": "string",
+  "hmac_canonical_bytes": 380,
+  "hmac_size_version_line": "size_version=1\\n",
+  "reject": {"ok": false, "error": "hmac"},
+  "reject_forbidden_keys": ["signed", "pqsig", "SignedTxn"],
+  "fixture_hmac_token": "fixture-hmac-token-not-a-secret",
+  "extra_secret_required": false,
+  "network": "none",
+  "go_parser_ci": "ross-only-private-signer",
+  "router_test": "tests/test_pq_cross_repo_wire.py"
+}

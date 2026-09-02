@@ -11,6 +11,9 @@ CodeQL also publishes `analyze (python)` and
 `analyze (javascript-typescript)`. Those names appear on the active
 ruleset. This PR does not add or remove required checks.
 
+The `test` job also runs pip-audit on `requirements.txt`. Do not add
+a private-signer secret to this public repo.
+
 Remaining human tightening (optional, admin-only, not this PR):
 
 1. Require CODEOWNERS review for the paths in `.github/CODEOWNERS`.
