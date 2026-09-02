@@ -301,6 +301,9 @@ class HomepageProductTests(unittest.TestCase):
         self.assertIn('class="hero hero-with-visual"', html)
         self.assertIn('src="/hero-routing.png"', html)
         self.assertIn('alt="A highlighted route selected from a network of possible API paths."', html)
+        self.assertIn("PQ Trust", html)
+        self.assertIn("Checkpoints use native Falcon-1024 authorization on Algorand MainNet.", html)
+        self.assertIn('class="hero-trust-note"', html)
         self.assertNotIn("Falcon", _parse(html).h1[0])
 
     def test_old_one_page_sections_gone_from_home(self):
@@ -590,6 +593,12 @@ class HomepageProductTests(unittest.TestCase):
         self.assertIn("GET /transparency", html)
         self.assertIn("Transparency log", html)
         self.assertIn("402Signal settles only its routing fee.", html)
+        self.assertIn("Make routing evidence part of the response", html)
+        self.assertIn('<code>"require_transparency": true</code>', html)
+        self.assertIn("pq_trust.transparency", html)
+        self.assertIn("The route call does not wait for chain confirmation.", html)
+        self.assertIn("It does not authorize or secure the seller payment.", html)
+        self.assertIn('id="pq-trust"', html)
         self.assertNotIn("id=\"copy-curl\"", html)
         self.assertIn('href="/openapi.json"', html)
         self.assertIn('href="/llms.txt"', html)
@@ -1100,7 +1109,8 @@ class HomepageProductTests(unittest.TestCase):
         self.assertIn("Falcon-1024 account", self.transparency)
         self.assertEqual(self.home.lower().count("post-quantum"), 1)
         self.assertNotIn("post-quantum", self.how.lower())
-        self.assertNotIn("post-quantum", self.devs.lower())
+        self.assertIn("PQ Trust", self.devs)
+        self.assertIn("Falcon-1024", self.devs)
         self.assertNotIn("post-quantum", self.catalog.lower())
         self.assertNotIn("post-quantum", self.contact.lower())
         for path, html in self.pages.items():

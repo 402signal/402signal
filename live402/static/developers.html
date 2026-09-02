@@ -78,6 +78,15 @@
         </dl>
       </section>
 
+      <section class="block pq-developer" id="pq-trust">
+        <p class="eyebrow">PQ Trust</p>
+        <h2>Make routing evidence part of the response</h2>
+        <p>Set <code>"require_transparency": true</code> when the route must include a durable log leaf and signed checkpoint. If 402Signal cannot produce that receipt, it fails closed.</p>
+        <p>The response includes the receipt under <code>pq_trust.transparency</code>. Signed checkpoints are anchored on Algorand MainNet with native Falcon-1024 authorization. The route call does not wait for chain confirmation.</p>
+        <p class="pq-boundary"><strong>Scope:</strong> Falcon-1024 authorizes the checkpoint transaction. It does not authorize or secure the seller payment.</p>
+        <p><a href="/transparency">Inspect checkpoints and verification details</a></p>
+      </section>
+
       <section class="block">
         <h2>API and agent endpoints</h2>
         <dl class="checks compact">

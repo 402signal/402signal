@@ -1316,6 +1316,16 @@ a.lookup:link, a.lookup:visited { color: var(--ink); text-decoration: none; }
   color: var(--muted);
   font-size: 13px;
 }
+.hero-trust-note {
+  max-width: 40rem;
+  margin: 18px 0 0;
+  padding: 2px 0 2px 12px;
+  border-left: 2px solid var(--teal);
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.55;
+}
+.hero-trust-note strong { color: var(--teal); }
 .example-card {
   max-width: 680px;
   margin: 0 0 48px;
@@ -1404,6 +1414,11 @@ a.lookup:link, a.lookup:visited { color: var(--ink); text-decoration: none; }
   border-top: 1px solid var(--line);
   font-size: 14px;
 }
+.pq-developer {
+  max-width: 820px;
+  border-left: 3px solid var(--teal);
+}
+.pq-developer > p:not(.eyebrow) { max-width: 48rem; }
 .footer-listings { margin-top: 12px; }
 .footer-listings summary { cursor: pointer; color: var(--muted); }
 .footer-listings .listed-on { margin-top: 10px; }
