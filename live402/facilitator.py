@@ -130,7 +130,9 @@ def _read_capped(fp) -> bytes:
     if raw is None:
         return b""
     if len(raw) > MAX_BODY:
-        return raw[:MAX_BODY]
+        # Do not parse a valid JSON prefix from an oversized response. The
+        # entire response is outside the accepted wire shape.
+        return b""
     return raw
 
 

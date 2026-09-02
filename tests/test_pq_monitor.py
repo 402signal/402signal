@@ -72,7 +72,10 @@ class MonitorSnapshotTests(unittest.TestCase):
         self.assertIn("pq_log_integrity", flags)
         payload = ready.readiness()
         self.assertIn("ok", payload)
-        self.assertEqual(set(payload["checks"]), {"storage", "catalog", "history", "pq_log"})
+        self.assertEqual(
+            set(payload["checks"]),
+            {"storage", "catalog", "history", "pq_log", "replay_ledger"},
+        )
         self.assertNotIn("last_authorized", payload)
         self.assertNotIn("submit_provider", payload)
         self.assertNotIn("last_error", payload)

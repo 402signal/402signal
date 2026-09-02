@@ -292,15 +292,22 @@ def is_public_http_bind(host: str) -> bool:
 
 
 def assert_safe_http_boot(host: str) -> None:
-    """Refuse public production-style servers with LOCAL_FREE or LIVE402_FIXTURE."""
+    """Refuse public production-style servers with any test-support mode."""
     if not is_public_http_bind(host):
         return
-    if not (_env_flag("LOCAL_FREE") or _env_flag("LIVE402_FIXTURE")):
+    if not (
+        _env_flag("LOCAL_FREE")
+        or _env_flag("LIVE402_FIXTURE")
+        or _env_flag("LIVE402_PQ_TEST_SUPPORT")
+    ):
         return
-    if _env_flag("LIVE402_ALLOW_UNSAFE_DEV_MODE"):
+    # The override exists only for a developer binding a local container to
+    # 0.0.0.0. Fly runtime markers make it production regardless of the bind
+    # argument; no override may turn test support on there.
+    if _env_flag("LIVE402_ALLOW_UNSAFE_DEV_MODE") and not on_fly():
         return
     raise SystemExit(
-        "refusing public bind with LOCAL_FREE or LIVE402_FIXTURE; "
+        "refusing public bind with local/test support; "
         "set LIVE402_ALLOW_UNSAFE_DEV_MODE=1 only for local use"
     )
 

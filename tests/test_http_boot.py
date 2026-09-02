@@ -1,4 +1,4 @@
-"""PR1 E: production-style binds refuse LOCAL_FREE / LIVE402_FIXTURE."""
+"""Production-style binds refuse all local/test-support modes."""
 
 from __future__ import annotations
 
@@ -17,11 +17,20 @@ class BootGuardTests(unittest.TestCase):
             for key in (
                 "LOCAL_FREE",
                 "LIVE402_FIXTURE",
+                "LIVE402_PQ_TEST_SUPPORT",
                 "LIVE402_ALLOW_UNSAFE_DEV_MODE",
                 "PORT",
+                "FLY_APP_NAME",
             )
         }
-        for key in ("LOCAL_FREE", "LIVE402_FIXTURE", "LIVE402_ALLOW_UNSAFE_DEV_MODE", "PORT"):
+        for key in (
+            "LOCAL_FREE",
+            "LIVE402_FIXTURE",
+            "LIVE402_PQ_TEST_SUPPORT",
+            "LIVE402_ALLOW_UNSAFE_DEV_MODE",
+            "PORT",
+            "FLY_APP_NAME",
+        ):
             os.environ.pop(key, None)
 
     def tearDown(self):
@@ -47,6 +56,11 @@ class BootGuardTests(unittest.TestCase):
         with self.assertRaises(SystemExit):
             server.assert_safe_http_boot("0.0.0.0")
 
+    def test_public_bind_refuses_pq_test_support(self):
+        os.environ["LIVE402_PQ_TEST_SUPPORT"] = "1"
+        with self.assertRaises(SystemExit):
+            server.assert_safe_http_boot("0.0.0.0")
+
     def test_port_env_is_public(self):
         os.environ["PORT"] = "8080"
         os.environ["LIVE402_FIXTURE"] = "1"
@@ -57,6 +71,13 @@ class BootGuardTests(unittest.TestCase):
         os.environ["LIVE402_FIXTURE"] = "1"
         os.environ["LIVE402_ALLOW_UNSAFE_DEV_MODE"] = "1"
         server.assert_safe_http_boot("0.0.0.0")
+
+    def test_explicit_override_never_allows_fly(self):
+        os.environ["LIVE402_FIXTURE"] = "1"
+        os.environ["LIVE402_ALLOW_UNSAFE_DEV_MODE"] = "1"
+        os.environ["FLY_APP_NAME"] = "402signal"
+        with self.assertRaises(SystemExit):
+            server.assert_safe_http_boot("0.0.0.0")
 
     def test_main_calls_boot_guard(self):
         import inspect
@@ -69,6 +90,7 @@ class BootGuardTests(unittest.TestCase):
         fly = (root / "fly.toml").read_text(encoding="utf-8")
         self.assertNotIn("LIVE402_ALLOW_UNSAFE_DEV_MODE", fly)
         self.assertNotIn("LOCAL_FREE", fly)
+        self.assertNotIn("LIVE402_PQ_TEST_SUPPORT", fly)
         dockerfile = (root / "Dockerfile").read_text(encoding="utf-8")
         self.assertNotIn("LIVE402_ALLOW_UNSAFE_DEV_MODE", dockerfile)
         self.assertNotIn("LOCAL_FREE=1", dockerfile)

@@ -57,6 +57,16 @@ def _pq_log_ok() -> bool:
         return False
 
 
+def _replay_ok() -> bool:
+    """Paid requests require a durable, writable exactly-once ledger."""
+    try:
+        from live402 import replay
+
+        return replay.durable_ready()
+    except Exception:
+        return False
+
+
 def _storage_ok() -> bool:
     """Writable sqlite journals for the three process-local databases."""
     return _catalog_ok() and _history_ok() and _pq_log_sqlite_ok()
@@ -69,5 +79,6 @@ def readiness() -> dict:
         "catalog": _catalog_ok(),
         "history": _history_ok(),
         "pq_log": _pq_log_ok(),
+        "replay_ledger": _replay_ok(),
     }
     return {"ok": all(checks.values()), "checks": checks}
