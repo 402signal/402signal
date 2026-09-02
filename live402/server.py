@@ -44,6 +44,7 @@ STATIC_FILES = {
     "/transparency.js",
     "/favicon.svg",
     "/og.png",
+    "/hero-routing.png",
     "/sitemap.xml",
 }
 # Constant paths only. Never join a request string onto STATIC_DIR.
@@ -54,6 +55,7 @@ _ASSET_PATHS = {
     "/transparency.js": STATIC_DIR / "transparency.js",
     "/favicon.svg": STATIC_DIR / "favicon.svg",
     "/og.png": STATIC_DIR / "og.png",
+    "/hero-routing.png": STATIC_DIR / "hero-routing.png",
     "/sitemap.xml": STATIC_DIR / "sitemap.xml",
 }
 # Process-local volume files. Never HTTP-download, never static, never OpenAPI.
@@ -732,6 +734,7 @@ class Handler(SimpleHTTPRequestHandler):
             "/sitemap.xml",
             "/favicon.svg",
             "/og.png",
+            "/hero-routing.png",
             "/.well-known/security.txt",
         }
         human = self._read_human_html()

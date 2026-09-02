@@ -298,6 +298,9 @@ class HomepageProductTests(unittest.TestCase):
         self.assertIn("route-steps", html)
         self.assertIn('property="og:image" content="https://402signal.com/og.png"', html)
         self.assertIn('rel="icon" href="/favicon.svg"', html)
+        self.assertIn('class="hero hero-with-visual"', html)
+        self.assertIn('src="/hero-routing.png"', html)
+        self.assertIn('alt="A highlighted route selected from a network of possible API paths."', html)
         self.assertNotIn("Falcon", _parse(html).h1[0])
 
     def test_old_one_page_sections_gone_from_home(self):
@@ -1010,11 +1013,24 @@ class HomepageProductTests(unittest.TestCase):
             self.assertNotIn("?v=", source, name)
 
     def test_launch_metadata_sitemap_security_and_human_404(self):
-        for path in ("/favicon.svg", "/sitemap.xml", "/.well-known/security.txt"):
+        for path in (
+            "/favicon.svg",
+            "/sitemap.xml",
+            "/.well-known/security.txt",
+        ):
             status, raw, _hdrs = _get_full(self.port, path)
             self.assertEqual(status, 200, path)
             self.assertTrue(raw, path)
         self.assertGreater((STATIC / "og.png").stat().st_size, 10000)
+        self.assertGreater((STATIC / "hero-routing.png").stat().st_size, 10000)
+        conn = HTTPConnection("127.0.0.1", self.port, timeout=5)
+        conn.request("GET", "/hero-routing.png")
+        image_res = conn.getresponse()
+        image_body = image_res.read()
+        self.assertEqual(image_res.status, 200)
+        self.assertEqual(image_res.getheader("Content-Type"), "image/png")
+        self.assertGreater(len(image_body), 10000)
+        conn.close()
         sitemap = _get_full(self.port, "/sitemap.xml")[1]
         self.assertIn("https://402signal.com/catalog", sitemap)
         robots = _get_full(self.port, "/robots.txt")[1]
