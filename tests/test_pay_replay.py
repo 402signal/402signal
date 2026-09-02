@@ -300,15 +300,66 @@ class ConcurrentReplayTests(unittest.TestCase):
             handle_route(body, headers, "https://402signal.com/route")
         conn = sqlite3.connect(os.environ["LIVE402_REPLAY_DB"])
         try:
-            rows = conn.execute("SELECT fp_hash, outcome_json FROM settle_ledger").fetchall()
+            rows = conn.execute(
+                "SELECT fp_hash, state, outcome_json FROM settle_ledger"
+            ).fetchall()
         finally:
             conn.close()
         self.assertEqual(len(rows), 1)
-        stored_hash, outcome = rows[0]
+        stored_hash, state, outcome = rows[0]
         self.assertEqual(stored_hash, hashlib.sha256(fp.encode("ascii")).hexdigest())
         self.assertNotEqual(stored_hash, fp)
+        self.assertEqual(state, replay.STATE_SETTLED)
         self.assertNotIn(fp, outcome)
+        self.assertNotIn("PAYMENT-SIGNATURE", outcome)
         self.assertIn("UNIQUE", replay._SCHEMA)
+
+    def test_pending_and_unknown_are_non_terminal_no_second_settle(self):
+        pending_fp = "cd" * 32
+        self.assertEqual(replay.begin(pending_fp)[0], "run")
+        self.assertEqual(replay.ledger_state(pending_fp), replay.STATE_PENDING)
+        self.assertIn(replay.ledger_state(pending_fp), replay.NON_TERMINAL_STATES)
+        replay.reset_memory()
+        self.assertEqual(replay.begin(pending_fp)[0], "reject")
+        self.assertEqual(replay.ledger_state(pending_fp), replay.STATE_PENDING)
+
+        unknown_fp = "ef" * 32
+        self.assertEqual(replay.begin(unknown_fp)[0], "run")
+        replay.abandon(unknown_fp)
+        self.assertEqual(replay.ledger_state(unknown_fp), replay.STATE_UNKNOWN)
+        self.assertIn(replay.ledger_state(unknown_fp), replay.NON_TERMINAL_STATES)
+        replay.reset_memory()
+        self.assertEqual(replay.begin(unknown_fp)[0], "reject")
+        self.assertEqual(replay.ledger_state(unknown_fp), replay.STATE_UNKNOWN)
+
+    def test_pending_row_blocks_route_settle(self):
+        settle_calls = []
+
+        def fake_post(url, body, headers=None, timeout=20.0):
+            _ = headers, timeout, body
+            if str(url).rstrip("/").endswith("/verify"):
+                return 200, {"isValid": True}
+            if str(url).rstrip("/").endswith("/settle"):
+                settle_calls.append(1)
+                return 200, {"success": True}
+            return 404, {"error": "unexpected"}
+
+        headers = _headers_for(_payload("pd"))
+        body = {"need": "weather", "url": "https://fixture.402signal.local/weather"}
+        accept = payment.match_accept(
+            payment.extract_payment_payload(headers),
+            payment.payment_required("https://402signal.com/route"),
+        )
+        fp = replay.canonical_fingerprint(payment.extract_payment_payload(headers), accept)
+        self.assertEqual(replay.begin(fp)[0], "run")
+        replay.reset_memory()
+        with patch("live402.facilitator.post_json", side_effect=fake_post):
+            code, _result, _extra = handle_route(
+                body, headers, "https://402signal.com/route"
+            )
+        self.assertEqual(code, 402)
+        self.assertEqual(len(settle_calls), 0)
+        self.assertEqual(replay.ledger_state(fp), replay.STATE_PENDING)
 
 
 if __name__ == "__main__":

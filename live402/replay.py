@@ -1,11 +1,16 @@
-"""Single-machine payment-authorization replay guard.
+"""Single-machine payment-authorization replay guard (SEC-ROUTER-001).
 
 In-memory maps cover same-process inflight waiters and a 120s response
 cache. SHA-256(fingerprint) plus settle outcome persist in sqlite with a
 UNIQUE constraint so restart, TTL expiry, and a second process cannot
-settle the same authorization again. Fail closed on a duplicate begin.
+settle the same authorization again.
 
-Never persist raw payment material. This is not facilitator exactly-once.
+Outcome states: settlement_pending and unknown are non-terminal. They
+fail closed and never authorize a second economic action. settled and
+rejected are terminal and may replay a stored HTTP result.
+
+Never persist raw payment material. Single-machine until a shared
+ledger exists. This is not facilitator exactly-once.
 """
 
 from __future__ import annotations
@@ -26,9 +31,17 @@ WAIT_SLICE = 0.05
 DEFAULT_DB = "/tmp/live402-replay.sqlite"
 VOLUME_DB = "/data/live402-replay.sqlite"
 
+STATE_PENDING = "settlement_pending"
+STATE_UNKNOWN = "unknown"
+STATE_SETTLED = "settled"
+STATE_REJECTED = "rejected"
+NON_TERMINAL_STATES = frozenset({STATE_PENDING, STATE_UNKNOWN})
+TERMINAL_STATES = frozenset({STATE_SETTLED, STATE_REJECTED})
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS settle_ledger (
     fp_hash TEXT NOT NULL,
+    state TEXT NOT NULL,
     outcome_json TEXT,
     created_at REAL NOT NULL,
     CONSTRAINT settle_fp_hash_unique UNIQUE (fp_hash)
@@ -110,10 +123,29 @@ def _connect() -> sqlite3.Connection:
     conn.execute("PRAGMA synchronous=NORMAL")
     conn.executescript(_SCHEMA)
     conn.commit()
+    _migrate_columns(conn)
     _conn = conn
     _conn_path = path
     _chmod_db_files(path)
     return conn
+
+
+def _migrate_columns(conn: sqlite3.Connection) -> None:
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(settle_ledger)").fetchall()}
+    if "state" not in cols:
+        conn.execute(
+            "ALTER TABLE settle_ledger ADD COLUMN state TEXT NOT NULL DEFAULT 'settlement_pending'"
+        )
+        conn.execute(
+            """
+            UPDATE settle_ledger SET state = CASE
+                WHEN outcome_json IS NOT NULL AND outcome_json != '' THEN ?
+                ELSE ?
+            END
+            """,
+            (STATE_SETTLED, STATE_UNKNOWN),
+        )
+        conn.commit()
 
 
 def _close_conn_locked() -> None:
@@ -175,31 +207,38 @@ def _decode_outcome(raw: str) -> tuple | None:
 
 
 def _ledger_lookup(fp_hash: str) -> tuple[str, tuple | None]:
-    """Read a durable row. missing / cached / reject. Fail closed on sqlite errors."""
+    """Read a durable row. missing / cached / reject. Fail closed on sqlite errors.
+
+    Non-terminal states (settlement_pending, unknown) never replay a
+    success and never authorize a second settle.
+    """
     try:
         conn = _connect()
         row = conn.execute(
-            "SELECT outcome_json FROM settle_ledger WHERE fp_hash = ?",
+            "SELECT state, outcome_json FROM settle_ledger WHERE fp_hash = ?",
             (fp_hash,),
         ).fetchone()
     except sqlite3.Error:
         return "reject", None
     if row is None:
         return "missing", None
-    if row[0]:
-        decoded = _decode_outcome(row[0])
+    state, outcome = row
+    if state in NON_TERMINAL_STATES or state not in TERMINAL_STATES:
+        return "reject", None
+    if outcome:
+        decoded = _decode_outcome(outcome)
         if decoded is not None:
             return "cached", decoded
     return "reject", None
 
 
 def _ledger_reserve(fp_hash: str) -> str:
-    """INSERT reservation. run or reject. UNIQUE is the inter-process lock."""
+    """INSERT settlement_pending. run or reject. UNIQUE is the inter-process lock."""
     try:
         conn = _connect()
         conn.execute(
-            "INSERT INTO settle_ledger (fp_hash, outcome_json, created_at) VALUES (?, NULL, ?)",
-            (fp_hash, time.time()),
+            "INSERT INTO settle_ledger (fp_hash, state, outcome_json, created_at) VALUES (?, ?, NULL, ?)",
+            (fp_hash, STATE_PENDING, time.time()),
         )
         conn.commit()
         return "run"
@@ -217,9 +256,10 @@ def _ledger_finish(fp_hash: str, result: tuple, cache: bool) -> None:
     try:
         conn = _connect()
         if cache:
+            state = STATE_SETTLED if result[0] in (200, 503) else STATE_REJECTED
             conn.execute(
-                "UPDATE settle_ledger SET outcome_json = ? WHERE fp_hash = ?",
-                (_encode_outcome(result), fp_hash),
+                "UPDATE settle_ledger SET state = ?, outcome_json = ? WHERE fp_hash = ?",
+                (state, _encode_outcome(result), fp_hash),
             )
         else:
             conn.execute("DELETE FROM settle_ledger WHERE fp_hash = ?", (fp_hash,))
@@ -228,10 +268,14 @@ def _ledger_finish(fp_hash: str, result: tuple, cache: bool) -> None:
         pass
 
 
-def _ledger_release(fp_hash: str) -> None:
+def _ledger_mark_unknown(fp_hash: str) -> None:
+    """Abandon stays non-terminal. Do not delete: no second economic action."""
     try:
         conn = _connect()
-        conn.execute("DELETE FROM settle_ledger WHERE fp_hash = ?", (fp_hash,))
+        conn.execute(
+            "UPDATE settle_ledger SET state = ? WHERE fp_hash = ? AND state IN (?, ?)",
+            (STATE_UNKNOWN, fp_hash, STATE_PENDING, STATE_UNKNOWN),
+        )
         conn.commit()
     except sqlite3.Error:
         pass
@@ -325,10 +369,27 @@ def finish(fp: str, result: tuple, cache: bool) -> None:
 
 
 def abandon(fp: str) -> None:
-    """Release in-flight without caching. Waiters fail closed unless a result was set."""
+    """Release in-flight as unknown. Waiters fail closed. Row stays unique."""
     fp_hash = durable_hash(fp)
     with _lock:
         entry = _inflight.pop(fp, None)
         if entry is not None:
             entry.event.set()
-        _ledger_release(fp_hash)
+        _ledger_mark_unknown(fp_hash)
+
+
+def ledger_state(fp: str) -> str | None:
+    """Persisted settle state for this fingerprint hash. None if missing."""
+    fp_hash = durable_hash(fp)
+    with _lock:
+        try:
+            conn = _connect()
+            row = conn.execute(
+                "SELECT state FROM settle_ledger WHERE fp_hash = ?",
+                (fp_hash,),
+            ).fetchone()
+        except sqlite3.Error:
+            return STATE_UNKNOWN
+    if row is None:
+        return None
+    return str(row[0])
