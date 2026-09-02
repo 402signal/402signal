@@ -53,8 +53,15 @@ size_rule, size_version, snapshot_at
 ```
 
 `size_rule` is exactly `deterministic_falcon_envelope_estimate`.
-`size_version` is exactly the integer `1`. The Go signer requires
-`size_version=1` and fail-closes otherwise.
+JSON `size_version` is the string `"1"` (Go `SizeVersion` is a
+string). The HMAC flatten is still `size_version=1`. The router
+rejects int `1` at `narrow_policy` (no int-to-str coerce).
+
+Router serialization gate (offline, no signer credentials):
+`tests/test_pq_cross_repo_wire.py` and
+`tests/fixtures/pq_anchor2_wire/`. Full Go parser integration runs
+on private signer CI under Ross. Do not add a GitHub secret on this
+public router for signer access.
 Do **not** send an arbitrary txn, unsigned blob, fee, firstValid,
 sender, amount, pk, or sk as top-level keys. Unknown JSON keys are
 rejected.
