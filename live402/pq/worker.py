@@ -92,14 +92,7 @@ def public_anchor() -> dict | None:
     network = algo_anchor.confirmed_anchor_network(conf)
     if network:
         conf["network"] = network
-    else:
-        network = algo_anchor.recorded_network_name(conf)
-        if network:
-            conf["network"] = network
-    if not network:
-        conf["explorer"] = ""
-        return conf
-    conf["explorer"] = algo_anchor.verified_explorer_tx_url(text, network)
+    conf["explorer"] = algo_anchor.verified_explorer_tx_url(text, network) if network else ""
     return conf
 
 

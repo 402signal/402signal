@@ -253,8 +253,8 @@ def confirmed_view() -> dict | None:
     if not conf:
         return None
     txid = str(conf.get("txid") or "").strip()
-    network = algo_anchor.confirmed_anchor_network(conf) or _confirmed_network(conf)
-    explorer = str(conf.get("explorer") or "") or pera_tx_url(txid, network)
+    network = algo_anchor.confirmed_anchor_network(conf)
+    explorer = pera_tx_url(txid, network)
     if explorer and not algo_anchor.explorer_hint_label(explorer):
         explorer = ""
     if network == "mainnet" and "testnet.explorer.perawallet.app" in explorer:
@@ -390,7 +390,7 @@ def _history_row_ok(row: dict) -> dict | None:
     rnd = int(row.get("round") or 0)
     if size < 1 or rnd < 1 or not _looks_like_txid(txid):
         return None
-    network = algo_anchor.confirmed_anchor_network(row) or _confirmed_network(row)
+    network = algo_anchor.confirmed_anchor_network(row)
     explorer = pera_tx_url(txid, network)
     if network == "mainnet" and "testnet.explorer.perawallet.app" in explorer:
         explorer = ""
