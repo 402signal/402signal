@@ -58,7 +58,7 @@ _MAX_LINE = 65536
 # Documented merged signer identity. Not a secret.
 SIGNER_APP = "402signal-pq-signer-mainnet"
 SIGNER_MERGE_SHA = "8a37e601ca223ce30c56d40321069397237e7cef"
-SIGNER_REVIEWED_HEAD = "13eba91d9759f7f65229f2456891d8400488b0e8"
+SIGNER_REVIEWED_HEAD = "cf85a61b171762dd1c63f2e3eb1244b0155bb8cc"
 SIGNER_PROTOCOL = "pq-anchor/3"
 REQUEST_VERSION = 3
 RESPONSE_VERSION = "pq-anchor-response/1"

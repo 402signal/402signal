@@ -545,7 +545,7 @@ class MainNetSignerIsolationTests(unittest.TestCase):
     def test_signer_identity_points_at_merged_production_signer(self):
         self.assertEqual(
             signer_mainnet.SIGNER_REVIEWED_HEAD,
-            "13eba91d9759f7f65229f2456891d8400488b0e8",
+            "cf85a61b171762dd1c63f2e3eb1244b0155bb8cc",
         )
         self.assertEqual(
             signer_mainnet.SIGNER_MERGE_SHA,
