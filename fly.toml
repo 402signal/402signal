@@ -20,20 +20,20 @@ primary_region = "iad"
   min_machines_running = 1
   processes = ["app"]
 
-# Production check stays /health (liveness). Do not silently switch this
-# path. A later authorized deploy may add a second check on /ready
-# (integrity). Proposed snippet is in docs/fly-ready-check.md:
-#   [[http_service.checks]]
-#     grace_period = "10s"
-#     interval = "15s"
-#     method = "GET"
-#     path = "/ready"
-#     timeout = "5s"
+# Keep /health for process liveness and require /ready independently for
+# durable storage/integrity. Both must pass before Fly routes paid traffic.
 [[http_service.checks]]
   grace_period = "10s"
   interval = "15s"
   method = "GET"
   path = "/health"
+  timeout = "5s"
+
+[[http_service.checks]]
+  grace_period = "10s"
+  interval = "15s"
+  method = "GET"
+  path = "/ready"
   timeout = "5s"
 
 [[vm]]

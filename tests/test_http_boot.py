@@ -95,6 +95,12 @@ class BootGuardTests(unittest.TestCase):
         self.assertNotIn("LIVE402_ALLOW_UNSAFE_DEV_MODE", dockerfile)
         self.assertNotIn("LOCAL_FREE=1", dockerfile)
 
+    def test_fly_requires_liveness_and_readiness(self):
+        root = Path(__file__).resolve().parents[1]
+        fly = (root / "fly.toml").read_text(encoding="utf-8")
+        self.assertEqual(fly.count('path = "/health"'), 1)
+        self.assertEqual(fly.count('path = "/ready"'), 1)
+
     def test_is_public_bind_helpers(self):
         self.assertTrue(server.is_public_http_bind("0.0.0.0"))
         self.assertFalse(server.is_public_http_bind("127.0.0.1"))

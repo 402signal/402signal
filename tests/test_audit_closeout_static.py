@@ -35,7 +35,7 @@ class CloseoutStaticTests(unittest.TestCase):
         self.assertRegex(REQ.strip(), r"^cryptography==50\.0\.1$")
         self.assertNotIn("--require-hashes", DOCKERFILE)
 
-    def test_fly_health_check_unchanged_and_broadcast_unset(self):
+    def test_fly_liveness_and_readiness_checks_and_broadcast_unset(self):
         self.assertIn('path = "/health"', FLY)
         self.assertNotIn("LIVE402_PQ_FALCON_BROADCAST", FLY)
         self.assertIn("LIVE402_PQ_FALCON_NETWORK = \"mainnet\"", FLY)
@@ -44,12 +44,12 @@ class CloseoutStaticTests(unittest.TestCase):
         self.assertIn("LIVE402_PQ_LOG_ORIGIN = \"402signal.com/pq/log/mainnet-v1\"", FLY)
         self.assertNotIn("LIVE402_PQ_FALCON_MAINNET_BROADCAST", FLY)
         self.assertNotIn("LIVE402_PQ_FALCON_MAINNET_CANARY", FLY)
-        # Proposed /ready check is comment-only.
+        # /health remains liveness; /ready independently gates durable state.
         active = [
             ln for ln in FLY.splitlines()
             if ln.strip() == 'path = "/ready"' and not ln.lstrip().startswith("#")
         ]
-        self.assertEqual(active, [])
+        self.assertEqual(active, ['  path = "/ready"'])
 
     def test_v1_v2_event_types_not_mutated(self):
         self.assertIn('TYPE_ROUTE_DECISION = "402signal.route_decision.v1"', EVENTS)
