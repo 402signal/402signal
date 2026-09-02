@@ -108,6 +108,42 @@ def same_authorization_policy(existing: dict, *, origin: str, tree_size: int, ro
     )
 
 
+# Exact signer reject codes the operator canary may surface (allowlist).
+_SIGNER_SURFACE_ERRORS = frozenset({"consistency_proof_required"})
+
+
+def _authorized_consistency_floor(size: int) -> int:
+    """Best known authorized floor for RFC 6962 consistency proofs.
+
+    last_confirmed only advances after Falcon/on-chain confirm. With
+    BROADCAST off that stays 0 after TREE_ADVANCE, so
+    consistency_path(0, size) is empty and the signer fail-closes with
+    consistency_proof_required when last_authorized is already at size-1.
+
+    Floor is max(last_confirmed.size, last_authorized.tree_size if a
+    signed blob exists). If still 0 and size > 1 (Falcon never confirmed;
+    TREE_ADVANCE after a prior signer authorize the router may not have
+    persisted), use size-1 so a single-step advance proves against signer
+    last_authorized at size-1. Multi-step gaps without a confirmed or
+    authorized base still need a real floor — do not invent proofs.
+    """
+    prev = int(store.last_confirmed_checkpoint().get("size") or 0)
+    auth = store.last_authorized_checkpoint()
+    if auth and auth.get("signed"):
+        prev = max(prev, int(auth.get("tree_size") or auth.get("size") or 0))
+    if prev == 0 and int(size) > 1:
+        prev = int(size) - 1
+    return prev
+
+
+def _canary_from_signer_error(exc: SignerClientError) -> CanaryError:
+    """Map allowlisted signer reject codes; everything else is unavailable."""
+    code = str(exc).strip()
+    if code in _SIGNER_SURFACE_ERRORS:
+        return CanaryError(code)
+    return CanaryError("signer unavailable")
+
+
 def current_checkpoint_identity() -> dict:
     """Production checkpoint the canary may authorize. Fail closed if unsigned."""
     size = int(store.size() or 0)
@@ -124,8 +160,12 @@ def current_checkpoint_identity() -> dict:
         ckpt.parse_signed_note(note)
     except ValueError as exc:
         raise CanaryError("unsigned checkpoint") from exc
-    prev = int(store.last_confirmed_checkpoint().get("size") or 0)
-    consistency = [node.hex() for node in store.consistency_path(prev, size)]
+    prev = _authorized_consistency_floor(size)
+    if prev >= size:
+        # Same-size re-auth / first path: empty proof.
+        consistency = []
+    else:
+        consistency = [node.hex() for node in store.consistency_path(prev, size)]
     return {
         "origin": origin,
         "tree_size": size,
@@ -307,7 +347,7 @@ def authorize(
                 params=verify_params,
             )
         except SignerClientError as exc:
-            raise CanaryError("signer unavailable") from exc
+            raise _canary_from_signer_error(exc) from exc
         signed = reply["signed"]
     verified = reply.get("verified")
     if not isinstance(verified, dict) or not verified.get("fee"):

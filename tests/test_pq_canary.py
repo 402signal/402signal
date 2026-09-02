@@ -10,8 +10,9 @@ import unittest
 os.environ.setdefault("LIVE402_FIXTURE", "1")
 
 from live402 import payment
-from live402.pq import ORIGIN_MAINNET, algo_anchor, canary, store
+from live402.pq import ORIGIN_MAINNET, algo_anchor, canary, merkle, store
 from live402.pq import checkpoint as ckpt
+from live402.pq.signer_client import SignerClientError
 from tests.pq_test_env import clear_pq_env
 
 _SIG = base64.b64encode(b"\x00" * 4 + b"\x22" * 64).decode("ascii")
@@ -358,6 +359,94 @@ class CanaryStateMachineTests(unittest.TestCase):
         self.assertNotIn("mnemonic", blob)
         self.assertNotIn("named-not-valued", blob)
         self.assertNotIn("private", blob)
+
+
+class CanaryConsistencyFloorTests(unittest.TestCase):
+    """TREE_ADVANCE 1→2 must send a non-empty RFC6962 proof when confirmed=0."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        clear_pq_env()
+        os.environ["LIVE402_PQ_LOG_EPOCH"] = "mainnet-v1"
+        os.environ["LIVE402_PQ_FALCON_NETWORK"] = "mainnet"
+        os.environ["LIVE402_PQ_LOG_ORIGIN"] = ORIGIN_MAINNET
+        os.environ["LIVE402_PQ_LOG_DB"] = os.path.join(self.tmp.name, "pq-log-mainnet.sqlite")
+        os.environ["LIVE402_PQ_FALCON_MAINNET_ADDRESS"] = payment.DEFAULT_PAYTO_ALGORAND
+        store.reset()
+        store.append(b"canary-leaf-1")
+        store.append(b"canary-leaf-2")
+        self.root1 = store.root(1)
+        self.root2 = store.root(2)
+        store.save_checkpoint(1, _signed_note(1, self.root1))
+        store.save_checkpoint(2, _signed_note(2, self.root2))
+        self.addCleanup(self._cleanup)
+
+    def _cleanup(self):
+        clear_pq_env()
+        store.reset()
+        self.tmp.cleanup()
+
+    def test_tree_advance_confirmed_zero_sends_1_to_2_proof(self):
+        self.assertEqual(store.size(), 2)
+        self.assertEqual(int(store.last_confirmed_checkpoint().get("size") or 0), 0)
+        self.assertFalse(store.last_authorized_checkpoint().get("signed"))
+        # Old floor (confirmed-only) produced consistency_path(0, 2) == [].
+        self.assertEqual(store.consistency_path(0, 2), [])
+        ident = canary.current_checkpoint_identity()
+        self.assertEqual(ident["tree_size"], 2)
+        self.assertTrue(ident["consistency"], "size>1 and confirmed=0 must not send []")
+        nodes = [bytes.fromhex(n) for n in ident["consistency"]]
+        self.assertEqual(nodes, store.consistency_path(1, 2))
+        self.assertTrue(merkle.verify_consistency(1, 2, self.root1, self.root2, nodes))
+
+    def test_authorized_signed_blob_is_floor_when_confirmed_zero(self):
+        blob = _mainnet_signed(1, self.root1)
+        store.save_authorized_checkpoint(
+            tree_size=1,
+            origin=ORIGIN_MAINNET,
+            root=self.root1,
+            checkpoint=_signed_note(1, self.root1),
+            request_id="auth-size-1",
+            signed=blob,
+            at=1,
+        )
+        self.assertEqual(int(store.last_confirmed_checkpoint().get("size") or 0), 0)
+        self.assertTrue(store.last_authorized_checkpoint().get("signed"))
+        ident = canary.current_checkpoint_identity()
+        nodes = [bytes.fromhex(n) for n in ident["consistency"]]
+        self.assertEqual(nodes, store.consistency_path(1, 2))
+
+    def test_same_size_authorized_sends_empty_consistency(self):
+        blob = _mainnet_signed(2, self.root2)
+        store.save_authorized_checkpoint(
+            tree_size=2,
+            origin=ORIGIN_MAINNET,
+            root=self.root2,
+            checkpoint=_signed_note(2, self.root2),
+            request_id="auth-size-2",
+            signed=blob,
+            at=1,
+        )
+        ident = canary.current_checkpoint_identity()
+        self.assertEqual(ident["tree_size"], 2)
+        self.assertEqual(ident["consistency"], [])
+
+    def test_first_leaf_empty_consistency(self):
+        store.reset()
+        store.append(b"canary-leaf-1")
+        root = store.root(1)
+        store.save_checkpoint(1, _signed_note(1, root))
+        self.assertEqual(int(store.last_confirmed_checkpoint().get("size") or 0), 0)
+        ident = canary.current_checkpoint_identity()
+        self.assertEqual(ident["tree_size"], 1)
+        self.assertEqual(ident["consistency"], [])
+
+    def test_consistency_proof_required_is_surfaced(self):
+        err = canary._canary_from_signer_error(SignerClientError("consistency_proof_required"))
+        self.assertIsInstance(err, canary.CanaryError)
+        self.assertEqual(str(err), "consistency_proof_required")
+        generic = canary._canary_from_signer_error(SignerClientError("unavailable"))
+        self.assertEqual(str(generic), "signer unavailable")
 
 
 if __name__ == "__main__":

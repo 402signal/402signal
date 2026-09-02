@@ -228,6 +228,56 @@ class MainNetSignerIsolationTests(unittest.TestCase):
         for key in ("fee", "sender", "amount", "txn", "unsigned", "pk", "sk"):
             self.assertNotIn(key, received[0])
 
+    def test_consistency_proof_required_is_surfaced(self):
+        def serve(sock):
+            sock.listen(1)
+            sock.settimeout(2)
+            while not self._stop:
+                try:
+                    conn, _addr = sock.accept()
+                except TimeoutError:
+                    continue
+                except OSError:
+                    return
+                try:
+                    raw = b""
+                    while b"\n" not in raw:
+                        chunk = conn.recv(4096)
+                        if not chunk:
+                            break
+                        raw += chunk
+                    reply = json.dumps(
+                        {"ok": False, "error": "consistency_proof_required"},
+                        separators=(",", ":"),
+                    )
+                    conn.sendall((reply + "\n").encode("utf-8"))
+                finally:
+                    conn.close()
+
+        sock = socket.socket()
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+        self._socks.append(sock)
+        thread = threading.Thread(target=serve, args=(sock,), daemon=True)
+        thread.start()
+        self._threads.append(thread)
+        os.environ["LIVE402_PQ_SIGNER_MAINNET_TOKEN"] = _TOKEN
+        root = b"\x11" * 32
+        with self.assertRaises(signer_mainnet.SignerClientError) as ctx:
+            signer_mainnet.request_signed(
+                origin=ORIGIN_MAINNET,
+                tree_size=2,
+                root=root,
+                consistency=[],
+                checkpoint=_signed_note(2, root),
+                policy=_policy(),
+                host="127.0.0.1",
+                port=port,
+                params={"minFee": 1000, "fee": 0, "lastRound": 1},
+            )
+        self.assertEqual(str(ctx.exception), "consistency_proof_required")
+
     def test_arbitrary_fee_rejected(self):
         root = b"\x11" * 32
         blob = _mainnet_signed(1, root, fee=5000)
