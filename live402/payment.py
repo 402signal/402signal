@@ -1162,16 +1162,27 @@ def _accepted_from_payload(payload: dict) -> dict:
     return out
 
 
-def inbound_payload_version(payload: dict) -> int:
-    """Literal x402Version, else v1 when only maxAmountRequired is present."""
-    accepted = _accepted_from_payload(payload) if isinstance(payload, dict) else {}
-    for obj in (accepted, payload if isinstance(payload, dict) else {}):
+def inbound_payload_version(payload: dict) -> int | None:
+    """Return one unambiguous literal wire version.
+
+    Do not infer a version from amount-field shape and do not ignore an
+    explicitly malformed or conflicting nested version.  The router and the
+    facilitator must classify the same payment payload.
+    """
+    if not isinstance(payload, dict):
+        return None
+    accepted = _accepted_from_payload(payload)
+    seen: list[int] = []
+    for obj in (payload, accepted):
+        if "x402Version" not in obj:
+            continue
         ver = _literal_x402_version(obj.get("x402Version"))
-        if ver is not None:
-            return ver
-    if "maxAmountRequired" in accepted and "amount" not in accepted:
-        return 1
-    return 2
+        if ver is None:
+            return None
+        seen.append(ver)
+    if not seen or any(ver != seen[0] for ver in seen[1:]):
+        return None
+    return seen[0]
 
 
 def inbound_client_network(payload: dict):
@@ -1304,6 +1315,8 @@ def match_accept(payload: dict, required: dict) -> dict | None:
     if claimed != required_url:
         return None
     version = inbound_payload_version(payload)
+    if version is None:
+        return None
     rail = rail_of_observed_network(inbound_client_network(payload), version)
     if not rail:
         return None
@@ -1314,6 +1327,11 @@ def match_accept(payload: dict, required: dict) -> dict | None:
     if client_amount is None:
         return None
     client_token = token_of(accepted)
+    if not client_token:
+        return None
+    client_scheme = accepted.get("scheme")
+    if type(client_scheme) is not str or client_scheme != "exact":
+        return None
     req_ver = _literal_x402_version(required.get("x402Version")) or 2
     for item in required.get("accepts") or []:
         if not isinstance(item, dict):
@@ -1322,6 +1340,8 @@ def match_accept(payload: dict, required: dict) -> dict | None:
         if item_url and item_url != required_url:
             continue
         item_ver = _literal_x402_version(item.get("x402Version")) or req_ver
+        if item.get("scheme") != client_scheme:
+            continue
         if rail_of_observed_network(item.get("network"), item_ver) != rail:
             continue
         if not payto_equal(client_pay, item.get("payTo"), rail):
@@ -1330,10 +1350,11 @@ def match_accept(payload: dict, required: dict) -> dict | None:
         if item_amount is None or item_amount != client_amount:
             continue
         our_token = token_of(item)
-        if client_token and our_token:
-            ct, ot = _norm(client_token), _norm(our_token)
-            if ct != ot and ct not in {"usdc", "usd"} and ot not in {"usdc", "usd"}:
-                continue
+        if not our_token:
+            continue
+        ct, ot = _norm(client_token), _norm(our_token)
+        if ct != ot and ct not in {"usdc", "usd"} and ot not in {"usdc", "usd"}:
+            continue
         return item
     return None
 
@@ -1414,6 +1435,11 @@ def normalize_payload_for_facilitator(payload: dict, requirements: dict) -> dict
     for key in ("scheme", "network", "amount", "asset", "payTo", "maxTimeoutSeconds"):
         if key in requirements:
             accepted[key] = requirements[key]
+            # Some v1 clients duplicate requirement fields at top level. Keep
+            # those fields for compatibility, but never forward a conflicting
+            # value beside the canonical accepted object.
+            if key in out:
+                out[key] = requirements[key]
     extra = dict(accepted.get("extra") or {})
     extra.update(requirements.get("extra") or {})
     accepted["extra"] = extra

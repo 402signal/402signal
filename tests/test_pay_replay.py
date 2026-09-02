@@ -123,6 +123,32 @@ class ReplayFingerprintTests(unittest.TestCase):
         self.assertNotEqual(a, c)
 
 
+class ReplayDurabilityTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self._prev_db = os.environ.get("LIVE402_REPLAY_DB")
+        os.environ["LIVE402_REPLAY_DB"] = os.path.join(self.tmp.name, "replay.sqlite")
+        replay.reset()
+
+    def tearDown(self):
+        replay.reset()
+        if self._prev_db is None:
+            os.environ.pop("LIVE402_REPLAY_DB", None)
+        else:
+            os.environ["LIVE402_REPLAY_DB"] = self._prev_db
+        self.tmp.cleanup()
+
+    def test_wal_uses_full_synchronous_and_is_ready(self):
+        self.assertTrue(replay.durable_ready())
+        conn = replay._connect()
+        self.assertEqual(int(conn.execute("PRAGMA synchronous").fetchone()[0]), 2)
+        self.assertEqual(str(conn.execute("PRAGMA journal_mode").fetchone()[0]).lower(), "wal")
+
+    def test_production_refuses_non_volume_replay_path(self):
+        with patch.dict(os.environ, {"LIVE402_FIXTURE": ""}, clear=False):
+            self.assertFalse(replay.durable_ready())
+
+
 class ConcurrentReplayTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

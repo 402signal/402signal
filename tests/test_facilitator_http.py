@@ -89,6 +89,11 @@ class NoRedirectTests(unittest.TestCase):
 
 
 class BoundedBodyTests(unittest.TestCase):
+    def test_oversized_valid_json_prefix_is_not_accepted(self):
+        prefix = b'{"isValid":true}'
+        raw = prefix + (b" " * (facilitator.MAX_BODY - len(prefix) + 1))
+        self.assertEqual(facilitator._read_capped(io.BytesIO(raw)), b"")
+
     def test_success_and_error_bodies_capped_without_raw_fragment(self):
         huge = b'{"isValid":true,"note":"' + (b"A" * (70 * 1024)) + b'"}'
 

@@ -120,7 +120,10 @@ def _connect() -> sqlite3.Connection:
         _conn_path = None
     conn = sqlite3.connect(path, check_same_thread=False, timeout=5.0)
     conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA synchronous=NORMAL")
+    # This ledger gates a second economic action after process/host failure.
+    # FULL is required: NORMAL may lose the most recent WAL commit on power
+    # loss even though process-crash tests pass.
+    conn.execute("PRAGMA synchronous=FULL")
     conn.executescript(_SCHEMA)
     conn.commit()
     _migrate_columns(conn)
@@ -128,6 +131,54 @@ def _connect() -> sqlite3.Connection:
     _conn_path = path
     _chmod_db_files(path)
     return conn
+
+
+def _test_support() -> bool:
+    return any(
+        (os.environ.get(name) or "").strip() == "1"
+        for name in ("LIVE402_FIXTURE", "LIVE402_PQ_TEST_SUPPORT")
+    )
+
+
+def durable_ready() -> bool:
+    """True when the paid-settlement ledger is writable and durable.
+
+    Production must use the one mounted `/data` ledger configured in
+    `fly.toml`; silently falling back to `/tmp` would reopen settled payment
+    authorizations after a Machine restart. Tests may use isolated temp DBs.
+    """
+    path = db_path()
+    if not _test_support():
+        try:
+            if os.path.realpath(path) != os.path.realpath(VOLUME_DB):
+                return False
+        except (OSError, TypeError, ValueError):
+            return False
+    with _lock:
+        conn = None
+        try:
+            conn = _connect()
+            sync = conn.execute("PRAGMA synchronous").fetchone()
+            journal = conn.execute("PRAGMA journal_mode").fetchone()
+            table = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'settle_ledger'"
+            ).fetchone()
+            conn.execute("BEGIN IMMEDIATE")
+            conn.rollback()
+            return bool(
+                sync
+                and int(sync[0]) == 2
+                and journal
+                and str(journal[0]).lower() == "wal"
+                and table
+            )
+        except (OSError, sqlite3.Error, TypeError, ValueError):
+            try:
+                if conn is not None:
+                    conn.rollback()
+            except Exception:
+                pass
+            return False
 
 
 def _migrate_columns(conn: sqlite3.Connection) -> None:

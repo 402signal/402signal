@@ -77,6 +77,68 @@ class InboundFieldRequiredTests(unittest.TestCase):
         self.assertIsNone(payment.rail_of_observed_network("base", 2))
         self.assertIsNone(payment.match_accept(body, _required()))
 
+    def test_missing_or_nonliteral_version_fails_closed(self):
+        for bad in (None, "2", 2.0, True, 3):
+            body = _payload("vv")
+            if bad is None:
+                body.pop("x402Version", None)
+            else:
+                body["x402Version"] = bad
+            self.assertIsNone(payment.match_accept(body, _required()), bad)
+
+    def test_conflicting_nested_version_fails_closed(self):
+        body = _payload("cv")
+        body["accepted"] = dict(body["accepted"])
+        body["accepted"]["x402Version"] = 1
+        self.assertIsNone(payment.match_accept(body, _required()))
+
+    def test_scheme_is_required_and_exact(self):
+        for bad in (None, "up-to", "Exact", b"exact", True):
+            body = _payload("sc")
+            body["accepted"] = dict(body["accepted"])
+            if bad is None:
+                body["accepted"].pop("scheme", None)
+            else:
+                body["accepted"]["scheme"] = bad
+            self.assertIsNone(payment.match_accept(body, _required()), bad)
+
+    def test_bad_scheme_never_reaches_facilitator(self):
+        body = _payload("sf")
+        body["accepted"] = dict(body["accepted"])
+        body["accepted"]["scheme"] = "up-to"
+        verify_calls = []
+        settle_calls = []
+        with patch(
+            "live402.facilitator.post_json",
+            side_effect=_counting_facilitator(verify_calls, settle_calls),
+        ):
+            code, _result, _extra = handle_route(
+                _weather_body(), _headers_for(body), ROUTE
+            )
+        self.assertEqual(code, 402)
+        self.assertEqual(verify_calls, [])
+        self.assertEqual(settle_calls, [])
+
+    def test_asset_identity_is_required(self):
+        body = _payload("ai")
+        body["accepted"] = dict(body["accepted"])
+        body["accepted"].pop("asset", None)
+        body["accepted"].pop("currency", None)
+        self.assertIsNone(payment.match_accept(body, _required()))
+
+    def test_facilitator_payload_rewrites_legacy_duplicates(self):
+        body = _payload("fd")
+        body["scheme"] = "up-to"
+        body["network"] = "base"
+        body["amount"] = "1"
+        body["asset"] = "wrong"
+        body["payTo"] = OTHER_BASE_PAYTO
+        req = payment.official_requirements(_required()["accepts"][0])
+        out = payment.normalize_payload_for_facilitator(body, req)
+        for key in ("scheme", "network", "amount", "asset", "payTo"):
+            self.assertEqual(out[key], req[key])
+            self.assertEqual(out["accepted"][key], req[key])
+
 
 class TwoSameRailAcceptTests(unittest.TestCase):
     def test_matches_second_same_rail_not_first(self):

@@ -30,5 +30,7 @@ One process tree, one sqlite file. A second machine with its own file
 is not covered until a shared ledger exists. This does not claim
 facilitator exactly-once.
 
-Default path: `/data/live402-replay.sqlite` when `/data` is writable,
-else `/tmp/live402-replay.sqlite`, or `LIVE402_REPLAY_DB`.
+Production requires `/data/live402-replay.sqlite`; `/ready` is false when that
+durable ledger is unavailable. Test support may use an isolated temp path.
+The WAL uses `synchronous=FULL` so a successful reservation commit is not
+silently lost on host power failure.
