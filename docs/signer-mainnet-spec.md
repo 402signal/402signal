@@ -238,7 +238,13 @@ Reject (no SignedTxn) when any of these hold:
 The signer does **not** own AUTHORIZED / SUBMITTED / CONFIRMED. Those
 live on the router log:
 
-- AUTHORIZED: signer returned a SignedTxn (router persists)
+- AUTHORIZED: router persists only after authenticated response
+  provenance (Ross-only signer response-MAC, or official native
+  Falcon verify). `request_signed` HMAC-authenticates the request,
+  not the SignedTxn bytes. Until that binding exists, production
+  `canary.authorize` fail-closes before `persist_authorized`.
+  Fixture `sign_fn` / `LIVE402_FIXTURE` may persist for tests.
+  Already-confirmed checkpoints and read-only trust are unchanged.
 - SEND_ATTEMPTED: router latched expected txid before POST
 - SUBMITTED: router POSTed (signer never does this)
 - CONFIRMED: router fetch+decode+verify of the actual txn

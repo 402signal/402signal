@@ -56,6 +56,9 @@ MIN_FEE = netcfg.MIN_FEE
 MAX_FEE = netcfg.MAX_FEE
 FALCON_F1_PK_LEN = netcfg.FALCON_F1_PK_LEN
 FALCON_F1_SIG_MAX = netcfg.FALCON_F1_SIG_MAX
+FALCON_F1_SIG_MIN = netcfg.FALCON_F1_SIG_MIN
+FALCON_F1_SIG_HEADER = netcfg.FALCON_F1_SIG_HEADER
+FALCON_F1_SIG_SALT_VERSION = netcfg.FALCON_F1_SIG_SALT_VERSION
 ANCHOR_STATUSES = frozenset({"pending", "unavailable"})
 
 TESTNET_NAME = netcfg.TESTNET_NAME
@@ -95,11 +98,12 @@ PQSIG_SCHEME_F1 = "f1"
 # Canonical algokey / go-algorand SignedTxn pqsig wire (protocol.Encode/msgp).
 # Top-level keys: pqsig, txn. pqsig keys: pk, sch, sig; slt is optional
 # (omitempty, often absent when 0). sch is protocol.PQScheme [2]byte, msgpack
-# bin, value b"f1" (Falcon-1024). pk is []byte length 1793. sig is []byte
-# (live compressed ~1233; max 1423). Do not rewrite these fields after
+# bin, value b"f1" (Falcon-1024). pk is []byte length 1793. sig is a
+# variable-length compressed []byte (confirmed tree-4 sample: 1230; max
+# 1423). Do not rewrite these fields after
 # decode. IPC marker pqsig:"present" is not authorization.
 PQSIG_WIRE_SCH = b"f1"
-FALCON_F1_SIG_LIVE = 1233
+FALCON_F1_SIG_FIXTURE = 1230
 _EXCLUSIVE_SIG_KEYS = frozenset({"sig", "multisig", "logicsig", "msig", "lsig"})
 _TXID_RE = re.compile(r"^[A-Z2-7]{52}$")
 _PLACEHOLDER_TXID = frozenset({"", "your_txid", "placeholder", "txid", "none", "null"})
@@ -1185,6 +1189,30 @@ _FORBIDDEN_SIGNED_KEYS = frozenset(
     {"sgnr", "sig", "msig", "lsig", "lsg", "auth-addr", "authAddr", "auth_addr"}
 )
 _FORBIDDEN_TXN_TYPES = frozenset({"axfer", "appl", "acfg", "afrz", "keyreg", "stpf"})
+# Official codec keys for this pq1 pay construction. Unknown keys fail closed.
+_SIGNED_TXN_ALLOWED_KEYS = frozenset({"txn", "pqsig"})
+_TXN_ALLOWED_KEYS = frozenset({"fee", "fv", "lv", "gen", "gh", "note", "rcv", "snd", "type"})
+_TXN_FORBIDDEN_KEYS = frozenset({"close", "rekey", "lx", "grp", "aamt", "xaid", "apid", "arcv"})
+_PQSIG_ALLOWED_KEYS = frozenset({"pk", "sch", "sig", "slt"})
+
+
+def _require_uint(val, *, optional: bool = False, default: int = 0) -> int:
+    """Exact integer. Reject bool (False==0) and other types."""
+    if val is None:
+        if optional:
+            return default
+        raise AnchorError("boolean-as-integer")
+    if isinstance(val, bool) or not isinstance(val, int):
+        raise AnchorError("boolean-as-integer")
+    if val < 0:
+        raise AnchorError("negative txn integer")
+    return val
+
+
+def _reject_unknown_keys(obj: dict, allowed: frozenset, *, label: str) -> None:
+    extra = set(obj) - allowed
+    if extra:
+        raise AnchorError("unknown %s field" % label)
 
 
 def validate_signed_txn(
@@ -1221,36 +1249,47 @@ def validate_signed_txn(
     if not isinstance(obj, dict):
         raise AnchorError("not a signed pq1 txn")
     for key in _FORBIDDEN_SIGNED_KEYS:
-        if key in obj and _nonzero_blob(obj.get(key)):
+        if key in obj:
             raise AnchorError("auth address forbidden")
+    _reject_unknown_keys(obj, _SIGNED_TXN_ALLOWED_KEYS, label="SignedTxn")
     txn = obj.get("txn")
     if not isinstance(txn, dict):
         raise AnchorError("not a signed pq1 txn")
-    tx_type = _ascii_ident(txn.get("type"))
-    if tx_type in _FORBIDDEN_TXN_TYPES or tx_type != "pay":
+    if not isinstance(txn.get("type"), str) or _ascii_ident(txn.get("type")) != "pay":
         raise AnchorError("not a payment")
-    if any(k in txn for k in ("close", "rekey", "lx", "grp", "aamt", "xaid", "apid", "arcv")):
+    if any(k in txn for k in _TXN_FORBIDDEN_KEYS):
         raise AnchorError("not pq1 construction")
-    if _nonzero_blob(txn.get("close")) or _nonzero_blob(txn.get("rekey")):
-        raise AnchorError("rekey/close forbidden")
-    if _nonzero_blob(txn.get("grp")) or _nonzero_blob(txn.get("lx")):
-        raise AnchorError("group/lease forbidden")
-    amt = txn.get("amt")
-    if amt not in (None, 0):
-        raise AnchorError("amount must be 0")
+    # Canonical Algorand codec omits a zero payment amount. Any explicit amt,
+    # including False or numeric zero, is a noncanonical alternate form.
+    if "amt" in txn:
+        raise AnchorError("amount must be canonical zero")
+    _reject_unknown_keys(txn, _TXN_ALLOWED_KEYS, label="txn")
+    pq_raw = obj.get("pqsig")
+    if isinstance(pq_raw, dict):
+        _reject_unknown_keys(pq_raw, _PQSIG_ALLOWED_KEYS, label="pqsig")
+        if not isinstance(pq_raw.get("sch"), (str, bytes, bytearray)):
+            raise AnchorError("falcon authorization missing: bad pqsig envelope")
+        if not isinstance(pq_raw.get("pk"), (bytes, bytearray)):
+            raise AnchorError("falcon authorization missing: bad pqsig envelope")
+        if not isinstance(pq_raw.get("sig"), (bytes, bytearray)):
+            raise AnchorError("falcon authorization missing: bad pqsig envelope")
+        if "slt" in pq_raw:
+            slt = _require_uint(pq_raw.get("slt"))
+            if slt > 255:
+                raise AnchorError("falcon authorization missing: bad pqsig envelope")
     cfg = _network_cfg(expected_network)
     gen = _ascii_ident(txn.get("gen"))
-    if gen != cfg.genesis_id:
+    if not isinstance(txn.get("gen"), str) or gen != cfg.genesis_id:
         raise AnchorError("genesis mismatch")
     gh_raw = txn.get("gh")
-    if gh_raw not in (None, "", b""):
-        if isinstance(gh_raw, (bytes, bytearray)):
-            have_gh = base64.b64encode(bytes(gh_raw)).decode("ascii")
-        else:
-            have_gh = _params_genesis_hash(None, txn)
-        if have_gh and have_gh != cfg.genesis_hash:
-            raise AnchorError("genesis hash mismatch")
-    fee = int(txn.get("fee") or 0)
+    if not isinstance(gh_raw, (bytes, bytearray)):
+        raise AnchorError("genesis hash mismatch")
+    have_gh = base64.b64encode(bytes(gh_raw)).decode("ascii")
+    if have_gh != cfg.genesis_hash:
+        raise AnchorError("genesis hash mismatch")
+    fee = _require_uint(txn.get("fee"))
+    fv = _require_uint(txn.get("fv"))
+    lv = _require_uint(txn.get("lv"))
     canonical = require_canonical
     if canonical is None:
         canonical = cfg.name == MAINNET_NAME
@@ -1261,8 +1300,8 @@ def validate_signed_txn(
         if fee != want_fee:
             raise AnchorError("fee not canonical")
         validate_validity_window(
-            int(txn.get("fv") or 0),
-            int(txn.get("lv") or 0),
+            fv,
+            lv,
             params,
             require_canonical=True,
         )
@@ -1271,32 +1310,40 @@ def validate_signed_txn(
             raise AnchorError("fee out of range")
         try:
             validate_validity_window(
-                int(txn.get("fv") or 0),
-                int(txn.get("lv") or 0),
+                fv,
+                lv,
                 params,
                 require_canonical=False,
             )
         except AnchorError:
             # TestNet fixtures may omit lastRound; still reject broad windows.
-            span = int(txn.get("lv") or 0) - int(txn.get("fv") or 0)
+            span = lv - fv
             if span < 1 or span > MAX_VALIDITY_WINDOW:
                 raise
     addr = (expected_address or falcon_address_for(cfg.name) or "").strip()
     if not addr:
         raise AnchorError("falcon address required")
     try:
+        if not isinstance(txn.get("snd"), (bytes, bytearray)):
+            raise AnchorError("sender/receiver mismatch")
+        if not isinstance(txn.get("rcv"), (bytes, bytearray)):
+            raise AnchorError("sender/receiver mismatch")
         want = algo_tx.decode_address(addr)
-        snd = _field_bytes(txn.get("snd"))
-        rcv = _field_bytes(txn.get("rcv"))
+        snd = bytes(txn.get("snd"))
+        rcv = bytes(txn.get("rcv"))
+    except AnchorError:
+        raise
     except Exception as exc:
         raise AnchorError("sender/receiver mismatch") from exc
     if snd != want or rcv != want:
         raise AnchorError("sender/receiver mismatch")
     try:
         note = txn.get("note")
-        if isinstance(note, str):
-            note = bytes.fromhex(note)
+        if not isinstance(note, (bytes, bytearray)):
+            raise AnchorError("invalid note")
         parsed = decode_note(bytes(note))
+    except AnchorError:
+        raise
     except Exception as exc:
         raise AnchorError("invalid note") from exc
     if parsed["origin_hash"] != origin_hash(expected_origin):
@@ -1326,8 +1373,8 @@ def validate_signed_txn(
         "root": parsed["root"],
         "address": addr,
         "fee": fee,
-        "fv": int(txn.get("fv") or 0),
-        "lv": int(txn.get("lv") or 0),
+        "fv": fv,
+        "lv": lv,
         "txid": expected_txid,
         "network": cfg.name,
         "genesis_id": cfg.genesis_id,
@@ -1810,12 +1857,20 @@ def _scheme_text(sch):
 
 
 def _falcon_f1_shapes_ok(pk: bytes, sig: bytes) -> bool:
-    """Official Falcon-1024 wire sizes. Nonempty is not enough."""
+    """Official Falcon-1024 wire sizes. Nonempty is not enough.
+
+    pk is exactly 1793. A compressed signature needs at least its header and
+    salt-version bytes and may be at most 1423 bytes. These are structural
+    bounds only; authenticated provenance or native verification establishes
+    validity.
+    """
     if not isinstance(pk, (bytes, bytearray)) or not isinstance(sig, (bytes, bytearray)):
         return False
     if len(pk) != FALCON_F1_PK_LEN:
         return False
-    if len(sig) < 1 or len(sig) > FALCON_F1_SIG_MAX:
+    if len(sig) < FALCON_F1_SIG_MIN or len(sig) > FALCON_F1_SIG_MAX:
+        return False
+    if sig[0] != FALCON_F1_SIG_HEADER or sig[1] != FALCON_F1_SIG_SALT_VERSION:
         return False
     return True
 
@@ -1852,7 +1907,10 @@ def _parse_pqsig_envelope(raw):
     ASCII (algokey PQScheme [2]byte → b"f1"); str is used as-is. No
     strip, no str(bytes), no case fold. slt/salt if present is 0-255.
     pk/public-key and sig/signature must be Falcon-1024 shaped: pk is
-    exactly 1793 bytes; sig is 1..1423 bytes (live compressed ~1233).
+    exactly 1793 bytes; sig is FALCON_F1_SIG_MIN..FALCON_F1_SIG_MAX,
+    begins with the compressed-signature header 0xba, and declares salt
+    version 0. The confirmed tree-4 sample is 1230 bytes; the maximum is
+    1423. These are structural checks, not cryptographic verification.
     Nonempty shorter/longer blobs fail. Fail closed on missing, empty,
     f5, F1, padded, or any other scheme. A bare blob (including
     signature.falcon) is not an envelope. The IPC marker

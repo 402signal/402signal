@@ -61,7 +61,8 @@ class DeterministicFeeTests(unittest.TestCase):
         return algo_tx.msgpack_encode(envelope), txn
 
     def test_shorter_actual_sig_still_equals_router_fee(self):
-        short_sig = b"s" * 64
+        short_sig = b"\xba\x00" + b"s" * (algo_anchor.FALCON_F1_SIG_FIXTURE - 2)
+        self.assertGreaterEqual(len(short_sig), algo_anchor.FALCON_F1_SIG_MIN)
         self.assertLess(len(short_sig), algo_anchor.FALCON_F1_SIG_MAX)
         blob, txn = self._signed(3000, 12345, 13345, sig=short_sig)
         self.assertLess(len(blob), algo_anchor.estimate_falcon_authorized_size(txn))
@@ -85,8 +86,8 @@ class DeterministicFeeTests(unittest.TestCase):
         self.assertEqual(out["fee"], want)
 
     def test_router_does_not_shrink_fee_from_real_shorter_sig(self):
-        short_sig = b"s" * 80
-        max_sig = b"S" * algo_anchor.FALCON_F1_SIG_MAX
+        short_sig = b"\xba\x00" + b"s" * (algo_anchor.FALCON_F1_SIG_FIXTURE - 2)
+        max_sig = b"\xba\x00" + b"S" * (algo_anchor.FALCON_F1_SIG_MAX - 2)
         short_blob, txn = self._signed(3000, 12345, 13345, sig=short_sig)
         max_blob, _txn = self._signed(3000, 12345, 13345, sig=max_sig)
         params = self._params(fee=2)

@@ -14,9 +14,10 @@ Does not Fly. Does not set secrets. Does not enable MAINNET_BROADCAST
 or MAINNET_CANARY. Does not print Falcon SK, mnemonic, Ed25519 seed,
 or HMAC token values.
 
---prepare: preflight (all affirmative) → fetch frozen policy → signer
-once → verify → persist AUTHORIZED → print summary / expected txid.
-NO POST.
+--prepare: currently fail-closed before signer dial because signer responses
+are not response-MAC authenticated. After a separately reviewed coordinated
+signer-and-router response binding: preflight → signer once → authenticate →
+verify → persist. NO POST.
 
 --go: SEND already-persisted authorization only. Never silently creates
 a fresh auth.
@@ -205,7 +206,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--prepare",
         action="store_true",
-        help="Fetch frozen policy, authorize once, persist AUTHORIZED, print expected txid. No POST.",
+        help="Currently fail-closed before signer dial until response authentication exists. Never POSTs.",
     )
     parser.add_argument("--summary-only", action="store_true", help="Read-only summary and exit")
     parser.add_argument(

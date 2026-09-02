@@ -36,9 +36,15 @@ PROTOCOL_BASE_MIN = 1000
 FALCON_EXTRA_MIN_MULT = 2
 MIN_FEE = PROTOCOL_BASE_MIN * (1 + FALCON_EXTRA_MIN_MULT)  # 3000
 MAX_FEE = 30000
-# Official Falcon-1024 sizes (Algorand consensus / docs).
+# Official Falcon-1024 wire bounds. Algorand publishes a 1423-byte maximum.
+# Its Falcon CompressedSignature parser documents fewer than two bytes as
+# malformed (header + salt-version cannot be present). This is only a
+# structural lower bound; it is not cryptographic verification.
 FALCON_F1_PK_LEN = 1793
 FALCON_F1_SIG_MAX = 1423
+FALCON_F1_SIG_MIN = 2
+FALCON_F1_SIG_HEADER = 0xBA
+FALCON_F1_SIG_SALT_VERSION = 0
 
 TESTNET_NAME = "testnet"
 MAINNET_NAME = "mainnet"
