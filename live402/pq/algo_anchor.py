@@ -801,6 +801,14 @@ def falcon_address(sender: str | None = None) -> str:
     raw = (sender or "").strip()
     if raw:
         return raw
+    from live402.pq import log_identity
+
+    try:
+        network = log_identity.configured_network() or log_identity.live_network_name()
+    except log_identity.ConfigError:
+        return ""
+    if network == MAINNET_NAME or log_identity.is_production_runtime():
+        return (os.environ.get(MAINNET_ADDRESS_ENV) or "").strip()
     env = (os.environ.get(ADDRESS_ENV) or "").strip()
     if env:
         return env
@@ -825,9 +833,23 @@ def mainnet_signer_configured() -> bool:
 
 
 def signer_material_present(signer_callback=None) -> bool:
-    """6PN token or injected callback. This app does not hold a Falcon SK."""
+    """6PN token or injected callback. This app does not hold a Falcon SK.
+
+    PRODUCTION / MainNet uses the MainNet HMAC only. TestNet
+    LIVE402_PQ_SIGNER_TOKEN is TEST SUPPORT, never a production fallback.
+    """
     if callable(signer_callback):
         return True
+    from live402.pq import log_identity
+
+    try:
+        network = log_identity.configured_network() or log_identity.live_network_name()
+    except log_identity.ConfigError:
+        return False
+    if network == MAINNET_NAME or log_identity.is_production_runtime():
+        return log_identity.mainnet_signer_configured()
+    if not log_identity.is_test_support():
+        return False
     from live402.pq import signer_client
 
     return signer_client.token_configured()
@@ -879,7 +901,12 @@ def submit_allowed(
     LIVE402_PQ_FALCON_BROADCAST=1 plus NETWORK=mainnet plus an unset
     MainNet flag never sends. Signer never reads BROADCAST.
     """
-    if configured_network() != TESTNET_NAME:
+    from live402.pq import log_identity
+
+    try:
+        if configured_network() != TESTNET_NAME:
+            return False
+    except log_identity.ConfigError:
         return False
     gen = txn_genesis_id(txn, params)
     if gen != TESTNET_GENESIS_ID:
@@ -917,14 +944,17 @@ def mainnet_submit_allowed(
     The one-shot canary env is a separate gate on submit_mainnet_canary.
     """
     from live402 import fixtures
+    from live402.pq import log_identity
 
-    if configured_network() != MAINNET_NAME:
+    try:
+        if configured_network() != MAINNET_NAME:
+            return False
+    except log_identity.ConfigError:
         return False
     if not mainnet_broadcast_requested():
         return False
     if fixtures.fixture_mode() and not allow_fixture_send_hook:
         return False
-    from live402.pq import log_identity
     from live402.pq import store as pq_store
 
     try:
@@ -980,6 +1010,34 @@ def testnet_explorer_url(txid: str) -> str:
     if not _looks_like_txid(txid):
         raise AnchorError("invalid confirmed fields")
     return TESTNET_EXPLORER_TX_URL + txid.strip()
+
+
+def recorded_network_name(conf: dict | None) -> str:
+    """Independently recorded network for explorer URLs.
+
+    Env and MainNet secrets never imply a MainNet confirmation.
+    MainNet evidence never yields a TestNet URL. Missing record:
+    TEST SUPPORT may use configured testnet; PRODUCTION suppresses.
+    """
+    if not isinstance(conf, dict):
+        return ""
+    net = str(conf.get("network") or "").strip().lower()
+    gen = str(conf.get("genesis_id") or conf.get("genesisID") or "").strip()
+    if gen == MAINNET_GENESIS_ID or net == MAINNET_NAME:
+        return MAINNET_NAME
+    if gen == TESTNET_GENESIS_ID or net == TESTNET_NAME:
+        return TESTNET_NAME
+    from live402.pq import log_identity
+
+    if log_identity.is_production_runtime():
+        return ""
+    try:
+        live = log_identity.live_network_name()
+    except log_identity.ConfigError:
+        return ""
+    if live == TESTNET_NAME:
+        return TESTNET_NAME
+    return ""
 
 
 def explorer_url(txid: str, network: str | None = None) -> str:
@@ -1276,7 +1334,12 @@ def send_if_allowed(signed: bytes, *, send_fn=None, sender: str | None = None, p
     blob = bytes(signed)
     if blob == PQSIG_MARKER.encode("utf-8") or blob == PQSIG_MARKER.encode("ascii"):
         return None
-    if configured_network() == MAINNET_NAME:
+    from live402.pq import log_identity
+
+    try:
+        if configured_network() == MAINNET_NAME:
+            return None
+    except log_identity.ConfigError:
         return None
     if not submit_allowed(sender=sender, params=params):
         return None

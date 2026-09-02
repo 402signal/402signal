@@ -77,18 +77,20 @@ def snapshot() -> dict:
     conf_size = int(conf.get("size") or 0)
     submitted = bool(auth.get("submitted"))
     submitted_txid = str(auth.get("txid") or "") if submitted else ""
-    epoch = log_identity.configured_epoch()
-    network = algo_anchor.configured_network() or algo_anchor.TESTNET_NAME
     try:
-        submit = algo_anchor.submit_provider(
-            network if network in {algo_anchor.TESTNET_NAME, algo_anchor.MAINNET_NAME} else algo_anchor.TESTNET_NAME
-        )
-        confirm = algo_anchor.confirm_provider(
-            network if network in {algo_anchor.TESTNET_NAME, algo_anchor.MAINNET_NAME} else algo_anchor.TESTNET_NAME
-        )
+        epoch = log_identity.configured_epoch()
+        network = log_identity.live_network_name()
+    except log_identity.ConfigError:
+        epoch = ""
+        network = ""
+    try:
+        if network not in {algo_anchor.TESTNET_NAME, algo_anchor.MAINNET_NAME}:
+            raise algo_anchor.AnchorError("unknown network")
+        submit = algo_anchor.submit_provider(network)
+        confirm = algo_anchor.confirm_provider(network)
     except Exception:
-        submit = {"network": algo_anchor.TESTNET_NAME, "kind": "submit", "host": "", "url": "", "org": ""}
-        confirm = {"network": algo_anchor.TESTNET_NAME, "kind": "confirm", "host": "", "url": "", "org": ""}
+        submit = {"network": network, "kind": "submit", "host": "", "url": "", "org": ""}
+        confirm = {"network": network, "kind": "confirm", "host": "", "url": "", "org": ""}
     ops = ops_state.snapshot()
     flags = ready_flags()
     return {
@@ -222,7 +224,20 @@ def _confirm_reachable(fetch_fn=None) -> dict:
     from live402 import fixtures
     from live402.pq import network as netcfg
 
-    network = algo_anchor.configured_network() or algo_anchor.TESTNET_NAME
+    try:
+        network = log_identity.live_network_name()
+    except log_identity.ConfigError:
+        network = ""
+    if network not in {algo_anchor.TESTNET_NAME, algo_anchor.MAINNET_NAME}:
+        return {
+            "reachable": False,
+            "host": "",
+            "org": "",
+            "probed": False,
+            "auth_header": "",
+            "error": "unknown_network",
+            "contract": "static_provider",
+        }
     confirm = algo_anchor.confirm_provider(network)
     host = confirm.get("host") or ""
     org = confirm.get("org") or ""
@@ -298,9 +313,11 @@ def _falcon_balance(fetch_fn=None) -> dict:
     """Public address balance only. Never logs a secret. None until address exists."""
     from live402 import fixtures
 
-    addr = algo_anchor.falcon_address_for(
-        algo_anchor.configured_network() or algo_anchor.TESTNET_NAME
-    )
+    try:
+        network = log_identity.live_network_name()
+    except log_identity.ConfigError:
+        network = ""
+    addr = algo_anchor.falcon_address_for(network) if network else ""
     if not addr:
         return {"fetched": False, "microalgo": None, "address": ""}
     if fetch_fn is not None:
@@ -328,8 +345,12 @@ def preflight(
     """
     global _last_preflight, _preflight_count
     flags = ready_flags()
-    epoch = log_identity.configured_epoch()
-    network = algo_anchor.configured_network() or algo_anchor.TESTNET_NAME
+    try:
+        epoch = log_identity.configured_epoch()
+        network = log_identity.live_network_name()
+    except log_identity.ConfigError:
+        epoch = ""
+        network = ""
     try:
         tree_size = int(store.size() or 0)
         origin = store.origin() or ORIGIN

@@ -1,8 +1,8 @@
 """Explicit Algorand network configs for Falcon PQ checkpoint anchors.
 
-Both testnet and mainnet exist in code. This PR's production live path
-stays TestNet. MainNet broadcast defaults off. Automatic MainNet submit
-is a later GO and is not enabled here.
+PRODUCTION is MainNet-only. Unset or unknown network fails closed.
+TEST SUPPORT may still name TestNet constants for tests and archive.
+MainNet broadcast defaults off. Automatic MainNet submit stays off.
 
 Submit provider (algod POST) and confirm provider (indexer GET +
 decode + semantic verify) are separate allowlists. Confirmation is

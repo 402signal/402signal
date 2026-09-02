@@ -422,7 +422,10 @@ def meta_set(key: str, value: str) -> None:
 
 
 def origin() -> str:
-    return meta_get("origin") or ORIGIN
+    stored = meta_get("origin")
+    if stored:
+        return stored
+    return log_identity.configured_origin()
 
 
 def size() -> int:
@@ -1058,6 +1061,16 @@ def last_confirmed_checkpoint() -> dict:
         "genesis_id": "",
     }
     raw = meta_get("last_confirmed_checkpoint")
+    empty = {
+        "size": 0,
+        "at": 0,
+        "txid": "",
+        "round": 0,
+        "root": "",
+        "origin": "",
+        "network": "",
+        "genesis_id": "",
+    }
     if not raw:
         return dict(empty)
     try:
@@ -1122,27 +1135,72 @@ def save_confirmed_checkpoint(
         if last_size and size < last_size:
             raise ConflictError("size not monotonic")
         if last_size and size == last_size:
-            same = (
+            same_core = (
                 str(last.get("origin") or "") == want_origin
                 and str(last.get("root") or "") == root_hex
                 and str(last.get("txid") or "") == want_txid
                 and int(last.get("round") or 0) == rnd
             )
-            if same:
-                return last
+            if same_core:
+                have_net = str(last.get("network") or "")
+                have_gen = str(last.get("genesis_id") or "")
+                if have_net == want_network and have_gen == want_genesis:
+                    return last
+                if not have_net and not have_gen and (want_network or want_genesis):
+                    conn.execute(
+                        "UPDATE confirmed_anchors SET network = ?, genesis_id = ? "
+                        "WHERE tree_size = ?",
+                        (want_network, want_genesis, size),
+                    )
+                    payload = dict(last)
+                    payload["network"] = want_network
+                    payload["genesis_id"] = want_genesis
+                    conn.execute(
+                        "INSERT INTO meta(k, v) VALUES ('last_confirmed_checkpoint', ?) "
+                        "ON CONFLICT(k) DO UPDATE SET v = excluded.v",
+                        (json.dumps(payload),),
+                    )
+                    conn.commit()
+                    return last_confirmed_checkpoint()
             raise ConflictError("confirmed checkpoint conflict")
         existing = conn.execute(
-            "SELECT origin, root, txid, confirmed_round FROM confirmed_anchors WHERE tree_size = ?",
+            "SELECT origin, root, txid, confirmed_round, network, genesis_id "
+            "FROM confirmed_anchors WHERE tree_size = ?",
             (size,),
         ).fetchone()
         if existing:
-            same = (
+            have_net = str(existing[4] or "") if len(existing) > 4 else ""
+            have_gen = str(existing[5] or "") if len(existing) > 5 else ""
+            same_core = (
                 str(existing[0] or "") == want_origin
                 and str(existing[1] or "") == root_hex
                 and str(existing[2] or "") == want_txid
                 and int(existing[3] or 0) == rnd
             )
-            if same:
+            if same_core and have_net == want_network and have_gen == want_genesis:
+                return last_confirmed_checkpoint()
+            if same_core and not have_net and not have_gen and (want_network or want_genesis):
+                conn.execute(
+                    "UPDATE confirmed_anchors SET network = ?, genesis_id = ? "
+                    "WHERE tree_size = ?",
+                    (want_network, want_genesis, size),
+                )
+                payload = {
+                    "size": size,
+                    "at": when,
+                    "txid": want_txid,
+                    "round": rnd,
+                    "root": root_hex,
+                    "origin": want_origin,
+                    "network": want_network,
+                    "genesis_id": want_genesis,
+                }
+                conn.execute(
+                    "INSERT INTO meta(k, v) VALUES ('last_confirmed_checkpoint', ?) "
+                    "ON CONFLICT(k) DO UPDATE SET v = excluded.v",
+                    (json.dumps(payload),),
+                )
+                conn.commit()
                 return last_confirmed_checkpoint()
             raise ConflictError("confirmed checkpoint conflict")
         auth = _authorized_row(conn, size)
@@ -1193,13 +1251,27 @@ def list_confirmed_anchors(limit: int = 250) -> list[dict]:
         return []
     with _lock:
         conn = _connect()
-        cur = conn.execute(
-            "SELECT tree_size, origin, root, txid, confirmed_round, at, network, genesis_id "
-            "FROM confirmed_anchors ORDER BY at DESC, tree_size DESC LIMIT ?",
-            (cap,),
-        )
+        try:
+            cur = conn.execute(
+                "SELECT tree_size, origin, root, txid, confirmed_round, at, network, genesis_id "
+                "FROM confirmed_anchors ORDER BY at DESC, tree_size DESC LIMIT ?",
+                (cap,),
+            )
+            fetched = cur.fetchall()
+            wide = True
+        except sqlite3.OperationalError:
+            cur = conn.execute(
+                "SELECT tree_size, origin, root, txid, confirmed_round, at "
+                "FROM confirmed_anchors ORDER BY at DESC, tree_size DESC LIMIT ?",
+                (cap,),
+            )
+            fetched = cur.fetchall()
+            wide = False
         rows = []
-        for tree_size, origin, root, txid, confirmed_round, at, network, genesis_id in cur.fetchall():
+        for row in fetched:
+            tree_size, origin, root, txid, confirmed_round, at = row[:6]
+            network = str(row[6] or "") if wide and len(row) > 6 else ""
+            genesis_id = str(row[7] or "") if wide and len(row) > 7 else ""
             rows.append(
                 {
                     "size": int(tree_size or 0),

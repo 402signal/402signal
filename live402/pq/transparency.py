@@ -41,12 +41,20 @@ PERA_ADDRESS_URL_MAINNET = "https://explorer.perawallet.app/address/"
 def _live_network_name() -> str:
     from live402.pq import log_identity
 
-    return log_identity.live_network_name()
+    try:
+        return log_identity.live_network_name()
+    except log_identity.ConfigError:
+        return ""
 
 
-def _network_label() -> str:
-    """Configured live identity. Never used to label a confirmed explorer link."""
-    return "MainNet" if _live_network_name() == "mainnet" else "TestNet"
+def _network_label(network: str | None = None) -> str:
+    """Live identity label. Unknown never becomes TestNet. Confirmed explorers use _confirmed_network_label."""
+    name = (network or _live_network_name() or "").strip().lower()
+    if name == "mainnet":
+        return "MainNet"
+    if name == "testnet":
+        return "TestNet"
+    return "Algorand"
 
 
 def _confirmed_network_label(conf: dict | None) -> str:
@@ -68,10 +76,17 @@ def _live_origin() -> str:
         return ORIGIN
 
 
-def _pera_address_base() -> str:
-    if _live_network_name() == "mainnet":
+def _confirmed_network(conf: dict | None = None) -> str:
+    return algo_anchor.recorded_network_name(conf)
+
+
+def _pera_address_base(network: str | None = None) -> str:
+    name = (network or _live_network_name() or "").strip().lower()
+    if name == "mainnet":
         return PERA_ADDRESS_URL_MAINNET
-    return PERA_ADDRESS_URL
+    if name == "testnet":
+        return PERA_ADDRESS_URL
+    return ""
 
 
 
@@ -173,7 +188,10 @@ def public_vkey() -> str:
 
 
 def public_falcon_address() -> str:
-    return str(algo_anchor.falcon_address_for(_live_network_name()) or "").strip()
+    name = _live_network_name()
+    if not name:
+        return ""
+    return str(algo_anchor.falcon_address_for(name) or "").strip()
 
 
 def decode_pq1_note(note, origin: str | None = None) -> dict | None:
@@ -236,8 +254,10 @@ def confirmed_view() -> dict | None:
         return None
     txid = str(conf.get("txid") or "").strip()
     network = algo_anchor.confirmed_anchor_network(conf)
-    explorer = str(conf.get("explorer") or "") or pera_tx_url(txid, network)
+    explorer = pera_tx_url(txid, network)
     if explorer and not algo_anchor.explorer_hint_label(explorer):
+        explorer = ""
+    if network == "mainnet" and "testnet.explorer.perawallet.app" in explorer:
         explorer = ""
     return {
         "size": int(conf.get("size") or 0),
@@ -263,15 +283,25 @@ def authorized_lifecycle() -> dict | None:
     if size <= int(conf.get("size") or 0) and worker.public_anchor():
         return None
     submitted = bool(auth.get("submitted")) and _looks_like_txid(str(auth.get("txid") or ""))
+    send_state = str(auth.get("send_state") or "").strip()
+    if send_state == "CONFIRMED":
+        send_state = "SUBMITTED" if submitted else "AUTHORIZED"
+    if send_state == "SEND_ATTEMPTED":
+        status = "SEND_ATTEMPTED"
+    elif submitted or send_state == "SUBMITTED":
+        status = "SUBMITTED"
+    else:
+        status = "AUTHORIZED"
+    labels = {
+        "AUTHORIZED": "AUTHORIZED · awaiting %s confirmation" % _network_label(),
+        "SEND_ATTEMPTED": "SEND_ATTEMPTED · awaiting %s confirmation" % _network_label(),
+        "SUBMITTED": "SUBMITTED · awaiting %s confirmation" % _network_label(),
+    }
     return {
         "size": size,
         "submitted": submitted,
-        "status": "SUBMITTED" if submitted else "AUTHORIZED",
-        "label": (
-            "SUBMITTED · awaiting %s confirmation" % _network_label()
-            if submitted
-            else "AUTHORIZED · awaiting %s confirmation" % _network_label()
-        ),
+        "status": status,
+        "label": labels[status],
     }
 
 
@@ -362,6 +392,8 @@ def _history_row_ok(row: dict) -> dict | None:
         return None
     network = algo_anchor.confirmed_anchor_network(row)
     explorer = pera_tx_url(txid, network)
+    if network == "mainnet" and "testnet.explorer.perawallet.app" in explorer:
+        explorer = ""
     return {
         "size": size,
         "txid": txid,
@@ -492,8 +524,12 @@ def _time(ts_text: str, iso: str) -> str:
     return esc(ts_text)
 
 
-def _ext_link(href: str, label: str) -> str:
+def _ext_link(href: str, label: str, network: str | None = None) -> str:
     hint = algo_anchor.explorer_hint_label(href)
+    if not hint and network:
+        labeled = _network_label(network)
+        if labeled in {"MainNet", "TestNet"}:
+            hint = labeled
     if not href or not hint:
         return ""
     return (
@@ -549,12 +585,13 @@ def _pera_views(model: dict) -> str:
     addr = model["falcon_address"]
     items = []
     if conf and conf.get("explorer"):
-        link = _ext_link(conf["explorer"], "View latest anchor on Pera")
+        link = _ext_link(conf["explorer"], "View latest anchor on Pera", conf.get("network"))
         if link:
             items.append("<li>%s</li>" % link)
-    account = pera_address_url(addr)
+    net = _confirmed_network(conf) if conf else _live_network_name()
+    account = pera_address_url(addr, net)
     if account:
-        link = _ext_link(account, "View Falcon account on Pera")
+        link = _ext_link(account, "View Falcon account on Pera", net)
         if link:
             items.append(
                 "<li>%s. This is the configured Falcon-1024 account. "
@@ -777,7 +814,7 @@ def _history(model: dict) -> str:
     for row in rows:
         span = (" · %s" % row["span"]) if row.get("span") else ""
         when = _time(row["utc"], row["iso"])
-        link = _ext_link(row.get("explorer") or "", abbreviate(row["txid"]))
+        link = _ext_link(row.get("explorer") or "", abbreviate(row["txid"]), row.get("network"))
         if not link:
             link = esc(abbreviate(row["txid"]))
         body.append(

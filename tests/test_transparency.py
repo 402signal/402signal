@@ -577,14 +577,26 @@ class TransparencyHelperTests(unittest.TestCase):
         self.assertNotIn("hex", shown.lower())
 
     def test_pera_and_indexer_urls(self):
-        self.assertEqual(pq_view.pera_tx_url(_TX_A, "testnet"), algo_anchor.TESTNET_EXPLORER_TX_URL + _TX_A)
+        self.assertEqual(
+            pq_view.pera_tx_url(_TX_A, "testnet"),
+            algo_anchor.TESTNET_EXPLORER_TX_URL + _TX_A,
+        )
         self.assertEqual(pq_view.pera_tx_url(_TX_A), "")
+        self.assertEqual(pq_view.pera_tx_url("nope", "testnet"), "")
         self.assertEqual(pq_view.pera_tx_url("nope"), "")
         self.assertEqual(
             pq_view.indexer_tx_url(_TX_A, "testnet"),
             algo_anchor.TESTNET_INDEXER_TXN_URL + _TX_A,
         )
         self.assertEqual(pq_view.indexer_tx_url(_TX_A), "")
+        self.assertEqual(
+            pq_view.pera_tx_url(_TX_A, "mainnet"),
+            algo_anchor.MAINNET_EXPLORER_TX_URL + _TX_A,
+        )
+        self.assertNotIn(
+            "testnet.explorer.perawallet.app",
+            pq_view.pera_tx_url(_TX_A, "mainnet"),
+        )
 
 
 if __name__ == "__main__":

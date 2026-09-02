@@ -1,10 +1,16 @@
 """402Signal PQ1 transparency log (C2SP tiles + RFC 9162 Merkle).
 
-Product-GO for the log in CI/local. Not MainNet GO.
-Falcon SK is not on this app. Router 6PN client is fail-closed unless
-LIVE402_PQ_SIGNER_TOKEN is set. Homepage PQ copy renders only when
-last_confirmed has a real TestNet txid. GET /transparency is the first-party
-read page. Homepage PQ card is injected only when last_confirmed.size > 0.
+PRODUCTION is MainNet-only: epoch mainnet-v1, origin
+402signal.com/pq/log/mainnet-v1, DB /data/pq-log-mainnet.sqlite,
+pq-anchor/2, MainNet Falcon address, MainNet signer HMAC.
+Unset or unknown network fails closed. Automatic anchoring stays off.
+
+TEST SUPPORT (tests/archive) may still use TestNet constants, pq-anchor/1,
+LIVE402_PQ_LOG_SK, and LIVE402_PQ_SIGNER_TOKEN. Those are not a live
+production fallback.
+
+Falcon SK is not on this app. GET /transparency is the first-party read
+page. Homepage PQ card is injected only when last_confirmed.size > 0.
 """
 
 from __future__ import annotations

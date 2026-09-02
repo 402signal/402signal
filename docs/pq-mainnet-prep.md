@@ -6,8 +6,12 @@ This PR prepares MainNet. It does not cut over.
 - MAINNET BROADCAST DEFAULT OFF
 - AUTOMATIC ANCHORING OFF
 
-Production live path stays TestNet (`LIVE402_PQ_FALCON_NETWORK=testnet`,
-`LIVE402_PQ_LOG_DB=/data/pq-log.sqlite`). Website copy stays TestNet.
+PRODUCTION is MainNet-only (`LIVE402_PQ_FALCON_NETWORK=mainnet`,
+`LIVE402_PQ_LOG_EPOCH=mainnet-v1`,
+`LIVE402_PQ_LOG_DB=/data/pq-log-mainnet.sqlite`,
+origin `402signal.com/pq/log/mainnet-v1`). Unset or unknown network
+fails closed. TestNet env names and `/data/pq-log.sqlite` are TEST
+SUPPORT (tests and archive) only. Automatic anchoring stays off.
 Paid `/route` never waits for chain. Public status is CONFIRMED only.
 
 ## Threat-model delta
@@ -61,13 +65,14 @@ log still work. Do not destroy the Falcon key.
 | `LIVE402_PQ_SIGNER_MAINNET_TOKEN` | unset | HMAC token name only. Never a committed value. |
 | `LIVE402_PQ_SIGNER_MAINNET_HOST` | `402signal-pq-signer-mainnet.internal` | 6PN signer host |
 | `LIVE402_PQ_SIGNER_MAINNET_PORT` | `9091` | Never 8080 |
-| `LIVE402_PQ_LOG_EPOCH` | unset (`testnet-v1`) | Exact `testnet-v1` or `mainnet-v1`. Typos error. `NETWORK=mainnet` requires `mainnet-v1` plus MainNet DB, origin, trust v2, Falcon address, and signer. |
-| `LIVE402_PQ_LOG_ORIGIN` | TestNet origin | Override. MainNet default is `402signal.com/pq/log/mainnet-v1` |
+| `LIVE402_PQ_LOG_EPOCH` | `mainnet-v1` in fly.toml | PRODUCTION requires `mainnet-v1`. Unset/unknown fail closed. `testnet-v1` is TEST SUPPORT only. |
+| `LIVE402_PQ_LOG_ORIGIN` | `402signal.com/pq/log/mainnet-v1` | PRODUCTION origin. TestNet origin is TEST SUPPORT / archive only. |
 | `LIVE402_PQ_LOG_SK_MAINNET` | unset | Fresh MainNet Ed25519 log SK only. Code rejects fallback to `LIVE402_PQ_LOG_SK` (`reuse_testnet_sk=false`). Never commit. |
 | `LIVE402_PQ_LOG_VKEY_MAINNET` | unset | Public Ed25519 vkey for the MainNet epoch |
 
-Unchanged live path: `LIVE402_PQ_LOG_DB=/data/pq-log.sqlite`,
-`LIVE402_PQ_FALCON_NETWORK=testnet`, TestNet broadcast unset.
+PRODUCTION live path: `LIVE402_PQ_LOG_DB=/data/pq-log-mainnet.sqlite`,
+`LIVE402_PQ_FALCON_NETWORK=mainnet`, TestNet broadcast unset,
+automatic anchoring off. TestNet sqlite stays archived.
 
 ## Fresh log and trust v2
 

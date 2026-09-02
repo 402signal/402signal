@@ -17,6 +17,7 @@ MAINNET_ENV_KEYS = (
     "LIVE402_PQ_SIGNER_MAINNET_PORT",
     "LIVE402_PQ_LOG_EPOCH",
     "LIVE402_PQ_LOG_ORIGIN",
+    "LIVE402_PQ_TEST_SUPPORT",
     "LIVE402_PQ_LOG_SK",
     "LIVE402_PQ_LOG_SK_MAINNET",
     "LIVE402_PQ_LOG_VKEY",
@@ -33,9 +34,20 @@ MAINNET_ENV_KEYS = (
 
 
 def clear_pq_env() -> None:
-    """Drop MainNet/TestNet PQ identity envs so later tests stay TestNet."""
+    """Drop MainNet/TestNet PQ identity envs.
+
+    Does not arm TEST SUPPORT. Call arm_test_support() when a test
+    needs the archived TestNet path.
+    """
     for key in MAINNET_ENV_KEYS:
         os.environ.pop(key, None)
+
+
+def arm_test_support() -> None:
+    """TEST SUPPORT only. Explicit TestNet identity for tests/archive."""
+    os.environ["LIVE402_PQ_TEST_SUPPORT"] = "1"
+    os.environ.setdefault("LIVE402_PQ_FALCON_NETWORK", "testnet")
+    os.environ.setdefault("LIVE402_PQ_LOG_EPOCH", "testnet-v1")
 
 
 def insert_authorized_fixture(
