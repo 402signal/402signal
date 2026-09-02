@@ -128,11 +128,28 @@ class CloseoutStaticTests(unittest.TestCase):
             "docs/automation-security-boundaries.md",
             "docs/github-protection.md",
             "docs/runbooks/mainnet-prelaunch-reset.md",
+            "docs/settle-idempotency.md",
         ]
         em = "\u2014"
         for rel in authored:
             text = _read(rel)
             self.assertNotIn(em, text, msg=rel)
+
+    def test_sec_router_001_single_machine_ledger(self):
+        text = _read("docs/settle-idempotency.md")
+        self.assertIn("SEC-ROUTER-001", text)
+        self.assertIn("single-machine", text.lower())
+        self.assertIn("shared ledger", text)
+        self.assertIn("settlement_pending", text)
+        self.assertIn("unknown", text)
+        self.assertIn("UNIQUE", text)
+        self.assertIn("SHA-256", text)
+        replay = _read("live402/replay.py")
+        self.assertIn("CONSTRAINT settle_fp_hash_unique UNIQUE", replay)
+        self.assertIn("STATE_PENDING = \"settlement_pending\"", replay)
+        self.assertIn("STATE_UNKNOWN = \"unknown\"", replay)
+        self.assertIn("NON_TERMINAL_STATES", replay)
+        self.assertIn('LIVE402_REPLAY_DB = "/data/live402-replay.sqlite"', FLY)
 
     def test_signer_spec_requires_durable_security_state(self):
         spec = _read("docs/signer-mainnet-spec.md")
