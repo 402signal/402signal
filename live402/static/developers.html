@@ -3,18 +3,21 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Route before you spend</title>
-  <meta name="description" content="POST /route with what you need and any constraints." />
+  <title>402Signal developer guide · POST /route</title>
+  <meta name="description" content="Use POST /route or MCP to search, check, and select an x402 payment route." />
   <link rel="canonical" href="https://402signal.com/developers" />
-  <meta property="og:title" content="Route before you spend" />
-  <meta property="og:description" content="POST /route with what you need and any constraints." />
+  <meta property="og:title" content="402Signal developer guide · POST /route" />
+  <meta property="og:description" content="Use POST /route or MCP to search, check, and select an x402 payment route." />
   <meta property="og:url" content="https://402signal.com/developers" />
   <meta property="og:type" content="website" />
   <meta property="og:site_name" content="402Signal" />
-  <meta name="twitter:card" content="summary" />
-  <meta name="twitter:title" content="Route before you spend" />
-  <meta name="twitter:description" content="POST /route with what you need and any constraints." />
+  <meta property="og:image" content="https://402signal.com/og.png" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="402Signal developer guide · POST /route" />
+  <meta name="twitter:description" content="Use POST /route or MCP to search, check, and select an x402 payment route." />
+  <meta name="twitter:image" content="https://402signal.com/og.png" />
   <meta name="twitter:site" content="@402Signal" />
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
@@ -25,39 +28,66 @@
         <span class="brand-name">402Signal</span>
       </a>
       <nav class="nav" aria-label="Primary">
-        <a href="/">Home</a>
-        <a href="/how">How it works</a>
         <a href="/catalog">Explore</a>
         <a href="/developers" aria-current="page">Developers</a>
         <a href="/transparency">Transparency</a>
+        <a href="https://github.com/402signalhq/402signal" rel="noopener noreferrer">GitHub</a>
       </nav>
     </header>
 
     <main>
       <section class="hero compact">
-        <h1>Route before you spend</h1>
-        <p class="lede">POST /route with what you need and any constraints.</p>
-        <p>An unpaid request returns HTTP 402 for the $0.01 USDC routing fee. After that payment is verified, 402Signal checks candidates and returns the best qualifying route or a typed miss.</p>
-        <p>402Signal recommends the route. Your application keeps control of its wallet, signs the selected service's payment, and calls the service.</p>
+        <p class="eyebrow">Developer guide</p>
+        <h1>Call POST /route</h1>
+        <p class="lede hero-copy">Send what your agent needs and the rules a route must meet. 402Signal searches and checks candidates, then returns one observed payment option or a typed miss.</p>
+        <p class="boundary-line">Your application keeps its wallet, signs the seller payment, and calls the selected service.</p>
+      </section>
+
+      <section class="block quickstart" id="quickstart">
+        <p class="eyebrow">Quick start</p>
+        <h2>Send an unpaid request first</h2>
+        <p>This returns HTTP 402 and a <code>PAYMENT-REQUIRED</code> header with payment options for the $0.01 USDC routing fee.</p>
+        <pre class="code">curl -sS -D - https://402signal.com/route \
+  -H 'Content-Type: application/json' \
+  -d '{"need":"weather data","max_price_usd":0.02}'</pre>
+        <p>Sign one payment option, then retry the same request with <code>PAYMENT-SIGNATURE</code>. A paid request returns HTTP 200 with a route or HTTP 503 with a typed miss.</p>
+      </section>
+
+      <section class="block request-options">
+        <h2>What you can send</h2>
+        <p>Use <code>need</code> to discover and rank services. Use <code>url</code> to check one specific HTTPS endpoint. Either field is enough, and both can be used together.</p>
+        <div class="code-pair">
+          <div><p class="label">Discover and rank</p><pre class="code">{
+  "need": "erc20 token balance",
+  "prefer_network": "base",
+  "max_price_usd": 0.05
+}</pre></div>
+          <div><p class="label">Check one endpoint</p><pre class="code">{
+  "url": "https://seller.example/x402"
+}</pre></div>
+        </div>
+        <p class="note">Hard constraints fail closed when a required value is unknown. 402Signal does not silently relax them.</p>
+      </section>
+
+      <section class="block response-guide">
+        <h2>What comes back</h2>
+        <dl class="checks compact">
+          <div><dt>HTTP 200</dt><dd>A current qualifying target plus the exact observed <code>selected_payment</code> that made it win.</dd></div>
+          <div><dt>HTTP 503</dt><dd>No checked candidate qualified. <code>miss_reason</code> explains why evaluation stopped.</dd></div>
+          <div><dt>Payment boundary</dt><dd>402Signal settles only its routing fee. The caller decides whether to pay and invoke the selected seller.</dd></div>
+        </dl>
       </section>
 
       <section class="block">
-        <h2>Request</h2>
-        <p>Pass url to check one specific seller endpoint, or need to discover and rank. Either field is enough; both are allowed.</p>
-        <pre class="code">{"need":"erc20 token balance","prefer_network":"base"}</pre>
-        <pre class="code">{"url":"https://seller.example/x402"}</pre>
-      </section>
-
-      <section class="block">
-        <h2>Endpoints</h2>
+        <h2>API and agent endpoints</h2>
         <dl class="checks compact">
           <div>
             <dt>POST /route</dt>
-            <dd>Paid live routing check</dd>
+            <dd>Paid search, check, policy, and selection</dd>
           </div>
           <div>
             <dt>GET /preview</dt>
-            <dd>Free catalog preview</dd>
+            <dd>Free discovery search without a new endpoint check</dd>
           </div>
           <div>
             <dt>GET /rails</dt>
@@ -83,9 +113,11 @@
       </section>
 
       <section class="block">
-        <h2>Routing fee</h2>
-        <p>A routing check costs $0.01 USDC.</p>
-        <p>The routing fee pays 402Signal. Any payment required by the selected service is separate and remains under the caller's control.</p>
+        <h2>Use it through MCP</h2>
+        <p>The <code>route</code> tool uses the same payment and routing flow.</p>
+        <pre class="code">POST https://402signal.com/mcp
+
+{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"route","arguments":{"need":"weather data"}}}</pre>
       </section>
 
       <section class="block quiet">
@@ -93,6 +125,7 @@
           <a href="/openapi.json">OpenAPI</a>
           <a href="/mcp.json">MCP</a>
           <a href="/llms.txt">llms.txt</a>
+          <a href="/.well-known/x402.json">x402 discovery</a>
           <a href="https://github.com/402signalhq/402signal" rel="noopener noreferrer">GitHub</a>
         </p>
       </section>
@@ -103,6 +136,7 @@
       <p>
         <a href="https://github.com/402signalhq/402signal" rel="noopener noreferrer">GitHub</a>
         <a href="https://x.com/402Signal" rel="noopener noreferrer">@402Signal</a>
+        <a href="/how">How it works</a>
         <a href="/openapi.json">OpenAPI</a>
         <a href="/mcp.json">MCP</a>
         <a href="/transparency">Transparency</a>

@@ -89,20 +89,22 @@ class TransparencyPageTests(unittest.TestCase):
         csp = hdrs.get("content-security-policy") or ""
         self.assertIn("script-src 'self'", csp)
         self.assertIn("connect-src 'self'", csp)
-        self.assertIn("Verifiable routing history", html)
+        self.assertIn("Routing history you can verify", html)
         self.assertIn("402Signal records routing evidence in an append-only Merkle log.", html)
         self.assertNotIn("See the check-first flow on the", html)
         self.assertNotIn('class="signal-flow"', html)
         self.assertIn("It is not a merchant payment.", html)
         self.assertIn("Falcon-1024 account", html)
         self.assertIn("does not make seller payments on Base, Solana, or Algorand post-quantum secure", html)
-        self.assertEqual(
-            html.count("The anchor protects the historical checkpoint. It does not make seller payments on Base, Solana, or Algorand post-quantum secure."),
-            1,
+        boundary = (
+            "the Falcon account authorizes a checkpoint transaction. It is not a merchant "
+            "payment. It does not make seller payments on Base, Solana, or Algorand "
+            "post-quantum secure."
         )
+        self.assertEqual(html.count(boundary), 1)
         self.assertNotIn("does not make Base or Solana merchant payments post-quantum secure", html)
         self.assertNotIn("PQ-safe", html)
-        self.assertIn("Published checkpoints make later changes to the recorded history detectable.", html)
+        self.assertIn("Later changes to that earlier history become detectable.", html)
         self.assertIn("Awaiting anchor", html)
         self.assertNotIn("id=\"pq-testnet\"", html)
         self.assertNotIn(_LIVE_TX, html)
@@ -115,7 +117,7 @@ class TransparencyPageTests(unittest.TestCase):
         self.assertNotIn("AUTHORIZATION", html)
         self.assertNotIn("SINCE ANCHOR", html)
         self.assertIn("Falcon-1024 · f1", html)
-        self.assertIn("<title>Verifiable routing history</title>", html)
+        self.assertIn("<title>Routing history you can verify</title>", html)
         self.assertNotIn("\N{EM DASH}", html)
         self.assertIn("canonical", html)
         self.assertIn("https://402signal.com/transparency", html)
@@ -132,8 +134,8 @@ class TransparencyPageTests(unittest.TestCase):
     def test_homepage_omits_pq_card_without_confirmed(self):
         html, _hdrs = self._html("/")
         self.assertIn('id="pq-log"', html)
-        self.assertIn("Verifiable routing history", html)
-        self.assertIn("402Signal commits routing evidence to an append-only log.", html)
+        self.assertIn("A routing history you can check", html)
+        self.assertIn("402Signal records routing evidence in an append-only Merkle log.", html)
         self.assertIn('class="pq-trust"', html)
         self.assertNotIn("pq-testnet", html)
         self.assertNotIn("Latest confirmed Tree", html)
@@ -146,7 +148,7 @@ class TransparencyPageTests(unittest.TestCase):
         static = (STATIC / "index.html").read_text(encoding="utf-8")
         self.assertNotIn("Trust the history, too.", static)
         self.assertNotIn("PQ transparency · TestNet", static)
-        self.assertIn("Verifiable routing history", static)
+        self.assertIn("A routing history you can check", static)
         self.assertNotIn(_LIVE_TX, static)
         self.assertEqual(worker.homepage_pq_html(), "")
 
@@ -159,7 +161,7 @@ class TransparencyPageTests(unittest.TestCase):
         self.assertEqual(status_html, 200)
         self.assertEqual(body_html, "")
         html, _ = self._html("/transparency.html")
-        self.assertIn("Verifiable routing history", html)
+        self.assertIn("Routing history you can verify", html)
 
     def test_human_pages_not_dynamic_filename(self):
         self.assertNotIn("/transparency", HUMAN_PAGES)
@@ -173,18 +175,15 @@ class TransparencyPageTests(unittest.TestCase):
         html, _hdrs = self._html("/")
         self.assertIn('id="pq-log"', html)
         self.assertIn("Algorand MainNet", html)
-        self.assertIn("Verifiable routing history", html)
-        self.assertIn("append-only log", html)
+        self.assertIn("A routing history you can check", html)
+        self.assertIn("append-only Merkle log", html)
         self.assertIn("Awaiting anchor", html)
         self.assertNotIn('class="pq-chip is-anchored"', html)
         self.assertNotIn("Latest confirmed Tree", html)
         self.assertNotIn("Round 66860001", html)
-        self.assertIn(
-            "Published checkpoints make later changes to the recorded history detectable.",
-            html,
-        )
+        self.assertIn("Later changes to the published history can be detected.", html)
         self.assertNotIn("PQ-safe", html)
-        self.assertIn("View transparency", html)
+        self.assertIn("Inspect the latest checkpoint", html)
         self.assertNotIn("Latest checkpoint · Tree", html)
         self.assertIn('href="/transparency"', html)
         self.assertNotIn("View TestNet transaction", html)

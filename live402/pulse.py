@@ -1158,6 +1158,8 @@ def dashboard_html(payload: dict | None = None) -> str:
   <title>Example lookups · 402Signal</title>
   <meta name="description" content="Example lookups from public x402 discovery sources. Candidates, not current verification." />
   <link rel="canonical" href="https://402signal.com/dashboard" />
+  <meta name="robots" content="noindex, nofollow" />
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>

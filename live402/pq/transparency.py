@@ -1048,10 +1048,13 @@ def _chrome_head(title: str, description: str, canonical: str) -> str:
         '  <meta property="og:url" content="%s" />\n'
         '  <meta property="og:type" content="website" />\n'
         '  <meta property="og:site_name" content="402Signal" />\n'
-        '  <meta name="twitter:card" content="summary" />\n'
+        '  <meta property="og:image" content="https://402signal.com/og.png" />\n'
+        '  <meta name="twitter:card" content="summary_large_image" />\n'
         '  <meta name="twitter:title" content="%s" />\n'
         '  <meta name="twitter:description" content="%s" />\n'
+        '  <meta name="twitter:image" content="https://402signal.com/og.png" />\n'
         '  <meta name="twitter:site" content="@402Signal" />\n'
+        '  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />\n'
         '  <link rel="stylesheet" href="/styles.css" />\n'
         '  <script src="/transparency.js" defer></script>\n'
         "</head>\n"
@@ -1082,7 +1085,7 @@ def render_html() -> str:
 
 def page_html() -> str:
     model = page_model()
-    title = "Verifiable routing history"
+    title = "Routing history you can verify"
     description = (
         "402Signal records routing evidence in an append-only Merkle log. "
         "Each checkpoint is signed by 402Signal."
@@ -1162,8 +1165,8 @@ def _hero_lede(model: dict) -> str:
     return (
         "        <p class=\"lede\">402Signal records routing evidence in an "
         "append-only Merkle log.</p>\n"
-        "        <p>Each checkpoint is signed by 402Signal. Checkpoints can also "
-        "be anchored to Algorand MainNet using a Falcon-1024 account.</p>\n"
+        "        <p>The status below shows the current log and its latest confirmed "
+        "Algorand MainNet checkpoint.</p>\n"
     )
 
 
@@ -1201,21 +1204,30 @@ def _ross_status_panel(model: dict) -> str:
 
 def _how_verification_works() -> str:
     return (
-        '<section class="block" id="how-verification-works">\n'
-        "  <h2>How verification works</h2>\n"
-        "  <p>Published checkpoints make later changes to the recorded history "
-        "detectable.</p>\n"
-        "  <p>Each checkpoint is signed by 402Signal. A confirmed Algorand MainNet "
-        "anchor can be compared to that signed checkpoint.</p>\n"
+        '<section class="block transparency-explainer" id="how-verification-works">\n'
+        "  <h2>What the checkpoint proves</h2>\n"
+        '  <div class="decision-grid">\n'
+        '    <article class="decision-card evidence">\n'
+        "      <h3>History integrity</h3>\n"
+        "      <p>A confirmed checkpoint can be compared with the published log. "
+        "Later changes to that earlier history become detectable.</p>\n"
+        "    </article>\n"
+        '    <article class="decision-card history">\n'
+        "      <h3>Checkpoint authorization</h3>\n"
+        "      <p>A native Falcon-1024 account authorizes the Algorand checkpoint "
+        "transaction.</p>\n"
+        "    </article>\n"
+        "  </div>\n"
         "</section>\n"
     )
 
 
 def _anchor_boundary() -> str:
     return (
-        '<section class="block" id="anchor-boundary">\n'
-        "  <p>The anchor protects the historical checkpoint. It does not make "
-        "seller payments on Base, Solana, or Algorand post-quantum secure.</p>\n"
+        '<section class="scope-note" id="anchor-boundary">\n'
+        "  <strong>Scope:</strong> the Falcon account authorizes a checkpoint "
+        "transaction. It is not a merchant payment. It does not make seller payments "
+        "on Base, Solana, or Algorand post-quantum secure.\n"
         "</section>\n"
     )
 
@@ -1224,23 +1236,26 @@ def _main(model: dict) -> str:
     return (
         '      <section class="hero compact">\n'
         + _hero_badge(model)
-        + "        <h1>Verifiable routing history</h1>\n"
+        + '        <p class="eyebrow">PQ Trust</p>\n'
+        + "        <h1>Routing history you can verify</h1>\n"
         + _hero_lede(model)
         + "      </section>\n"
         + _integrity_banner(model)
         + "      <h2>Current status</h2>\n"
         + _ross_status_panel(model)
-        + _anchor_boundary()
         + _how_verification_works()
+        + _anchor_boundary()
         + _confirmed_card(model)
         + _current_vs_anchored(model)
         + _history(model)
         + _verification_details(model)
-        + '      <section class="block">\n'
-        + "        <h2>Historical TestNet archive</h2>\n"
-        + "        <p>The prior public TestNet log shard remains available for reference. "
+        + '      <details class="tech-details">\n'
+        + "        <summary>Historical TestNet archive</summary>\n"
+        + '        <div class="tech-body">\n'
+        + "          <p>The prior public TestNet log shard remains available for reference. "
         + "It is not the live production MainNet log.</p>\n"
-        + "      </section>\n"
+        + "        </div>\n"
+        + "      </details>\n"
         + '      <details class="tech-details" id="what-is-published">\n'
         + "        <summary>What is published?</summary>\n"
         + '        <div class="tech-body">\n'

@@ -3,18 +3,21 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>How 402Signal routes a request</title>
-  <meta name="description" content="A route starts with what you need and any constraints you want to enforce." />
+  <title>How 402Signal routes x402 requests</title>
+  <meta name="description" content="How 402Signal finds, checks, and selects an x402 payment route." />
   <link rel="canonical" href="https://402signal.com/how" />
-  <meta property="og:title" content="How 402Signal routes a request" />
-  <meta property="og:description" content="A route starts with what you need and any constraints you want to enforce." />
+  <meta property="og:title" content="How 402Signal routes x402 requests" />
+  <meta property="og:description" content="How 402Signal finds, checks, and selects an x402 payment route." />
   <meta property="og:url" content="https://402signal.com/how" />
   <meta property="og:type" content="website" />
   <meta property="og:site_name" content="402Signal" />
-  <meta name="twitter:card" content="summary" />
-  <meta name="twitter:title" content="How 402Signal routes a request" />
-  <meta name="twitter:description" content="A route starts with what you need and any constraints you want to enforce." />
+  <meta property="og:image" content="https://402signal.com/og.png" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="How 402Signal routes x402 requests" />
+  <meta name="twitter:description" content="How 402Signal finds, checks, and selects an x402 payment route." />
+  <meta name="twitter:image" content="https://402signal.com/og.png" />
   <meta name="twitter:site" content="@402Signal" />
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
@@ -25,48 +28,45 @@
         <span class="brand-name">402Signal</span>
       </a>
       <nav class="nav" aria-label="Primary">
-        <a href="/">Home</a>
-        <a href="/how" aria-current="page">How it works</a>
         <a href="/catalog">Explore</a>
         <a href="/developers">Developers</a>
         <a href="/transparency">Transparency</a>
+        <a href="https://github.com/402signalhq/402signal" rel="noopener noreferrer">GitHub</a>
       </nav>
     </header>
 
     <main>
       <section class="hero compact">
-        <h1>How 402Signal routes a request</h1>
-        <p class="lede">A route starts with what you need and any constraints you want to enforce.</p>
-        <p>A route can start from a pinned url, or from need and constraints (discovery).</p>
+        <p class="eyebrow">Routing flow</p>
+        <h1>What happens during a route check</h1>
+        <p class="lede hero-copy">Start with a capability or a specific URL. Add the limits your agent must follow.</p>
       </section>
 
       <section class="block">
         <dl class="checks compact">
           <div>
-            <dt>1 Discover</dt>
-            <dd>402Signal searches supported x402 discovery sources for possible matches.</dd>
+            <dt>1. Find candidates</dt>
+            <dd>402Signal searches supported x402 sources, or starts with the URL you supplied.</dd>
           </div>
           <div>
-            <dt>2 Check</dt>
-            <dd>Candidate endpoints are called before selection. 402Signal reads the payment requirements they return now.</dd>
+            <dt>2. Check endpoints</dt>
+            <dd>Candidate endpoints are called before selection. 402Signal reads the x402 payment requirements they return now.</dd>
           </div>
           <div>
-            <dt>3 Apply constraints</dt>
-            <dd>Network, amount, latency, invocation requirements, and other requested constraints are applied to the observed options.</dd>
+            <dt>3. Apply your rules</dt>
+            <dd>Network, price, latency, invocation requirements, and other limits are applied to the observed options.</dd>
           </div>
           <div>
-            <dt>4 Select</dt>
-            <dd>402Signal ranks the qualifying options and returns the best match.</dd>
+            <dt>4. Return a decision</dt>
+            <dd>402Signal returns the strongest qualifying option. If none qualify, it returns a typed reason.</dd>
           </div>
           <div>
-            <dt>5 Execute</dt>
-            <dd>Your application decides whether to use the route. It keeps control of the wallet, signs the seller payment, and calls the service.</dd>
-          </div>
-          <div>
-            <dt>When nothing matches</dt>
-            <dd>402Signal returns a typed miss with the reason evaluation stopped.</dd>
+            <dt>5. Caller executes</dt>
+            <dd>Your application decides whether to use the route. It keeps the wallet, signs the seller payment, and calls the service.</dd>
           </div>
         </dl>
+        <p class="scope-note"><strong>Scope:</strong> a live result means the endpoint returned a usable x402 payment offer during the check. It is not a guarantee about the seller's paid output.</p>
+        <p><a class="btn" href="/developers">Call POST /route</a></p>
       </section>
     </main>
 
@@ -75,6 +75,7 @@
       <p>
         <a href="https://github.com/402signalhq/402signal" rel="noopener noreferrer">GitHub</a>
         <a href="https://x.com/402Signal" rel="noopener noreferrer">@402Signal</a>
+        <a href="/how" aria-current="page">How it works</a>
         <a href="/openapi.json">OpenAPI</a>
         <a href="/mcp.json">MCP</a>
         <a href="/transparency">Transparency</a>

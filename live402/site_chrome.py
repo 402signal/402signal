@@ -8,16 +8,16 @@ CONTACT_EMAIL = "ross@402signal.com"
 CONTACT_MAILTO = "mailto:ross@402signal.com"
 
 NAV = (
-    ("/", "Home"),
-    ("/how", "How it works"),
     ("/catalog", "Explore"),
     ("/developers", "Developers"),
     ("/transparency", "Transparency"),
+    ("https://github.com/402signalhq/402signal", "GitHub"),
 )
 
 FOOTER = (
     ("https://github.com/402signalhq/402signal", "GitHub", True),
     ("https://x.com/402Signal", "@402Signal", True),
+    ("/how", "How it works", False),
     ("/openapi.json", "OpenAPI", False),
     ("/mcp.json", "MCP", False),
     ("/transparency", "Transparency", False),
@@ -44,7 +44,11 @@ def header_html(current: str = "") -> str:
     links = []
     for href, label in NAV:
         cur = ' aria-current="page"' if current == href else ""
-        links.append('        <a href="%s"%s>%s</a>' % (esc(href), cur, esc(label)))
+        rel = ' rel="noopener noreferrer"' if href.startswith("https://") else ""
+        links.append(
+            '        <a href="%s"%s%s>%s</a>'
+            % (esc(href), rel, cur, esc(label))
+        )
     return (
         '    <header class="site">\n'
         '      <a class="brand" href="/">\n'

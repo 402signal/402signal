@@ -671,7 +671,7 @@ class SignerClientProtocolTests(unittest.TestCase):
         self.assertNotIn("View TestNet transaction", text)
         self.assertNotIn("placeholder", text.lower())
         self.assertNotIn("YOUR_TXID", text)
-        self.assertIn("Verifiable routing history", text)
+        self.assertIn("A routing history you can check", text)
         self.assertIn("Awaiting anchor", text)
         self.assertNotIn("PQ Trust", text)
         self.assertNotIn("PQ transparency", text)
