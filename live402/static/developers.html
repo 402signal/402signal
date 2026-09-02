@@ -300,8 +300,8 @@
           <div class="tech-body">
             <p><code>POST /validate</code> returns readiness, claimed vs observed, and flags. Never a binary healthy flag. Unpaid probes are GET first, then POST empty JSON only if GET was not a live 402 and POST is justified. Catalog-declared seller bodies are never POSTed. Required-body misses are <code>unsafe_to_probe</code>. DNS is resolved once and the TCP/TLS connection is pinned to those SSRF-checked public IPs with TLS SNI and HTTP Host set to the original hostname.</p>
             <p><code>GET /attestation</code> is a public sha256 of a recent 402signal_observed probe batch. It is a hash of that batch, not an on-chain proof.</p>
-            <p>402Signal maintains a public append-only transparency log at <code>/pq/log/checkpoint</code> (also <code>/pq/log/checkpoint/latest</code>) and <code>/pq/log/tile/*</code>.</p>
-            <p>Production log identity is Algorand MainNet. Awaiting first confirmed MainNet checkpoint. Native Falcon-1024 (f1) authorization. MainNet Falcon broadcasting is not enabled.</p>
+            <p>402Signal maintains a public append-only PQ Trust log at <code>/pq/log/checkpoint</code> (also <code>/pq/log/checkpoint/latest</code>) and <code>/pq/log/tile/*</code>.</p>
+            <p>PQ Trust is the public name for this transparency layer. Production log identity is Algorand MainNet. Awaiting first confirmed MainNet checkpoint. Native Falcon-1024 (f1) authorization. MainNet Falcon broadcasting is not enabled.</p>
             <p>Historical TestNet archive: the prior public TestNet log shard remains available for reference; it is not the live production MainNet log.</p>
             <p>The Algorand transaction authorizes a transparency-log checkpoint. It is not a merchant payment, and paid <code>/route</code> does not wait for blockchain confirmation.</p>
             <p>The human-readable transparency view is available at <a href="/transparency">/transparency</a>.</p>

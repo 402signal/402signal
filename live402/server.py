@@ -960,10 +960,11 @@ def default_port() -> int:
 
 
 def boot_optional_log_signer() -> None:
-    """Load LIVE402_PQ_LOG_SK into memory if set. Never generate a key.
+    """Load the epoch Ed25519 log SK into memory if set. Never generate a key.
 
-    Malformed secret fails closed (no signer). /route still serves.
-    Never logs or prints the secret.
+    TestNet reads LIVE402_PQ_LOG_SK. MainNet reads LIVE402_PQ_LOG_SK_MAINNET
+    only. Malformed secret fails closed (no signer). /route still serves.
+    Never logs or prints the secret. Falcon SK is never loaded here.
     """
     from live402.pq import receipt as pq_receipt
 
@@ -971,7 +972,15 @@ def boot_optional_log_signer() -> None:
 
 
 def boot_http_process() -> None:
-    """HTTP process boot: log signer only. No Algorand SK load."""
+    """HTTP process boot: production PQ identity, then log signer.
+
+    PRODUCTION fail-closed: unset/unknown network never becomes TestNet.
+    Automatic MainNet anchoring stays off. No Algorand SK load.
+    """
+    from live402.pq import log_identity
+
+    if log_identity.is_production_runtime():
+        log_identity.require_production_boot()
     boot_optional_log_signer()
 
 

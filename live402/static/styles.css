@@ -555,6 +555,8 @@ a.lookup:link, a.lookup:visited { color: var(--ink); text-decoration: none; }
   font-size: 11px;
   letter-spacing: 0.08em;
   color: var(--muted);
+  overflow-wrap: break-word;
+  max-width: 100%;
 }
 .flow-emphasis .flow-kicker { color: var(--fox); }
 .flow-title {
@@ -562,8 +564,9 @@ a.lookup:link, a.lookup:visited { color: var(--ink); text-decoration: none; }
   font-family: Georgia, "Iowan Old Style", "Palatino Linotype", Palatino, serif;
   font-size: 17px;
   line-height: 1.35;
-  overflow-wrap: anywhere;
-  word-break: break-word;
+  overflow-wrap: break-word;
+  word-break: normal;
+  hyphens: manual;
 }
 .flow-detail {
   margin: 0;
@@ -621,7 +624,7 @@ a.lookup:link, a.lookup:visited { color: var(--ink); text-decoration: none; }
   border-left: 7px solid var(--fox);
 }
 
-.pq-testnet {
+.pq-trust {
   margin: 40px 0 0;
   padding: 20px 22px 18px;
   background: var(--panel);
@@ -639,16 +642,16 @@ a.lookup:link, a.lookup:visited { color: var(--ink); text-decoration: none; }
   padding: 4px 10px;
   margin: 0 0 12px;
 }
-.pq-testnet h2 {
+.pq-trust h2 {
   margin: 0 0 10px;
   font-size: 22px;
 }
-.pq-testnet p { color: var(--muted); }
-.pq-testnet .pq-evidence {
+.pq-trust p { color: var(--muted); }
+.pq-trust .pq-evidence {
   color: var(--ink);
   font-size: 14px;
 }
-.pq-testnet .btn { margin-top: 8px; }
+.pq-trust .btn { margin-top: 8px; }
 
 .status-grid,
 .pq-status {
@@ -1141,11 +1144,13 @@ a.lookup:link, a.lookup:visited { color: var(--ink); text-decoration: none; }
   .result-sides { grid-template-columns: 1fr; }
   .flow,
   .flow-four,
-  .signal-row {
+  .signal-row,
+  .signal-row.flow-four {
     grid-template-columns: 1fr;
     grid-template-rows: auto 22px auto 22px auto;
   }
-  .flow-four {
+  .flow-four,
+  .signal-row.flow-four {
     grid-template-rows: auto 22px auto 22px auto 22px auto;
   }
   .flow-conn {
@@ -1178,6 +1183,9 @@ a.lookup:link, a.lookup:visited { color: var(--ink); text-decoration: none; }
   }
   .flow-box {
     padding: 14px 14px 16px;
+  }
+  .flow-kicker {
+    letter-spacing: 0.04em;
   }
   .flow-title {
     font-size: 15px;
@@ -1223,7 +1231,7 @@ a.lookup:link, a.lookup:visited { color: var(--ink); text-decoration: none; }
   .status-grid,
   .pq-status { grid-template-columns: 1fr 1fr; padding: 14px 12px; }
   .pq-decode > div { grid-template-columns: 1fr; }
-  .pq-testnet { padding: 16px 14px 14px; }
+  .pq-trust { padding: 16px 14px 14px; }
   .confirm-card { padding: 16px 14px 14px; grid-template-columns: 1fr; }
   .nav { gap: 8px 12px; font-size: 14px; }
 }

@@ -90,6 +90,7 @@ class TransparencyPageTests(unittest.TestCase):
         self.assertIn("script-src 'self'", csp)
         self.assertIn("connect-src 'self'", csp)
         self.assertIn("Verify the transparency log", html)
+        self.assertIn("PQ Trust is 402Signal's append-only transparency layer", html)
         self.assertNotIn("See the check-first flow on the", html)
         self.assertNotIn('class="signal-flow"', html)
         self.assertIn("It is not a merchant payment.", html)
@@ -127,6 +128,9 @@ class TransparencyPageTests(unittest.TestCase):
         html, _hdrs = self._html("/")
         self.assertIn('id="pq-log"', html)
         self.assertIn("Verifiable routing history", html)
+        self.assertIn("PQ Trust is 402Signal's append-only transparency layer", html)
+        self.assertIn('class="pq-trust"', html)
+        self.assertNotIn("pq-testnet", html)
         self.assertNotIn("Latest confirmed Tree", html)
         self.assertNotIn("Trust the history, too.", html)
         self.assertNotIn("View TestNet transaction", html)
@@ -573,14 +577,26 @@ class TransparencyHelperTests(unittest.TestCase):
         self.assertNotIn("hex", shown.lower())
 
     def test_pera_and_indexer_urls(self):
-        self.assertEqual(pq_view.pera_tx_url(_TX_A, "testnet"), algo_anchor.TESTNET_EXPLORER_TX_URL + _TX_A)
+        self.assertEqual(
+            pq_view.pera_tx_url(_TX_A, "testnet"),
+            algo_anchor.TESTNET_EXPLORER_TX_URL + _TX_A,
+        )
         self.assertEqual(pq_view.pera_tx_url(_TX_A), "")
+        self.assertEqual(pq_view.pera_tx_url("nope", "testnet"), "")
         self.assertEqual(pq_view.pera_tx_url("nope"), "")
         self.assertEqual(
             pq_view.indexer_tx_url(_TX_A, "testnet"),
             algo_anchor.TESTNET_INDEXER_TXN_URL + _TX_A,
         )
         self.assertEqual(pq_view.indexer_tx_url(_TX_A), "")
+        self.assertEqual(
+            pq_view.pera_tx_url(_TX_A, "mainnet"),
+            algo_anchor.MAINNET_EXPLORER_TX_URL + _TX_A,
+        )
+        self.assertNotIn(
+            "testnet.explorer.perawallet.app",
+            pq_view.pera_tx_url(_TX_A, "mainnet"),
+        )
 
 
 if __name__ == "__main__":

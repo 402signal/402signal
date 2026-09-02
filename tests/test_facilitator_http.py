@@ -154,6 +154,11 @@ class OfficialRailsTests(unittest.TestCase):
         self.assertEqual(facilitator.endpoints_for(""), ("", ""))
         self.assertEqual(facilitator.endpoints_for("sepolia"), ("", ""))
         self.assertEqual(facilitator.endpoints_for(None), ("", ""))
+        unknown = {"network": "sepolia"}
+        self.assertEqual(facilitator.verify({}, unknown).error, "unknown_payment_network")
+        self.assertEqual(facilitator.settle({}, unknown).error, "unknown_payment_network")
+        self.assertFalse(facilitator.verify({}, unknown).ok)
+        self.assertFalse(facilitator.settle({}, {}).ok)
 
 
 if __name__ == "__main__":

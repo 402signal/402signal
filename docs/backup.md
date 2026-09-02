@@ -6,10 +6,14 @@ Tooling is implemented. Scheduled Fly backups are **not** claimed active.
 
 - catalog (claims)
 - history (observed probes)
-- pq-log (historical TestNet archive; not the live production log)
-- pq-log-mainnet (live production MainNet epoch `mainnet-v1`; do not copy TestNet leaves into it)
+- pq-log-mainnet (PRODUCTION append-only transparency log)
+- pq-log (archived TestNet shard; TEST SUPPORT only; do not copy leaves into MainNet)
 
-The live production file is `/data/pq-log-mainnet.sqlite`. The TestNet archive `/data/pq-log.sqlite` stays in place. Do not delete it. Do not copy TestNet leaves into the MainNet file.
+The archived TestNet file `/data/pq-log.sqlite` stays in place. Do not
+delete it. PRODUCTION uses `/data/pq-log-mainnet.sqlite` with a distinct
+tree. That MainNet file starts empty after the Ross-only pre-launch
+reset (`docs/runbooks/mainnet-prelaunch-reset.md`). Do not copy TestNet
+or 2-leaf test leaves into it.
 
 One machine. One writer. Do not attach a second process to the same files.
 

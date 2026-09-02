@@ -69,18 +69,20 @@ class CloseoutStaticTests(unittest.TestCase):
         self.assertIn("LIVE402_PQ_LOG_SK_MAINNET", readme)
         self.assertIn("`mainnet` in fly.toml", readme)
         self.assertIn("/data/pq-log-mainnet.sqlite", readme)
+        self.assertIn("JSON `GET /route`", readme)
+        self.assertIn("share the same in-memory limiter", readme)
         self.assertNotIn("currently TestNet", readme)
         self.assertNotIn("Falcon construction is TestNet-only", readme)
         self.assertNotIn("It is **not** MainNet-anchored", readme)
         self.assertNotIn("Production can turn the log ON by setting Fly secret `LIVE402_PQ_LOG_SK`", readme)
         self.assertNotIn("`testnet` in fly.toml", readme)
-        self.assertIn("live production MainNet epoch `mainnet-v1`", backup)
+        self.assertIn("PRODUCTION append-only transparency log", backup)
         self.assertIn("/data/pq-log-mainnet.sqlite", backup)
         self.assertNotIn("live TestNet append-only transparency log", backup)
-        self.assertIn("Production live identity is", network)
-        self.assertIn("MainNet epoch mainnet-v1", network)
+        self.assertIn("PRODUCTION is MainNet-only", network)
         self.assertNotIn("production live path\nstays TestNet", network)
-        self.assertIn("Production log identity is Algorand MainNet epoch mainnet-v1", init)
+        self.assertIn("PRODUCTION is MainNet-only", init)
+        self.assertIn("epoch mainnet-v1", init)
         self.assertNotIn("last_confirmed has a real TestNet txid", init)
         self.assertNotIn("\u2014", backup)
         self.assertNotIn("\u2014", network.split('"""')[1] if '"""' in network else "")
@@ -90,6 +92,9 @@ class CloseoutStaticTests(unittest.TestCase):
         home = _read("live402/static/index.html")
         self.assertIn("Algorand MainNet log · awaiting first confirmed checkpoint", home)
         self.assertIn("Production log identity is Algorand MainNet", home)
+        self.assertIn("PQ Trust is 402Signal's append-only transparency layer", home)
+        self.assertIn('class="pq-trust"', home)
+        self.assertNotIn("pq-testnet", home)
         self.assertNotIn("Signed checkpoints are periodically anchored to Algorand MainNet", home)
         self.assertNotIn("Currently Algorand TestNet", home)
         self.assertNotIn("quantum-proof", home.lower())
@@ -97,6 +102,7 @@ class CloseoutStaticTests(unittest.TestCase):
         trans = _read("live402/pq/transparency.py")
         self.assertIn("Algorand MainNet log · awaiting first", trans)
         self.assertIn("Production log identity is Algorand MainNet", trans)
+        self.assertIn("PQ Trust is 402Signal's append-only transparency layer", trans)
         self.assertNotIn("Currently Algorand TestNet", trans)
         self.assertIn("Awaiting first confirmed", trans)
         self.assertIn("Historical TestNet archive", trans)
@@ -144,6 +150,9 @@ class CloseoutStaticTests(unittest.TestCase):
             "docs/pq-recovery.md",
             "docs/pq-first-production-event.md",
             "docs/backup.md",
+            "docs/automation-security-boundaries.md",
+            "docs/github-protection.md",
+            "docs/runbooks/mainnet-prelaunch-reset.md",
         ]
         em = "\u2014"
         for rel in authored:

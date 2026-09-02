@@ -24,7 +24,8 @@ router restarts before POST:
 - Recover the exact blob when size, origin, root, and signed-note match
 - Do not re-dial the signer
 - Do not mark CONFIRMED
-- TestNet POST still requires `LIVE402_PQ_FALCON_BROADCAST=1`
+- TEST SUPPORT TestNet POST still requires `LIVE402_PQ_FALCON_BROADCAST=1`
+- PRODUCTION never uses that flag and never auto-sends
 
 ## C. Submitted, not confirmed
 
@@ -47,7 +48,7 @@ signed-note:
 
 ## E. Fresh MainNet identity
 
-After cutover prep:
+After the Ross-only reset in `docs/runbooks/mainnet-prelaunch-reset.md`:
 
 - TestNet tree N stays N on `/data/pq-log.sqlite`
 - MainNet tree starts at 0 on `/data/pq-log-mainnet.sqlite`

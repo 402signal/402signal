@@ -211,6 +211,8 @@ def _request_body(payload: dict, accept: dict) -> dict:
 
 def verify(payload: dict, accept: dict, timeout: float | None = None) -> FacilitatorResult:
     rail = payment.rail_of_accept(accept)
+    if rail is None:
+        return FacilitatorResult(ok=False, error="unknown_payment_network")
     verify_url, _ = endpoints_for(rail)
     cap = VERIFY_TIMEOUT if timeout is None else max(0.05, float(timeout))
     result = _call(rail, verify_url, _request_body(payload, accept), cap)
@@ -231,6 +233,8 @@ def verify(payload: dict, accept: dict, timeout: float | None = None) -> Facilit
 
 def settle(payload: dict, accept: dict, timeout: float | None = None) -> FacilitatorResult:
     rail = payment.rail_of_accept(accept)
+    if rail is None:
+        return FacilitatorResult(ok=False, error="unknown_payment_network")
     _, settle_url = endpoints_for(rail)
     cap = SETTLE_TIMEOUT if timeout is None else max(0.05, float(timeout))
     result = _call(rail, settle_url, _request_body(payload, accept), cap)
