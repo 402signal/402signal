@@ -68,7 +68,7 @@ log still work. Do not destroy the Falcon key.
 | `LIVE402_PQ_LOG_EPOCH` | `mainnet-v1` in fly.toml | PRODUCTION requires `mainnet-v1`. Unset/unknown fail closed. `testnet-v1` is TEST SUPPORT only. |
 | `LIVE402_PQ_LOG_ORIGIN` | `402signal.com/pq/log/mainnet-v1` | PRODUCTION origin. TestNet origin is TEST SUPPORT / archive only. |
 | `LIVE402_PQ_LOG_SK_MAINNET` | unset | Fresh MainNet Ed25519 log SK only. Code rejects fallback to `LIVE402_PQ_LOG_SK` (`reuse_testnet_sk=false`). Never commit. |
-| `LIVE402_PQ_LOG_VKEY_MAINNET` | unset | Public Ed25519 vkey for the MainNet epoch |
+| `LIVE402_PQ_LOG_VKEY_MAINNET` | unset | Public Ed25519 vkey for the MainNet epoch. If set with `LIVE402_PQ_LOG_SK_MAINNET`, must exactly match the SK-derived C2SP vkey (fail closed; env is not overwritten). If SK is set and VKEY is unset, boot writes the derived vkey. If SK is unset, there is no MainNet signer. |
 
 PRODUCTION live path: `LIVE402_PQ_LOG_DB=/data/pq-log-mainnet.sqlite`,
 `LIVE402_PQ_FALCON_NETWORK=mainnet`, TestNet broadcast unset,
@@ -87,7 +87,10 @@ automatic anchoring off. TestNet sqlite stays archived.
 - Code enforces `reuse_testnet_sk=false`: MainNet epoch and
   `NETWORK=mainnet` load `LIVE402_PQ_LOG_SK_MAINNET` only. Silent
   fallback to `LIVE402_PQ_LOG_SK` (or the same public key in both
-  envs) raises `SignerConfigError`.
+  envs) raises `SignerConfigError`. If `LIVE402_PQ_LOG_VKEY_MAINNET`
+  is already set, it must exactly equal the C2SP vkey derived from
+  `LIVE402_PQ_LOG_SK_MAINNET`. Mismatch raises `SignerConfigError`
+  and does not overwrite the staged VKEY.
 
 ## Fees, providers, recovery
 

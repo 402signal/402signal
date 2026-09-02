@@ -15,10 +15,11 @@ from unittest.mock import patch
 os.environ.setdefault("LIVE402_FIXTURE", "1")
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-from cryptography.hazmat.primitives.serialization import Encoding, NoEncryption, PrivateFormat
+from cryptography.hazmat.primitives.serialization import Encoding, NoEncryption, PrivateFormat, PublicFormat
 
 from live402 import server
-from live402.pq import events, receipt, store
+from live402.pq import ORIGIN_MAINNET, events, receipt, store
+from live402.pq import checkpoint as ckpt
 from live402.route import handle_route
 from tests.pq_test_env import clear_pq_env
 
@@ -258,19 +259,91 @@ class LogSkEnvTests(unittest.TestCase):
         self.assertIn("reuse_testnet_sk", str(ctx.exception))
         self.assertIsNone(receipt.current_signer())
 
-    def test_mainnet_epoch_loads_distinct_mainnet_sk(self):
-        other = os.urandom(32).hex()
+    def _c2sp_vkey(self, seed_hex: str, origin: str = ORIGIN_MAINNET) -> str:
+        """Ephemeral public C2SP vkey only. Never logs the seed."""
+        key = Ed25519PrivateKey.from_private_bytes(bytes.fromhex(seed_hex))
+        pk = key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+        return ckpt.vkey_encode(origin, pk)
+
+    def _arm_mainnet_epoch(self) -> None:
         os.environ["LIVE402_PQ_LOG_EPOCH"] = "mainnet-v1"
         os.environ["LIVE402_PQ_LOG_DB"] = os.path.join(self.tmp.name, "pq-log-mainnet.sqlite")
         store.reset()
+        receipt.configure_signer(None)
+
+    def test_mainnet_epoch_loads_distinct_mainnet_sk(self):
+        other = os.urandom(32).hex()
+        self._arm_mainnet_epoch()
         os.environ["LIVE402_PQ_LOG_SK"] = self.hex_sk
         os.environ["LIVE402_PQ_LOG_SK_MAINNET"] = other
+        os.environ.pop("LIVE402_PQ_LOG_VKEY_MAINNET", None)
         vkey = receipt.load_signer_from_env()
         self.assertTrue(vkey)
         self.assertIn("402signal.com/pq/log/mainnet-v1", vkey)
         self.assertNotIn(self.hex_sk, vkey)
         self.assertNotIn(other, vkey)
         self._assert_secret_absent(vkey)
+        # SK set and VKEY unset: boot writes the derived vkey (ops may stage SK first).
+        self.assertEqual(os.environ.get("LIVE402_PQ_LOG_VKEY_MAINNET"), vkey)
+        self.assertEqual(vkey, self._c2sp_vkey(other))
+
+    def test_mainnet_matching_sk_and_vkey_loads(self):
+        """SK + VKEY both set and equal: signer loads; staged VKEY is kept."""
+        self._arm_mainnet_epoch()
+        staged = self._c2sp_vkey(self.hex_sk)
+        os.environ["LIVE402_PQ_LOG_SK_MAINNET"] = self.hex_sk
+        os.environ["LIVE402_PQ_LOG_VKEY_MAINNET"] = staged
+        os.environ["LIVE402_PQ_LOG_SK"] = os.urandom(32).hex()
+        vkey = receipt.load_signer_from_env()
+        self.assertEqual(vkey, staged)
+        self.assertEqual(os.environ.get("LIVE402_PQ_LOG_VKEY_MAINNET"), staged)
+        self.assertIsNotNone(receipt.current_signer())
+        self.assertTrue(receipt.available())
+        self._assert_secret_absent(vkey)
+
+    def test_mainnet_mismatched_vkey_fails_closed_without_overwriting_env(self):
+        """Staged VKEY != SK-derived vkey: fail closed; do not advertise the SK key."""
+        other = os.urandom(32).hex()
+        self._arm_mainnet_epoch()
+        staged = self._c2sp_vkey(other)
+        derived = self._c2sp_vkey(self.hex_sk)
+        self.assertNotEqual(staged, derived)
+        os.environ["LIVE402_PQ_LOG_SK_MAINNET"] = self.hex_sk
+        os.environ["LIVE402_PQ_LOG_VKEY_MAINNET"] = staged
+        testnet_sk = os.urandom(32).hex()
+        os.environ["LIVE402_PQ_LOG_SK"] = testnet_sk
+        with self.assertRaises(receipt.SignerConfigError) as ctx:
+            receipt.load_signer_from_env()
+        self.assertIn("vkey_mainnet mismatch", str(ctx.exception))
+        self.assertNotIn("reuse_testnet_sk", str(ctx.exception))
+        self.assertEqual(os.environ.get("LIVE402_PQ_LOG_VKEY_MAINNET"), staged)
+        self.assertNotEqual(os.environ.get("LIVE402_PQ_LOG_VKEY_MAINNET"), derived)
+        self.assertIsNone(receipt.current_signer())
+        self.assertFalse(receipt.available())
+        self.assertNotEqual(store.meta_get("vkey") or "", derived)
+        self._assert_secret_absent(str(ctx.exception))
+        self.assertNotIn(testnet_sk, str(ctx.exception))
+        self.assertNotIn(other, str(ctx.exception))
+
+    def test_mainnet_vkey_mismatch_never_uses_testnet_sk(self):
+        """MainNet epoch must not fall back to LIVE402_PQ_LOG_SK on VKEY mismatch."""
+        other = os.urandom(32).hex()
+        testnet_sk = os.urandom(32).hex()
+        self._arm_mainnet_epoch()
+        os.environ["LIVE402_PQ_LOG_SK_MAINNET"] = self.hex_sk
+        os.environ["LIVE402_PQ_LOG_VKEY_MAINNET"] = self._c2sp_vkey(other)
+        os.environ["LIVE402_PQ_LOG_SK"] = testnet_sk
+        with self.assertRaises(receipt.SignerConfigError) as ctx:
+            receipt.load_signer_from_env()
+        self.assertIn("vkey_mainnet mismatch", str(ctx.exception))
+        self.assertNotIn("reuse_testnet_sk", str(ctx.exception))
+        self.assertIsNone(receipt.current_signer())
+        self.assertFalse(receipt.available())
+        self.assertIsNone(os.environ.get("LIVE402_PQ_LOG_VKEY"))
+        self.assertNotEqual(os.environ.get("LIVE402_PQ_LOG_VKEY_MAINNET"), self._c2sp_vkey(self.hex_sk))
+        self.assertNotEqual(os.environ.get("LIVE402_PQ_LOG_VKEY_MAINNET"), self._c2sp_vkey(testnet_sk))
+        self._assert_secret_absent(str(ctx.exception))
+        self.assertNotIn(testnet_sk, str(ctx.exception))
 
 
 if __name__ == "__main__":

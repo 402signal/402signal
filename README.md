@@ -153,7 +153,7 @@ Base CDP calls need `CDP_API_KEY_ID` + `CDP_API_KEY_SECRET` (or `CDP_ACCESS_TOKE
 | `LIVE402_PQ_LOG_EPOCH` | `mainnet-v1` in fly.toml | PRODUCTION requires `mainnet-v1`. Unset/unknown fail closed. `testnet-v1` is TEST SUPPORT only. |
 | `LIVE402_PQ_LOG_ORIGIN` | `402signal.com/pq/log/mainnet-v1` in fly.toml | PRODUCTION origin. TestNet origin is archive/TEST SUPPORT only. |
 | `LIVE402_PQ_LOG_VKEY` | unset | TEST SUPPORT Ed25519 log verifier key (public). Production never uses this. Never a private key. |
-| `LIVE402_PQ_LOG_VKEY_MAINNET` | unset | PRODUCTION Ed25519 log verifier key (public). Set on boot from the public half of `LIVE402_PQ_LOG_SK_MAINNET`. Never a private key. |
+| `LIVE402_PQ_LOG_VKEY_MAINNET` | unset | PRODUCTION Ed25519 log verifier key (public). If set with `LIVE402_PQ_LOG_SK_MAINNET`, must exactly match the C2SP vkey derived from that SK (fail closed; env is not overwritten). If SK is set and VKEY is unset, boot writes the derived vkey (ops may stage SK first). If SK is unset, there is no MainNet signer. Never a private key. |
 | `LIVE402_PQ_LOG_SK` | unset | TEST SUPPORT Ed25519 seed only. Production never loads this. Never commit, never paste into chat. |
 | `LIVE402_PQ_LOG_SK_MAINNET` | unset | PRODUCTION Ed25519 seed only. Code rejects silent fallback to `LIVE402_PQ_LOG_SK`. Install via stdin/file (`NAME=-`); never a CLI secret argument. Never set from this PR. |
 | `LIVE402_PQ_FALCON_ADDRESS` | unset | TEST SUPPORT TestNet Falcon address. Not a production default. Never a private key. |
