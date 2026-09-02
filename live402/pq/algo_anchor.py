@@ -899,7 +899,12 @@ def submit_allowed(
     LIVE402_PQ_FALCON_BROADCAST=1 plus NETWORK=mainnet plus an unset
     MainNet flag never sends. Signer never reads BROADCAST.
     """
-    if configured_network() != TESTNET_NAME:
+    from live402.pq import log_identity
+
+    try:
+        if configured_network() != TESTNET_NAME:
+            return False
+    except log_identity.ConfigError:
         return False
     gen = txn_genesis_id(txn, params)
     if gen != TESTNET_GENESIS_ID:
@@ -937,14 +942,17 @@ def mainnet_submit_allowed(
     The one-shot canary env is a separate gate on submit_mainnet_canary.
     """
     from live402 import fixtures
+    from live402.pq import log_identity
 
-    if configured_network() != MAINNET_NAME:
+    try:
+        if configured_network() != MAINNET_NAME:
+            return False
+    except log_identity.ConfigError:
         return False
     if not mainnet_broadcast_requested():
         return False
     if fixtures.fixture_mode() and not allow_fixture_send_hook:
         return False
-    from live402.pq import log_identity
     from live402.pq import store as pq_store
 
     try:
@@ -1212,7 +1220,12 @@ def send_if_allowed(signed: bytes, *, send_fn=None, sender: str | None = None, p
     blob = bytes(signed)
     if blob == PQSIG_MARKER.encode("utf-8") or blob == PQSIG_MARKER.encode("ascii"):
         return None
-    if configured_network() == MAINNET_NAME:
+    from live402.pq import log_identity
+
+    try:
+        if configured_network() == MAINNET_NAME:
+            return None
+    except log_identity.ConfigError:
         return None
     if not submit_allowed(sender=sender, params=params):
         return None

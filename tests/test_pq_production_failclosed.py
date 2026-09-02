@@ -61,6 +61,13 @@ class ProductionFailClosedTests(unittest.TestCase):
         self.assertIn("unset", str(ctx.exception).lower())
         with self.assertRaises(log_identity.ConfigError):
             log_identity.live_network_name()
+        self.assertTrue(worker._production_or_mainnet())
+        self.assertIsNone(worker.maybe_submit(None))
+        self.assertIsNone(worker.maybe_confirm())
+        self.assertIsNone(worker.tick())
+        self.assertFalse(algo_anchor.submit_allowed())
+        self.assertFalse(algo_anchor.mainnet_submit_allowed())
+        self.assertIsNone(algo_anchor.send_if_allowed(b"STXN", send_fn=lambda _b: _TXID))
 
     def test_unknown_network_fails_closed(self):
         for bad in ("prod", "mainnett", "MAIN", "dev"):
@@ -122,6 +129,9 @@ class ProductionFailClosedTests(unittest.TestCase):
 
         self.assertTrue(signer_client.token_configured())
         self.assertFalse(algo_anchor.submit_allowed())
+        self.assertIsNone(worker.maybe_confirm())
+        with self.assertRaises(algo_anchor.AnchorError):
+            worker.confirm_testnet_anchor(_TXID)
 
     def test_production_tick_boot_never_auto_send(self):
         self._arm_production()

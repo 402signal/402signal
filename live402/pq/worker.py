@@ -460,7 +460,10 @@ def confirm_testnet_anchor(
     Caller txid is only a lookup key. Inclusion fields come from the
     fetched TestNet object. Signing success is not confirmation.
     Caller tree_size / confirmed_round / root / origin are ignored.
+    PRODUCTION / MainNet never confirm via TestNet.
     """
+    if _production_or_mainnet():
+        raise algo_anchor.AnchorError("testnet confirm is not production")
     del tree_size, confirmed_round, root, origin
     text = (txid or "").strip()
     low = text.lower()
@@ -505,7 +508,10 @@ def maybe_confirm(fetch_fn=None, at: int | None = None) -> dict | None:
     Independently GETs TestNet indexer, verify_fetched_anchor, then
     persist last_confirmed. Never uses the POST response as inclusion.
     Placeholder and MainNet genesis are rejected by confirm_testnet_anchor.
+    PRODUCTION / MainNet never confirm via TestNet.
     """
+    if _production_or_mainnet():
+        return None
     auth = last_authorized()
     txid = str(auth.get("txid") or "").strip()
     if not auth.get("submitted") or not algo_anchor._looks_like_txid(txid):
