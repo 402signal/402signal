@@ -129,6 +129,7 @@ class CloseoutStaticTests(unittest.TestCase):
             "docs/github-protection.md",
             "docs/runbooks/mainnet-prelaunch-reset.md",
             "docs/settle-idempotency.md",
+            "docs/route-transparency-atomicity.md",
         ]
         em = "\u2014"
         for rel in authored:
@@ -150,6 +151,25 @@ class CloseoutStaticTests(unittest.TestCase):
         self.assertIn("STATE_UNKNOWN = \"unknown\"", replay)
         self.assertIn("NON_TERMINAL_STATES", replay)
         self.assertIn('LIVE402_REPLAY_DB = "/data/live402-replay.sqlite"', FLY)
+
+    def test_sec_router_004_route_log_non_atomicity(self):
+        text = _read("docs/route-transparency-atomicity.md")
+        self.assertIn("SEC-ROUTER-004", text)
+        self.assertIn("A-14", text)
+        self.assertIn("durable signed leaf", text)
+        self.assertIn("require_transparency", text)
+        self.assertIn("logged_uncheckpointed", text)
+        self.assertIn("env wins", text.lower())
+        self.assertIn("test_crash_after_queue_before_append_no_receipt", text)
+        route = _read("live402/route.py")
+        self.assertIn("SEC-ROUTER-004", route)
+        self.assertIn("logged_uncheckpointed", route.split("def _transparency_ok")[1][:500])
+        trans = _read("live402/pq/transparency.py")
+        self.assertIn("Env wins over sqlite meta.vkey", trans)
+        self.assertIn("trust.vkey()", trans.split("def public_vkey")[1][:400])
+        receipt = _read("tests/test_pq_receipt.py")
+        self.assertIn("def test_crash_after_queue_before_append_no_receipt", receipt)
+        self.assertIn("def test_crash_after_durable_before_sign_no_dangling_promise", receipt)
 
     def test_signer_spec_requires_durable_security_state(self):
         spec = _read("docs/signer-mainnet-spec.md")

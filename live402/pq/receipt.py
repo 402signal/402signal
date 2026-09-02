@@ -348,8 +348,10 @@ def _unavailable(result: dict, origin: str) -> dict:
 
 
 def attach_to_route(result: dict, request_body: dict | None = None) -> dict:
-    """Best-effort transparency object. Paid /route still succeeds if this fails
-    unless the caller set require_transparency (handled by route.py).
+    """Best-effort transparency object. Not atomic with paid /route success.
+
+    SEC-ROUTER-004 / A-14: paid 200/503 does not require a durable signed
+    leaf unless the caller set require_transparency (handled by route.py).
     """
     if not isinstance(result, dict):
         return {}
