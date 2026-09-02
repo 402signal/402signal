@@ -37,7 +37,7 @@
     "note_format": "402sg/pq1:b",
     "note_version": 1,
     "allowed_broadcast": "none",
-    "ceremony": "empty-until-ross"
+    "ceremony": "canary-confirmed-2026-09-02"
   },
   "broadcast_policy": {
     "default": "off",
