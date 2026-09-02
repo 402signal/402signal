@@ -149,6 +149,7 @@ class CloseoutStaticTests(unittest.TestCase):
         self.assertIn("STATE_PENDING = \"settlement_pending\"", replay)
         self.assertIn("STATE_UNKNOWN = \"unknown\"", replay)
         self.assertIn("NON_TERMINAL_STATES", replay)
+        self.assertIn('LIVE402_REPLAY_DB = "/data/live402-replay.sqlite"', FLY)
 
     def test_signer_spec_requires_durable_security_state(self):
         spec = _read("docs/signer-mainnet-spec.md")
