@@ -96,6 +96,11 @@ class TransparencyPageTests(unittest.TestCase):
         self.assertIn("It is not a merchant payment.", html)
         self.assertIn("Falcon-1024 account", html)
         self.assertIn("does not make seller payments on Base, Solana, or Algorand post-quantum secure", html)
+        self.assertEqual(
+            html.count("The anchor protects the historical checkpoint. It does not make seller payments on Base, Solana, or Algorand post-quantum secure."),
+            1,
+        )
+        self.assertNotIn("does not make Base or Solana merchant payments post-quantum secure", html)
         self.assertNotIn("PQ-safe", html)
         self.assertIn("Published checkpoints make later changes to the recorded history detectable.", html)
         self.assertIn("Awaiting anchor", html)
