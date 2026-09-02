@@ -14,7 +14,7 @@ from live402.pq import log_identity
 from live402.pq import monitor
 from live402.pq import network as netcfg
 from live402.pq import trust
-from tests.pq_test_env import MAINNET_ENV_KEYS, clear_pq_env
+from tests.pq_test_env import MAINNET_ENV_KEYS, clear_pq_env, falcon_f1_fixture_pk, falcon_f1_fixture_sig
 
 
 _TXID = "B" * 52
@@ -306,7 +306,7 @@ class MainNetGatingTests(unittest.TestCase):
         gh = base64.b64decode(algo_anchor.TESTNET_GENESIS_HASH)
         txn = algo_tx.pay_txn(addr, addr, 0, 3000, 1, 1001, algo_anchor.TESTNET_GENESIS_ID, gh, note=note)
         blob = algo_tx.msgpack_encode(
-            {"pqsig": {"pk": b"pk" + bytes(range(14)), "sch": "f1", "sig": b"sig" + bytes(range(29)), "slt": 0}, "txn": txn}
+            {"pqsig": {"pk": falcon_f1_fixture_pk(b"pk"), "sch": "f1", "sig": falcon_f1_fixture_sig(b"sig"), "slt": 0}, "txn": txn}
         )
         os.environ["LIVE402_PQ_FALCON_ADDRESS"] = addr
         algo_anchor.validate_signed_txn(
@@ -350,9 +350,9 @@ class MainNetGatingTests(unittest.TestCase):
         blob = algo_tx.msgpack_encode(
             {
                 "pqsig": {
-                    "pk": b"pk" + bytes(range(14)),
+                    "pk": falcon_f1_fixture_pk(b"pk"),
                     "sch": "f1",
-                    "sig": b"sig" + bytes(range(29)),
+                    "sig": falcon_f1_fixture_sig(b"sig"),
                     "slt": 0,
                 },
                 "txn": txn,

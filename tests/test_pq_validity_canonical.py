@@ -11,7 +11,7 @@ os.environ.setdefault("LIVE402_FIXTURE", "1")
 from live402 import algo_tx, payment
 from live402.pq import ORIGIN, ORIGIN_MAINNET, algo_anchor, canary, store
 from live402.pq import checkpoint as ckpt
-from tests.pq_test_env import clear_pq_env
+from tests.pq_test_env import clear_pq_env, falcon_f1_fixture_pk, falcon_f1_fixture_sig
 
 _SIG = __import__("base64").b64encode(b"\x00" * 4 + b"\x22" * 64).decode("ascii")
 
@@ -79,7 +79,7 @@ class CanonicalValidityTests(unittest.TestCase):
         )
         blob = algo_tx.msgpack_encode(
             {
-                "pqsig": {"pk": b"pk" + bytes(range(14)), "sch": "f1", "sig": b"sig" + bytes(range(29)), "slt": 0},
+                "pqsig": {"pk": falcon_f1_fixture_pk(b"pk"), "sch": "f1", "sig": falcon_f1_fixture_sig(b"sig"), "slt": 0},
                 "txn": txn,
             }
         )
@@ -145,7 +145,7 @@ class ExpiredPolicyBeforePostTests(unittest.TestCase):
         )
         return algo_tx.msgpack_encode(
             {
-                "pqsig": {"pk": b"pk" + bytes(range(14)), "sch": "f1", "sig": b"sig" + bytes(range(29)), "slt": 0},
+                "pqsig": {"pk": falcon_f1_fixture_pk(b"pk"), "sch": "f1", "sig": falcon_f1_fixture_sig(b"sig"), "slt": 0},
                 "txn": txn,
             }
         )

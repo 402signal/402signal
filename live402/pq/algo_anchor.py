@@ -1215,7 +1215,7 @@ def validate_signed_txn(
     if blob == PQSIG_MARKER.encode("utf-8"):
         raise AnchorError("pqsig marker is not a signed txn")
     try:
-        obj = algo_tx.msgpack_decode(blob)
+        obj = algo_tx.msgpack_decode(blob, strict=True)
     except Exception as exc:
         raise AnchorError("not a signed pq1 txn") from exc
     if not isinstance(obj, dict):
@@ -1317,6 +1317,8 @@ def validate_signed_txn(
         if _pqsig_field_present(obj):
             raise AnchorError("falcon authorization missing: bad pqsig envelope")
         raise AnchorError("falcon authorization missing: no pqsig key")
+    # Exact inbound SignedTxn bytes. Do not reconstruct or rewrite pqsig.
+    # Ceremony metadata is never consulted and cannot yield CONFIRMED.
     expected_txid = signed_txn_txid(blob)
     return {
         "origin": expected_origin,
@@ -1807,6 +1809,17 @@ def _scheme_text(sch):
     return _ascii_ident(sch)
 
 
+def _falcon_f1_shapes_ok(pk: bytes, sig: bytes) -> bool:
+    """Official Falcon-1024 wire sizes. Nonempty is not enough."""
+    if not isinstance(pk, (bytes, bytearray)) or not isinstance(sig, (bytes, bytearray)):
+        return False
+    if len(pk) != FALCON_F1_PK_LEN:
+        return False
+    if len(sig) < 1 or len(sig) > FALCON_F1_SIG_MAX:
+        return False
+    return True
+
+
 def _salt_in_range(slt) -> bool:
     """slt/salt is optional. Accept 0-255 int or a single salt byte."""
     if slt is None or slt == "":
@@ -1838,10 +1851,12 @@ def _parse_pqsig_envelope(raw):
     sch/scheme must be exactly f1 (Falcon-1024). bytes decode as strict
     ASCII (algokey PQScheme [2]byte → b"f1"); str is used as-is. No
     strip, no str(bytes), no case fold. slt/salt if present is 0-255.
-    pk/public-key and sig/signature must be non-empty bytes (raw or
-    indexer b64). Fail closed on missing, empty, f5, F1, padded, or any
-    other scheme. A bare blob (including signature.falcon) is not an
-    envelope. The IPC marker pqsig:"present" is not authorization.
+    pk/public-key and sig/signature must be Falcon-1024 shaped: pk is
+    exactly 1793 bytes; sig is 1..1423 bytes (live compressed ~1233).
+    Nonempty shorter/longer blobs fail. Fail closed on missing, empty,
+    f5, F1, padded, or any other scheme. A bare blob (including
+    signature.falcon) is not an envelope. The IPC marker
+    pqsig:"present" is not authorization. Do not rewrite pqsig.
     """
     if not isinstance(raw, dict):
         return None
@@ -1861,6 +1876,8 @@ def _parse_pqsig_envelope(raw):
     if not pk or not sig:
         return None
     if pk == PQSIG_MARKER.encode("utf-8") or sig == PQSIG_MARKER.encode("utf-8"):
+        return None
+    if not _falcon_f1_shapes_ok(pk, sig):
         return None
     return bytes(sig)
 
@@ -1896,9 +1913,11 @@ def _pq_auth_from_obj(obj: dict):
     normalizing bytes (algokey PQScheme [2]byte) to ASCII.
 
     Fail closed: signature.falcon blobs, Ed25519 signature.sig, missing
-    pqsig, empty/other scheme (including f5), missing pk/sig, the 6PN
-    marker pqsig="present", and StateProof falcon-signature. Confirmed
-    chain inclusion is trusted; this does not re-implement Falcon verify.
+    pqsig, empty/other scheme (including f5), missing or wrong-shaped
+    pk/sig, the 6PN marker pqsig="present", and StateProof
+    falcon-signature. Ceremony metadata is never authorization.
+    Confirmed chain inclusion is trusted; this does not re-implement
+    Falcon verify.
     """
     if not isinstance(obj, dict):
         return None

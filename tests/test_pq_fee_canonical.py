@@ -10,7 +10,7 @@ os.environ.setdefault("LIVE402_FIXTURE", "1")
 
 from live402 import algo_tx, payment
 from live402.pq import ORIGIN, ORIGIN_MAINNET, algo_anchor, store
-from tests.pq_test_env import clear_pq_env
+from tests.pq_test_env import clear_pq_env, falcon_f1_fixture_pk, falcon_f1_fixture_sig
 
 
 class DeterministicFeeTests(unittest.TestCase):
@@ -51,9 +51,9 @@ class DeterministicFeeTests(unittest.TestCase):
         )
         envelope = {
             "pqsig": {
-                "pk": pk if pk is not None else (b"pk" + bytes(range(14))),
+                "pk": pk if pk is not None else falcon_f1_fixture_pk(b"pk"),
                 "sch": "f1",
-                "sig": sig if sig is not None else (b"sig" + bytes(range(29))),
+                "sig": sig if sig is not None else falcon_f1_fixture_sig(b"sig"),
                 "slt": 0,
             },
             "txn": txn,

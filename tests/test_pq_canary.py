@@ -13,11 +13,11 @@ from live402 import payment
 from live402.pq import ORIGIN_MAINNET, algo_anchor, canary, merkle, store
 from live402.pq import checkpoint as ckpt
 from live402.pq.signer_client import SignerClientError
-from tests.pq_test_env import clear_pq_env
+from tests.pq_test_env import clear_pq_env, falcon_f1_fixture_pk, falcon_f1_fixture_sig
 
 _SIG = base64.b64encode(b"\x00" * 4 + b"\x22" * 64).decode("ascii")
-_FALCON_PK = b"pk" + bytes(range(14))
-_FALCON_SIG = b"sig" + bytes(range(29))
+_FALCON_PK = falcon_f1_fixture_pk(b"pk")
+_FALCON_SIG = falcon_f1_fixture_sig(b"sig")
 
 
 def _signed_note(size, root, origin=ORIGIN_MAINNET):

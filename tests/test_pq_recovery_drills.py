@@ -18,14 +18,14 @@ from live402 import payment
 from live402.pq import ORIGIN, ORIGIN_MAINNET, algo_anchor, store, worker
 from live402.pq import checkpoint as ckpt
 from live402.pq import ops_state
-from tests.pq_test_env import clear_pq_env
+from tests.pq_test_env import clear_pq_env, falcon_f1_fixture_pk, falcon_f1_fixture_sig
 
 
 _TOKEN = "vector-token"
 _TXID = "B" * 52
 _SIGNED_A = b"STXN-authorized-A" + bytes(range(24))
-_FALCON_AUTH = b"FALCON-PQ-AUTH" + bytes(range(48))
-_FALCON_PK = b"FALCON-PK" + bytes(range(24))
+_FALCON_AUTH = falcon_f1_fixture_sig(b"FALCON-PQ-AUTH")
+_FALCON_PK = falcon_f1_fixture_pk(b"FALCON-PK")
 _SIG = base64.b64encode(b"\x00" * 4 + b"\x22" * 64).decode("ascii")
 
 

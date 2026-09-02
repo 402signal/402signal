@@ -74,6 +74,7 @@ def validate_descriptor_v2(desc: dict | None) -> dict:
     if str(desc.get("origin") or "") != "402signal.com/pq/log/mainnet-v1":
         raise UnknownAlgorithm("trust root v2 origin must be distinct")
     falcon = desc.get("falcon") if isinstance(desc.get("falcon"), dict) else {}
+    # falcon.ceremony is operator metadata only. Never CONFIRMED or Anchored.
     if str(falcon.get("scheme") or "") != "f1":
         raise UnknownAlgorithm("falcon scheme must be f1")
     if falcon.get("pq1") is not True:

@@ -134,7 +134,7 @@ def _mp_need(buf: bytes, i: int, n: int) -> None:
         raise ValueError("truncated msgpack")
 
 
-def _mp_read_uint(buf: bytes, i: int) -> tuple[int, int]:
+def _mp_read_uint(buf: bytes, i: int, *, strict: bool = False) -> tuple[int, int]:
     if i >= len(buf):
         raise ValueError("truncated msgpack")
     b = buf[i]
@@ -142,16 +142,28 @@ def _mp_read_uint(buf: bytes, i: int) -> tuple[int, int]:
         return b, i + 1
     if b == 0xCC:
         _mp_need(buf, i, 2)
-        return buf[i + 1], i + 2
+        n = buf[i + 1]
+        if strict and n < 128:
+            raise ValueError("non-minimal msgpack int")
+        return n, i + 2
     if b == 0xCD:
         _mp_need(buf, i, 3)
-        return int.from_bytes(buf[i + 1 : i + 3], "big"), i + 3
+        n = int.from_bytes(buf[i + 1 : i + 3], "big")
+        if strict and n < 256:
+            raise ValueError("non-minimal msgpack int")
+        return n, i + 3
     if b == 0xCE:
         _mp_need(buf, i, 5)
-        return int.from_bytes(buf[i + 1 : i + 5], "big"), i + 5
+        n = int.from_bytes(buf[i + 1 : i + 5], "big")
+        if strict and n < 65536:
+            raise ValueError("non-minimal msgpack int")
+        return n, i + 5
     if b == 0xCF:
         _mp_need(buf, i, 9)
-        return int.from_bytes(buf[i + 1 : i + 9], "big"), i + 9
+        n = int.from_bytes(buf[i + 1 : i + 9], "big")
+        if strict and n < 2**32:
+            raise ValueError("non-minimal msgpack int")
+        return n, i + 9
     raise ValueError("unsupported msgpack int")
 
 
@@ -194,25 +206,37 @@ def _mp_map_key(key) -> str:
     return str(key)
 
 
-def _mp_read_map(buf: bytes, i: int, n: int):
+_MAX_MSGPACK_DEPTH = 8
+
+
+def _mp_read_map(buf: bytes, i: int, n: int, *, depth: int = 0, strict: bool = False):
+    if depth > _MAX_MSGPACK_DEPTH:
+        raise ValueError("excessive msgpack nesting")
     out = {}
     for _ in range(n):
-        key, i = _mp_read(buf, i)
-        val, i = _mp_read(buf, i)
-        out[_mp_map_key(key)] = val
+        key, i = _mp_read(buf, i, depth=depth + 1, strict=strict)
+        val, i = _mp_read(buf, i, depth=depth + 1, strict=strict)
+        mapped = _mp_map_key(key)
+        if mapped in out:
+            raise ValueError("duplicate msgpack key")
+        out[mapped] = val
     return out, i
 
 
-def _mp_read_array(buf: bytes, i: int, n: int):
+def _mp_read_array(buf: bytes, i: int, n: int, *, depth: int = 0, strict: bool = False):
+    if depth > _MAX_MSGPACK_DEPTH:
+        raise ValueError("excessive msgpack nesting")
     items = []
     for _ in range(n):
-        val, i = _mp_read(buf, i)
+        val, i = _mp_read(buf, i, depth=depth + 1, strict=strict)
         items.append(val)
     return items, i
 
 
-def _mp_read(buf: bytes, i: int):
+def _mp_read(buf: bytes, i: int, *, depth: int = 0, strict: bool = False):
     """Decode one msgpack value. Algorand/go-msgpack types used in SignedTxn."""
+    if depth > _MAX_MSGPACK_DEPTH:
+        raise ValueError("excessive msgpack nesting")
     if i >= len(buf):
         raise ValueError("truncated msgpack")
     b = buf[i]
@@ -223,8 +247,10 @@ def _mp_read(buf: bytes, i: int):
     if b == 0xC3:
         return True, i + 1
     if b < 128 or b in (0xCC, 0xCD, 0xCE, 0xCF):
-        return _mp_read_uint(buf, i)
+        return _mp_read_uint(buf, i, strict=strict)
     if b >= 0xE0 or b in (0xD0, 0xD1, 0xD2, 0xD3):
+        if strict:
+            raise ValueError("negative txn integer")
         return _mp_read_sint(buf, i)
     if 0xA0 <= b <= 0xBF:
         n = b - 0xA0
@@ -242,6 +268,8 @@ def _mp_read(buf: bytes, i: int):
         # str16 is go-algorand Raw []byte for Falcon pk/sig (and similar).
         return bytes(buf[i + 3 : i + 3 + n]), i + 3 + n
     if b == 0xDB:
+        if strict:
+            raise ValueError("unproven msgpack form")
         _mp_need(buf, i, 5)
         n = int.from_bytes(buf[i + 1 : i + 5], "big")
         _mp_need(buf, i + 5, n)
@@ -257,37 +285,51 @@ def _mp_read(buf: bytes, i: int):
         _mp_need(buf, i + 3, n)
         return bytes(buf[i + 3 : i + 3 + n]), i + 3 + n
     if b == 0xC6:
+        if strict:
+            raise ValueError("unproven msgpack form")
         _mp_need(buf, i, 5)
         n = int.from_bytes(buf[i + 1 : i + 5], "big")
         _mp_need(buf, i + 5, n)
         return bytes(buf[i + 5 : i + 5 + n]), i + 5 + n
     if 0x80 <= b <= 0x8F:
-        return _mp_read_map(buf, i + 1, b - 0x80)
+        return _mp_read_map(buf, i + 1, b - 0x80, depth=depth, strict=strict)
     if b == 0xDE:
         _mp_need(buf, i, 3)
         n = int.from_bytes(buf[i + 1 : i + 3], "big")
-        return _mp_read_map(buf, i + 3, n)
+        return _mp_read_map(buf, i + 3, n, depth=depth, strict=strict)
     if b == 0xDF:
+        if strict:
+            raise ValueError("unproven msgpack form")
         _mp_need(buf, i, 5)
         n = int.from_bytes(buf[i + 1 : i + 5], "big")
-        return _mp_read_map(buf, i + 5, n)
+        return _mp_read_map(buf, i + 5, n, depth=depth, strict=strict)
     if 0x90 <= b <= 0x9F:
-        return _mp_read_array(buf, i + 1, b - 0x90)
+        return _mp_read_array(buf, i + 1, b - 0x90, depth=depth, strict=strict)
     if b == 0xDC:
         _mp_need(buf, i, 3)
         n = int.from_bytes(buf[i + 1 : i + 3], "big")
-        return _mp_read_array(buf, i + 3, n)
+        return _mp_read_array(buf, i + 3, n, depth=depth, strict=strict)
     if b == 0xDD:
+        if strict:
+            raise ValueError("unproven msgpack form")
         _mp_need(buf, i, 5)
         n = int.from_bytes(buf[i + 1 : i + 5], "big")
-        return _mp_read_array(buf, i + 5, n)
+        return _mp_read_array(buf, i + 5, n, depth=depth, strict=strict)
     raise ValueError("unsupported msgpack type")
 
 
-def msgpack_decode(raw: bytes) -> dict:
-    """Decoder for Algorand SignedTxn maps (msgp + go-codec Raw). Fail closed."""
-    obj, end = _mp_read(bytes(raw), 0)
-    if end != len(raw) or not isinstance(obj, dict):
+def msgpack_decode(raw: bytes, *, strict: bool = False) -> dict:
+    """Decoder for Algorand SignedTxn maps (msgp + go-codec Raw). Fail closed.
+
+    Duplicate keys are always rejected. strict=True is the SignedTxn path:
+    negative integers, non-minimal unsigned encodings, trailing data,
+    excessive nesting, and unproven alternate forms (str32/bin32/map32/
+    array32) are rejected. Do not require re-encoding equality until the
+    local encoder is proven against genuine algokey/go-algorand bytes.
+    """
+    blob = bytes(raw)
+    obj, end = _mp_read(blob, 0, depth=0, strict=strict)
+    if end != len(blob) or not isinstance(obj, dict):
         raise ValueError("invalid msgpack map")
     return obj
 
@@ -305,8 +347,12 @@ def txid_from_unsigned(txn: dict) -> str:
 
 
 def txid_from_signed(signed: bytes) -> str:
-    """txid of the unsigned txn inside a SignedTxn msgpack blob."""
-    obj = msgpack_decode(bytes(signed))
+    """txid of the unsigned txn inside a SignedTxn msgpack blob.
+
+    Uses the exact inbound bytes. Does not rewrite pqsig. strict decode
+    rejects unproven encodings; unsigned txn fields are then hashed.
+    """
+    obj = msgpack_decode(bytes(signed), strict=True)
     txn = obj.get("txn") if isinstance(obj, dict) else None
     if not isinstance(txn, dict):
         raise ValueError("signed txn missing txn")
