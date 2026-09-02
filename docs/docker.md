@@ -40,19 +40,18 @@ Do not invent a digest. Do not roll back to 3.12.11.
 
 ## Hash-locked requirements
 
-Evaluated `pip hash` / `--require-hashes` for `cryptography==50.0.1`.
+`requirements.in` owns the direct `cryptography==50.0.1` policy pin.
+`requirements.txt` is the universal, transitive lock generated with:
 
-`cryptography` publishes many platform wheels (manylinux, musllinux,
-macosx, win) plus transitive `cffi` / `pycparser` wheels. A
-`--require-hashes` lock that lists only the linux/amd64 set Fly uses
-would fail `pip install` on other developer platforms. A lock that lists
-every published wheel is large and still drifts when Warehouse adds a
-new wheel for the same version.
+```
+uv pip compile requirements.in --universal --python-version 3.12 --generate-hashes --no-emit-index-url -o requirements.txt
+```
 
-Decision: do not add `requirements.lock` or `--require-hashes` to the
-Dockerfile. Keep the exact direct pin `cryptography==50.0.1` in
-`requirements.txt`. That is the same reproducibility we already had,
-plus the base-image digest pin. Do not loosen the cryptography pin.
+The lock includes hashes for every published wheel needed across the
+supported developer platforms, plus `cffi` and `pycparser`. CI and the
+Docker image both install with `--require-hashes`; an unpinned package or
+unapproved artifact fails the build. Review both the version change and
+the regenerated hashes whenever the direct dependency is updated.
 
 ## Non-root (ACCEPTED path, not implemented)
 
