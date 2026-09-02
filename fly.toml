@@ -49,7 +49,7 @@ primary_region = "iad"
 # Do not set TestNet Falcon address, TestNet log SK, TestNet signer HMAC,
 # or TestNet broadcast flags here.
 # Do not enable TestNet or MainNet Falcon broadcast from this file.
-# Automatic anchoring stays off. No extra machines. Falcon SK is not on this app.
+# Automatic anchoring stays off. No extra machines in this PR. Falcon SK is not on this app.
 # Scheduled snapshots off.
 [[mounts]]
   source = "data"

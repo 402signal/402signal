@@ -1,6 +1,6 @@
 # 402Signal
 
-402Signal is the independent check an AI agent makes right before spending. It finds the strongest x402 route across Base, Solana, and Algorand, verifies it live, and shows the evidence behind the choice. Your agent keeps the wallet. The decision history is committed to an append-only log with Falcon PQ anchoring on Algorand (currently TestNet). Falcon authorizes a checkpoint transaction, not a merchant payment. This is not a PQ payment rail and not a claim that the product is fully quantum-proof.
+402Signal is the independent check an AI agent makes right before spending. It finds the strongest x402 route across Base, Solana, and Algorand, verifies it live, and shows the evidence behind the choice. Your agent keeps the wallet. The decision history is committed to an append-only log with Falcon PQ transparency on Algorand MainNet. Automatic anchoring stays off. Falcon authorizes a checkpoint transaction, not a merchant payment. This is not a PQ payment rail and not a claim that the product is fully quantum-proof.
 
 - **Live site:** https://402signal.com
 - **Paid API:** `POST /route` — $0.01 USDC
@@ -157,7 +157,7 @@ Base CDP calls need `CDP_API_KEY_ID` + `CDP_API_KEY_SECRET` (or `CDP_ACCESS_TOKE
 | `LIVE402_PQ_LOG_SK_MAINNET` | unset | PRODUCTION Ed25519 seed only. Code rejects silent fallback to `LIVE402_PQ_LOG_SK`. Fly secret later. Never set from this PR. |
 | `LIVE402_PQ_FALCON_ADDRESS` | unset | TEST SUPPORT TestNet Falcon address. Not a production default. Never a private key. |
 | `LIVE402_PQ_FALCON_NETWORK` | `mainnet` in fly.toml | PRODUCTION requires `mainnet`. Unset/unknown fail closed. `testnet` is TEST SUPPORT only. |
-| `LIVE402_PQ_FALCON_BROADCAST` | unset | TEST SUPPORT TestNet POST gate. Production never uses this. Signer never reads BROADCAST. This flag never sends MainNet. |
+| `LIVE402_PQ_FALCON_BROADCAST` | unset | TEST SUPPORT 402signal (router) env. `1` allows POST of a signer-approved SignedTxn to pinned TestNet algod. Production never uses this. Default unset: never POST. 402security must GO before anyone sets it to `1`. Signer never reads BROADCAST. This flag never sends MainNet. |
 | `LIVE402_PQ_FALCON_MAINNET_BROADCAST` | unset | Distinct MainNet flag. Default off. Automatic MainNet stays off. Unset is the kill switch: MainNet submit stops, routing continues. |
 | `LIVE402_PQ_FALCON_MAINNET_CANARY` | unset | One-shot human canary gate. Default off. Worker, tick, and boot never read this. Live POST still needs this `=1` and `LIVE402_PQ_FALCON_MAINNET_BROADCAST=1`. |
 | `LIVE402_PQ_FALCON_MAINNET_ADDRESS` | fly.toml (public MainNet address) | PRODUCTION public MainNet Falcon f1 address. Never a private key. |
@@ -213,7 +213,7 @@ live402/hydrate.py   finalist claimed-contract cache (bounded, TTL, gzip). Not 4
 live402/policy.py    NL → structured constraints. Engine uses structured values only.
 live402/reputation.py transparent components + documented V1 score + scoring-model hash.
 live402/economics.py  rail economics with provenance. Same model for Base / Solana / Algorand.
-live402/pq/         experimental C2SP log (RFC 9162 Merkle + tiles + receipts). Not MainNet.
+live402/pq/         experimental C2SP log (RFC 9162 Merkle + tiles + receipts). PRODUCTION is MainNet-only.
 live402/static/     GET / homepage (app.js, styles, dashboard.js)
 live402/algod.py    pinned algod suggestedParams for the unpaid Algorand 402 extra
 live402/data/       fixture catalog

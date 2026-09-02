@@ -115,6 +115,7 @@ class ProductionFailClosedTests(unittest.TestCase):
 
     def test_production_never_falls_back_to_testnet_signer_or_sk(self):
         self._arm_production()
+        os.environ.pop("LIVE402_PQ_SIGNER_MAINNET_TOKEN", None)
         os.environ["LIVE402_PQ_SIGNER_TOKEN"] = "must-not-be-used"
         os.environ["LIVE402_PQ_LOG_SK"] = "aa" * 32
         os.environ["LIVE402_PQ_FALCON_BROADCAST"] = "1"
@@ -132,6 +133,10 @@ class ProductionFailClosedTests(unittest.TestCase):
         self.assertIsNone(worker.maybe_confirm())
         with self.assertRaises(algo_anchor.AnchorError):
             worker.confirm_testnet_anchor(_TXID)
+        os.environ["LIVE402_PQ_SIGNER_MAINNET_TOKEN"] = "named-not-valued"
+        self.assertTrue(algo_anchor.signer_material_present())
+        self.assertIsNone(worker.maybe_submit(None, now=15 * 60))
+        self.assertFalse(algo_anchor.submit_allowed())
 
     def test_production_tick_boot_never_auto_send(self):
         self._arm_production()
