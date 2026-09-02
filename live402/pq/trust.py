@@ -130,9 +130,37 @@ def origin() -> str:
     return str(desc.get("origin") or "")
 
 
+def _live_mainnet_identity() -> bool:
+    """PRODUCTION and MainNet epoch never fall through to TestNet identity."""
+    from live402.pq import log_identity
+
+    try:
+        if log_identity.is_production_runtime():
+            return True
+        return (
+            log_identity.is_mainnet_epoch()
+            or log_identity.configured_network() == log_identity.NETWORK_MAINNET
+        )
+    except log_identity.ConfigError:
+        return log_identity.is_production_runtime()
+
+
 def vkey() -> str:
-    """Public verifier key. Env wins; descriptor may hold a placeholder."""
-    env = (os.environ.get("LIVE402_PQ_LOG_VKEY") or "").strip()
+    """Public verifier key. Env wins; descriptor may hold a placeholder.
+
+    MainNet epoch / NETWORK=mainnet reads LIVE402_PQ_LOG_VKEY_MAINNET only.
+    It never silently returns the TestNet LIVE402_PQ_LOG_VKEY value.
+    """
+    from live402.pq import log_identity
+
+    if _live_mainnet_identity():
+        env = (os.environ.get(log_identity.MAINNET_VKEY_ENV) or "").strip()
+        if env:
+            return env
+        desc = trust_root_v2()
+        sig = desc.get("log_signature") if isinstance(desc.get("log_signature"), dict) else {}
+        return str(sig.get("vkey") or "").strip()
+    env = (os.environ.get(log_identity.TESTNET_VKEY_ENV) or "").strip()
     if env:
         return env
     desc = trust_root()
@@ -141,6 +169,14 @@ def vkey() -> str:
 
 
 def falcon_address() -> str:
+    from live402.pq import log_identity
+
+    try:
+        network = log_identity.live_network_name()
+    except log_identity.ConfigError:
+        return ""
+    if network == log_identity.NETWORK_MAINNET or log_identity.is_production_runtime():
+        return (os.environ.get(log_identity.MAINNET_ADDRESS_ENV) or "").strip()
     env_name = "LIVE402_PQ_FALCON_ADDRESS"
     desc = trust_root()
     falcon = desc.get("falcon") if isinstance(desc.get("falcon"), dict) else {}
@@ -149,7 +185,11 @@ def falcon_address() -> str:
 
 
 def falcon_allowed_broadcast() -> str:
-    """Only TestNet may be broadcast. MainNet stays behind not_mainnet_go."""
+    """PRODUCTION: none. TEST SUPPORT archive may still say testnet."""
+    from live402.pq import log_identity
+
+    if log_identity.is_production_runtime():
+        return "none"
     desc = trust_root()
     falcon = desc.get("falcon") if isinstance(desc.get("falcon"), dict) else {}
     return str(falcon.get("allowed_broadcast") or "testnet").strip().lower()
@@ -161,12 +201,45 @@ def witness_policy() -> list:
     return list(policy) if isinstance(policy, list) else []
 
 
-def public_descriptor() -> dict:
-    """Public trust descriptor. TestNet only. Runtime PUBLIC vkey. Never a private key.
+def _strip_secrets(desc: dict) -> dict:
+    sig = dict(desc.get("log_signature") or {})
+    sig.pop("sk", None)
+    sig.pop("private_key", None)
+    desc["log_signature"] = sig
+    desc.pop("private_key", None)
+    desc.pop("sk", None)
+    return desc
 
-    Empty witness_policy stays empty. vkey comes from LIVE402_PQ_LOG_VKEY or
-    the in-memory store meta after boot. Never fabricated.
+
+def _public_descriptor_mainnet() -> dict:
+    """Public MainNet-epoch descriptor. Broadcast stays off. No secrets."""
+    from live402.pq import ORIGIN_MAINNET
+    from live402.pq import log_identity
+
+    desc = dict(trust_root_v2())
+    falcon = dict(desc.get("falcon") or {})
+    falcon["network"] = "mainnet-v1.0"
+    falcon["allowed_broadcast"] = "none"
+    falcon["address"] = (os.environ.get(log_identity.MAINNET_ADDRESS_ENV) or "").strip()
+    desc["falcon"] = falcon
+    desc["origin"] = ORIGIN_MAINNET
+    desc["not_mainnet_go"] = True
+    desc["witness_policy"] = []
+    sig = dict(desc.get("log_signature") or {})
+    sig["vkey"] = vkey()
+    desc["log_signature"] = sig
+    return _strip_secrets(desc)
+
+
+def public_descriptor() -> dict:
+    """Public trust descriptor. Runtime PUBLIC vkey. Never a private key.
+
+    PRODUCTION uses MainNet identity (origin, genesis, allowed_broadcast=none).
+    TEST SUPPORT may still expose the archived TestNet v1 descriptor.
+    Empty witness_policy stays empty. Never fabricated secrets.
     """
+    if _live_mainnet_identity():
+        return _public_descriptor_mainnet()
     desc = dict(trust_root())
     falcon = dict(desc.get("falcon") or {})
     falcon["network"] = "testnet-v1.0"
@@ -174,12 +247,7 @@ def public_descriptor() -> dict:
     desc["falcon"] = falcon
     desc["not_mainnet_go"] = True
     desc["witness_policy"] = witness_policy()
-    runtime = vkey()
     sig = dict(desc.get("log_signature") or {})
-    sig["vkey"] = runtime
-    sig.pop("sk", None)
-    sig.pop("private_key", None)
+    sig["vkey"] = vkey()
     desc["log_signature"] = sig
-    desc.pop("private_key", None)
-    desc.pop("sk", None)
-    return desc
+    return _strip_secrets(desc)

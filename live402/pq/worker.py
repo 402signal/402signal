@@ -1,31 +1,20 @@
 """PQ1 anchor worker on the HTTP app process.
 
-Queue unsigned checkpoint requests. Falcon signing is the 6PN client
-(pq-anchor/1). LIVE402_PQ_SIGNER_TOKEN unset: never dial, never sign.
+PRODUCTION is MainNet-only. Unset/unknown network fails closed.
+Automatic MainNet is off. Automatic MainNet anchoring stays off.
+Worker, tick, and boot never auto-send. Production never dials the TestNet signer (pq-anchor/1),
+never reads LIVE402_PQ_SIGNER_TOKEN, and never confirms via TestNet.
+
+TEST SUPPORT (LIVE402_FIXTURE=1 or LIVE402_PQ_TEST_SUPPORT=1) may use
+the archived TestNet path: pq-anchor/1, LIVE402_PQ_SIGNER_TOKEN, and
+LIVE402_PQ_FALCON_BROADCAST=1. That is not a production fallback.
 
 Authorized vs confirmed are separate durable records:
-  AUTHORIZED — signer returned a SignedTxn (request_id + blob persisted)
-  CONFIRMED  — persisted TestNet inclusion after independent fetch+verify
+  AUTHORIZED / SEND_ATTEMPTED / SUBMITTED  never public CONFIRMED
+  CONFIRMED  persisted inclusion after independent fetch+verify
 
 A signer reply advances AUTHORIZED only. last_anchor() / public status
-read CONFIRMED only. should_build SLA is vs CONFIRMED, so the same
-signed-but-unbroadcast checkpoint stays retryable. At most one
-unconfirmed authorized checkpoint may exist: if last_authorized.size
-> last_confirmed.size, do not authorize a newer tree size. Recover or
-finish that exact authorization (same tree_size/origin/root/signed-note);
-if it is already submitted, keep polling that txid. Only after it is
-CONFIRMED may a newer size be authorized. Recover only if
-size+origin+root+signed-note match. Mismatch fail-closes: no re-dial,
-no old SignedTxn, no overwrite.
-
-TestNet submit of the signer-approved SignedTxn is gated on
-LIVE402_PQ_FALCON_BROADCAST=1. That env lives on this 402signal
-router (default unset). 402security must GO before anyone sets it
-to 1. The isolated signer never reads BROADCAST and never POSTs.
-Signing or POST success never marks confirmed. Recovered records
-with submitted=True and a real txid skip POST. tick() independently
-GETs the TestNet indexer after a real submitted txid, then
-confirm_testnet_anchor decodes, verifies, and persists last_confirmed.
+read CONFIRMED only. should_build SLA is vs CONFIRMED.
 """
 
 from __future__ import annotations
@@ -51,6 +40,9 @@ class AuthorizedConflict(RuntimeError):
 
 def last_authorized() -> dict:
     data = store.last_authorized_checkpoint()
+    send_state = str(data.get("send_state") or "")
+    if send_state == "CONFIRMED":
+        send_state = "SUBMITTED" if data.get("submitted") else "AUTHORIZED"
     return {
         "size": int(data.get("size") or 0),
         "at": int(data.get("at") or 0),
@@ -61,6 +53,7 @@ def last_authorized() -> dict:
         "signed": data.get("signed") if isinstance(data.get("signed"), (bytes, bytearray)) else b"",
         "submitted": bool(data.get("submitted")),
         "txid": str(data.get("txid") or ""),
+        "send_state": send_state,
     }
 
 
@@ -73,6 +66,8 @@ def last_confirmed() -> dict:
         "round": int(data.get("round") or 0),
         "root": str(data.get("root") or ""),
         "origin": str(data.get("origin") or ""),
+        "network": str(data.get("network") or ""),
+        "genesis_id": str(data.get("genesis_id") or ""),
     }
 
 
@@ -93,11 +88,11 @@ def public_anchor() -> dict | None:
         return None
     if int(conf.get("round") or 0) < 1:
         return None
-    try:
-        conf = dict(conf)
-        conf["explorer"] = algo_anchor.explorer_url(text)
-    except algo_anchor.AnchorError:
-        return None
+    conf = dict(conf)
+    network = algo_anchor.confirmed_anchor_network(conf)
+    if network:
+        conf["network"] = network
+    conf["explorer"] = algo_anchor.verified_explorer_tx_url(text, network) if network else ""
     return conf
 
 
@@ -321,6 +316,18 @@ def _maybe_broadcast(out: dict, *, send_fn, sender: str | None, params: dict) ->
     return _persist_submitted(out, txid)
 
 
+def _production_or_mainnet() -> bool:
+    from live402.pq import log_identity
+
+    try:
+        network = log_identity.configured_network()
+    except log_identity.ConfigError:
+        return True
+    if network == log_identity.NETWORK_MAINNET:
+        return True
+    return log_identity.is_production_runtime()
+
+
 def maybe_submit(
     signer_callback,
     sender: str | None = None,
@@ -329,23 +336,26 @@ def maybe_submit(
     send_fn=None,
     tree_size: int | None = None,
 ) -> dict | None:
-    """6PN client only. Token unset: never dial.
+    """TEST SUPPORT TestNet 6PN client only. Production never dials.
 
-    A signer reply persists AUTHORIZED (request_id + SignedTxn). Does not
-    advance CONFIRMED. Exact size+origin+root+signed-note recovers the blob
-    (no re-dial). Mismatch fail-closes. MainNet genesis is rejected.
-    Automatic MainNet is off. NETWORK=mainnet never submits here.
-    Router BROADCAST=1 may POST the recovered TestNet SignedTxn unless the
-    authorized record already has submitted=True and a real txid.
-    POST success is not confirmation.
+    PRODUCTION / NETWORK=mainnet: return None. No pq-anchor/1, no
+    LIVE402_PQ_SIGNER_TOKEN, no auto-send. Automatic MainNet stays off.
+
+    TEST SUPPORT: a signer reply persists AUTHORIZED. Does not advance
+    CONFIRMED. BROADCAST=1 may POST a TestNet SignedTxn. POST is not
+    confirmation.
     """
+    if _production_or_mainnet():
+        return None
+    if algo_anchor.automatic_mainnet_enabled():
+        return None
+    from live402.pq import log_identity
+
+    if not log_identity.is_test_support():
+        return None
     from live402.pq import signer_client
 
     if not signer_client.token_configured():
-        return None
-    if algo_anchor.configured_network() == algo_anchor.MAINNET_NAME:
-        return None
-    if algo_anchor.automatic_mainnet_enabled():
         return None
     p = dict(params) if isinstance(params, dict) else {}
     gen = str(p.get("genesisID") or p.get("genesis_id") or algo_anchor.TESTNET_GENESIS_ID)
@@ -446,7 +456,10 @@ def confirm_testnet_anchor(
     Caller txid is only a lookup key. Inclusion fields come from the
     fetched TestNet object. Signing success is not confirmation.
     Caller tree_size / confirmed_round / root / origin are ignored.
+    PRODUCTION / MainNet never confirm via TestNet.
     """
+    if _production_or_mainnet():
+        raise algo_anchor.AnchorError("testnet confirm is not production")
     del tree_size, confirmed_round, root, origin
     text = (txid or "").strip()
     low = text.lower()
@@ -480,6 +493,8 @@ def confirm_testnet_anchor(
         txid=verified["txid"],
         confirmed_round=int(verified["confirmed_round"]),
         at=when,
+        network=str(verified.get("network") or algo_anchor.TESTNET_NAME),
+        genesis_id=str(verified.get("genesis_id") or algo_anchor.TESTNET_GENESIS_ID),
     )
 
 
@@ -489,7 +504,10 @@ def maybe_confirm(fetch_fn=None, at: int | None = None) -> dict | None:
     Independently GETs TestNet indexer, verify_fetched_anchor, then
     persist last_confirmed. Never uses the POST response as inclusion.
     Placeholder and MainNet genesis are rejected by confirm_testnet_anchor.
+    PRODUCTION / MainNet never confirm via TestNet.
     """
+    if _production_or_mainnet():
+        return None
     auth = last_authorized()
     txid = str(auth.get("txid") or "").strip()
     if not auth.get("submitted") or not algo_anchor._looks_like_txid(txid):
@@ -566,11 +584,16 @@ def tick(
     fetch_fn=None,
     tree_size: int | None = None,
 ) -> dict | None:
-    """Existing PQ worker tick. Submit if needed, then independently confirm.
+    """Existing PQ worker tick. PRODUCTION never auto-sends.
 
-    Called from the independent pq-anchor thread (server.main → start_worker).
-    Catalog trickle must not start a second copy. POST success is not confirmation.
+    MainNet / production: return None. No TestNet signer, no TestNet
+    confirm, no auto-send. Automatic anchoring stays off.
+
+    TEST SUPPORT: submit if needed, then independently confirm TestNet.
+    POST success is not confirmation.
     """
+    if _production_or_mainnet():
+        return None
     try:
         maybe_submit(
             signer_callback,
