@@ -324,15 +324,21 @@
     side.className = "result-side claim";
     const label = document.createElement("p");
     label.className = "result-side-label";
-    label.textContent = "DISCOVERY LISTING";
+    label.textContent = "Seller says";
     side.appendChild(label);
     const bits = document.createElement("p");
     bits.className = "result-bits";
     const source = catalogSource(hit);
+    const claimedOrigin = hit && (hit.origin === "catalog_claimed" || hit.untrusted === true);
+    if (claimedOrigin) appendBit(bits, "CLAIMED");
     if (source) appendBit(bits, source);
-    appendBit(bits, railOf(hit));
+    const net = railOf(hit);
+    if (net) appendBit(bits, "Network " + net);
     const price = listedPrice(hit);
-    if (price) appendBit(bits, "Listed price " + price);
+    if (price) appendBit(bits, "Price " + price);
+    const facilitator = hit && hit.facilitator;
+    if (facilitator) appendBit(bits, "Payment " + String(facilitator));
+    appendBit(bits, "Readiness Discovered");
     const schema = schemaListed(hit);
     if (schema) appendBit(bits, "Schema listed: " + schema);
     if (hit && hit.method) appendBit(bits, String(hit.method));
@@ -346,7 +352,7 @@
     side.className = "result-side observation";
     const label = document.createElement("p");
     label.className = "result-side-label";
-    label.textContent = "PRIOR 402SIGNAL OBSERVATION";
+    label.textContent = "Observed now";
     side.appendChild(label);
     const bits = document.createElement("p");
     bits.className = "result-bits";
@@ -354,15 +360,29 @@
     const status = obs && typeof obs.status === "string" ? obs.status : "not_yet_observed";
     if (!obs || status === "not_yet_observed") {
       appendBit(bits, "No prior 402Signal observation");
+      appendBit(bits, "Readiness Discovered");
       side.appendChild(bits);
       return side;
     }
-    if (obs.payable === true) appendBit(bits, "payable");
-    else if (obs.payable === false) appendBit(bits, "not payable");
-    if (obs.invocable === true) appendBit(bits, "invocable");
-    else if (obs.invocable === false) appendBit(bits, "not invocable");
+    const ready = ["Discovered"];
+    if (obs.payable === true) {
+      appendBit(bits, "Payable");
+      ready.push("Payable");
+    } else if (obs.payable === false) {
+      appendBit(bits, "not payable");
+    }
+    if (obs.invocable === true) {
+      appendBit(bits, "Invocable");
+      ready.push("Invocable");
+    } else if (obs.invocable === false) {
+      appendBit(bits, "not invocable");
+    }
     const checked = isoOrEmpty(obs.last_checked);
-    if (checked) appendBit(bits, "Last checked " + checked);
+    if (checked) {
+      appendBit(bits, "Last checked " + checked);
+      ready.push("Recently checked");
+    }
+    appendBit(bits, "Readiness " + ready.join(" · "));
     const n = Number(obs.n_7d);
     if (Number.isFinite(n) && n > 0) {
       appendBit(bits, n + (n === 1 ? " observation" : " observations"));
@@ -426,7 +446,7 @@
     const shown = hits.length;
     const matches = Number(parsed && parsed.discovery_matches);
     const shownLabel = shown === 1 ? "1 shown" : shown + " shown";
-    let text = "DISCOVERY LISTING · " + shownLabel + " · not a live check";
+    let text = "Seller says · " + shownLabel + " · not a live check";
     if (Number.isFinite(matches) && matches > shown) {
       const exhaustive = parsed && parsed.discovery_exhaustive === true;
       text += " · " + matches + (exhaustive ? " discovery matches" : " matches returned by discovery");

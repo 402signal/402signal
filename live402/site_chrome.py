@@ -12,7 +12,7 @@ NAV = (
     ("/how", "How it works"),
     ("/catalog", "Explore"),
     ("/developers", "Developers"),
-    ("/contact", "Contact"),
+    ("/transparency", "Transparency"),
 )
 
 FOOTER = (
@@ -21,6 +21,7 @@ FOOTER = (
     ("/openapi.json", "OpenAPI", False),
     ("/mcp.json", "MCP", False),
     ("/transparency", "Transparency", False),
+    ("/contact", "Contact", False),
     (CONTACT_MAILTO, CONTACT_EMAIL, False),
 )
 
@@ -67,6 +68,7 @@ def footer_html(current: str = "") -> str:
         )
     return (
         '    <footer class="foot">\n'
+        "      <p>402Signal</p>\n"
         "      <p>\n"
         + "\n".join(links)
         + "\n      </p>\n"
@@ -87,19 +89,17 @@ def listed_on_items_html() -> str:
 def listed_on_row_html() -> str:
     return (
         '      <section class="discover-row" aria-label="Public directories">\n'
-        "        <h2>Public directories</h2>\n"
-        "        <p>402Signal is currently listed in the following public directories "
-        "and registries.</p>\n"
+        "        <h2>Listed in</h2>\n"
+        "        <p>Directory links show where 402Signal is listed. They are not "
+        "endorsements.</p>\n"
         '        <p class="listed-on">\n'
         + listed_on_items_html()
         + "\n        </p>\n"
-        "        <p class=\"note\">These links confirm directory presence; they are not "
-        "endorsements.</p>\n"
         "      </section>\n"
     )
 
 
-def listed_on_html(*, title: str = "Listed on", note: str = "") -> str:
+def listed_on_html(*, title: str = "Listed in", note: str = "") -> str:
     extra = ""
     if note:
         extra = '        <p class="note">%s</p>\n' % esc(note)
@@ -116,39 +116,30 @@ def listed_on_html(*, title: str = "Listed on", note: str = "") -> str:
 
 
 def signal_flow_html(*, variant: str = "product") -> str:
-    """One homepage routing diagram. variant is ignored; proof graphics are not used."""
+    """Homepage how-it-works cards. variant is ignored."""
     del variant
     return (
-        '<figure class="signal-flow" aria-labelledby="signal-flow-caption">\n'
-        '  <div class="signal-row flow-four">\n'
-        '    <div class="flow-box">\n'
-        '      <p class="flow-kicker">DISCOVERY</p>\n'
-        '      <p class="flow-title">Search supported discovery sources</p>\n'
-        "    </div>\n"
-        '    <div class="flow-conn gold" aria-hidden="true"></div>\n'
-        '    <div class="flow-box flow-emphasis">\n'
-        '      <p class="flow-kicker">LIVE CHECK</p>\n'
-        '      <p class="flow-title">Probe candidates and parse current HTTP 402 payment requirements</p>\n'
-        "    </div>\n"
-        '    <div class="flow-conn gold" aria-hidden="true"></div>\n'
-        '    <div class="flow-box">\n'
-        '      <p class="flow-kicker">POLICY</p>\n'
-        '      <p class="flow-title">Apply caller constraints and rank eligible observed candidates</p>\n'
-        "    </div>\n"
-        '    <div class="flow-conn gold" aria-hidden="true"></div>\n'
-        '    <div class="flow-box">\n'
-        '      <p class="flow-kicker">RESULT</p>\n'
-        '      <p class="flow-title">Return selected route and selected_payment, or a typed miss</p>\n'
-        "    </div>\n"
+        '<section class="block" id="how-it-works">\n'
+        "  <h2>How it works</h2>\n"
+        '  <div class="decision-grid">\n'
+        '    <article class="decision-card">\n'
+        "      <h3>Search</h3>\n"
+        "      <p>Find candidates across supported x402 discovery sources.</p>\n"
+        "    </article>\n"
+        '    <article class="decision-card">\n'
+        "      <h3>Check</h3>\n"
+        "      <p>Call candidate endpoints and read the payment requirements they "
+        "return now.</p>\n"
+        "    </article>\n"
+        '    <article class="decision-card">\n'
+        "      <h3>Match</h3>\n"
+        "      <p>Apply your network, price, latency, and invocation constraints.</p>\n"
+        "    </article>\n"
+        '    <article class="decision-card">\n'
+        "      <h3>Return</h3>\n"
+        "      <p>Get the best qualifying route, or a typed reason nothing "
+        "matched.</p>\n"
+        "    </article>\n"
         "  </div>\n"
-        '  <div class="trust-rail">\n'
-        '    <p class="trust-rail-label">PQ TRUST</p>\n'
-        '    <ol class="trust-steps">\n'
-        '      <li>Commit route evidence to the PQ Trust log. Falcon anchors '
-        "checkpoints, not merchant payments.</li>\n"
-        "    </ol>\n"
-        "  </div>\n"
-        '  <figcaption class="sr-only" id="signal-flow-caption">Discovery, live check, '
-        "policy, and result, with an append-only transparency log</figcaption>\n"
-        "</figure>\n"
+        "</section>\n"
     )

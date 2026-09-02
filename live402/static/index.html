@@ -3,17 +3,17 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>402Signal · Live x402 routing checks</title>
-  <meta name="description" content="402Signal searches x402 discovery sources, probes candidate endpoints, and applies caller constraints to observed payment options on Base, Solana, and Algorand." />
+  <title>402Signal · Find a paid API that works right now</title>
+  <meta name="description" content="402Signal checks x402 endpoints before you spend. Base, Solana, and Algorand." />
   <link rel="canonical" href="https://402signal.com" />
-  <meta property="og:title" content="402Signal · Live x402 routing checks" />
-  <meta property="og:description" content="402Signal searches x402 discovery sources, probes candidate endpoints, and applies caller constraints to observed payment options on Base, Solana, and Algorand." />
+  <meta property="og:title" content="402Signal · Find a paid API that works right now" />
+  <meta property="og:description" content="402Signal checks x402 endpoints before you spend. Base, Solana, and Algorand." />
   <meta property="og:url" content="https://402signal.com" />
   <meta property="og:type" content="website" />
   <meta property="og:site_name" content="402Signal" />
   <meta name="twitter:card" content="summary" />
-  <meta name="twitter:title" content="402Signal · Live x402 routing checks" />
-  <meta name="twitter:description" content="402Signal searches x402 discovery sources and probes candidate endpoints on Base, Solana, and Algorand." />
+  <meta name="twitter:title" content="402Signal · Find a paid API that works right now" />
+  <meta name="twitter:description" content="402Signal checks x402 endpoints before you spend. Base, Solana, and Algorand." />
   <meta name="twitter:site" content="@402Signal" />
   <link rel="stylesheet" href="/styles.css" />
 </head>
@@ -29,72 +29,60 @@
         <a href="/how">How it works</a>
         <a href="/catalog">Explore</a>
         <a href="/developers">Developers</a>
-        <a href="/contact">Contact</a>
+        <a href="/transparency">Transparency</a>
       </nav>
     </header>
 
     <main>
       <section class="hero">
         <h1>Find a paid API that works right now.</h1>
-        <p class="lede">402Signal searches x402 discovery sources across Base, Solana, and Algorand, probes candidate endpoints immediately before spend, and applies the caller's constraints to the payment options returned by those endpoints. It returns a route only when a current observed option qualifies; otherwise it returns a typed miss.</p>
-        <p class="lede">402Signal does not hold the buyer's keys or execute the selected service's payment.</p>
+        <p class="lede">402Signal checks x402 endpoints before you spend. It compares the payment terms it sees now against your constraints and returns the best match, or a clear reason nothing qualified.</p>
+        <p class="lede">You keep your wallet and keys. 402Signal never pays the selected service for you.</p>
         <p class="rails-line">Base · Solana · Algorand</p>
-        <p class="note">POST /route · $0.01 USDC per routing check</p>
+        <p class="note">$0.01 USDC per routing check</p>
         <div class="hero-actions">
-          <a class="btn" href="/catalog">Build a route request</a>
+          <a class="btn" href="/catalog">Try a free preview</a>
           <a class="btn secondary" href="/developers">Developer docs</a>
         </div>
       </section>
 
-      <figure class="signal-flow" aria-labelledby="signal-flow-caption">
-        <div class="signal-row flow-four">
-          <div class="flow-box">
-            <p class="flow-kicker">DISCOVERY</p>
-            <p class="flow-title">Search supported discovery sources</p>
-          </div>
-          <div class="flow-conn gold" aria-hidden="true"></div>
-          <div class="flow-box flow-emphasis">
-            <p class="flow-kicker">LIVE CHECK</p>
-            <p class="flow-title">Probe candidates and parse current HTTP 402 payment requirements</p>
-          </div>
-          <div class="flow-conn gold" aria-hidden="true"></div>
-          <div class="flow-box">
-            <p class="flow-kicker">POLICY</p>
-            <p class="flow-title">Apply caller constraints and rank eligible observed candidates</p>
-          </div>
-          <div class="flow-conn gold" aria-hidden="true"></div>
-          <div class="flow-box">
-            <p class="flow-kicker">RESULT</p>
-            <p class="flow-title">Return selected route and selected_payment, or a typed miss</p>
-          </div>
-        </div>
-        <div class="trust-rail">
-          <p class="trust-rail-label">PQ TRUST</p>
-          <ol class="trust-steps">
-            <li>Commit route evidence to the PQ Trust log. Falcon anchors checkpoints, not merchant payments.</li>
-          </ol>
-        </div>
-        <figcaption class="sr-only" id="signal-flow-caption">Discovery, live check, policy, and result, with an append-only transparency log</figcaption>
-      </figure>
-
-      <section class="block" id="why">
-        <h2>What a paid check does</h2>
+      <section class="block" id="how-it-works">
+        <h2>How it works</h2>
         <div class="decision-grid">
           <article class="decision-card">
-            <h3>Current observation</h3>
-            <p>Routing uses the payment requirements observed during this request, not the metadata a discovery source still publishes.</p>
+            <h3>Search</h3>
+            <p>Find candidates across supported x402 discovery sources.</p>
           </article>
           <article class="decision-card">
-            <h3>Constraint enforcement</h3>
-            <p>Caller constraints are applied to those observed options before a winner is selected.</p>
+            <h3>Check</h3>
+            <p>Call candidate endpoints and read the payment requirements they return now.</p>
           </article>
           <article class="decision-card">
-            <h3>Explicit failure modes</h3>
-            <p>When no observed option qualifies, the response is a typed miss that reports why evaluation stopped.</p>
+            <h3>Match</h3>
+            <p>Apply your network, price, latency, and invocation constraints.</p>
           </article>
           <article class="decision-card">
-            <h3>Execution boundary</h3>
-            <p>The caller retains custody of keys, signing, the selected service's payment, and execution of that service.</p>
+            <h3>Return</h3>
+            <p>Get the best qualifying route, or a typed reason nothing matched.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="block" id="why">
+        <h2>Check before you spend</h2>
+        <p>Discovery data gets stale. 402Signal checks the endpoint at routing time instead of relying only on what a directory says.</p>
+        <div class="decision-grid">
+          <article class="decision-card">
+            <h3>See what changed</h3>
+            <p>The result separates seller claims from what 402Signal observed.</p>
+          </article>
+          <article class="decision-card">
+            <h3>Keep control</h3>
+            <p>Your application keeps the wallet, signing, seller payment, and execution.</p>
+          </article>
+          <article class="decision-card">
+            <h3>Fail clearly</h3>
+            <p>If nothing meets your constraints, 402Signal returns a typed miss instead of guessing.</p>
           </article>
         </div>
       </section>
@@ -102,18 +90,22 @@
       <section class="pq-trust" id="pq-log">
         <div class="pq-status-row">
           <p class="pq-badge">Algorand MainNet</p>
-          <p class="pq-chip"><!--PQ_LATEST-->Awaiting checkpoint</p>
+          <p class="pq-chip"><!--PQ_LATEST-->Awaiting anchor</p>
         </div>
         <h2>Verifiable routing history</h2>
-        <p>PQ Trust is 402Signal's append-only transparency layer. Routing evidence is committed to an append-only Merkle log.</p>
-        <p>Falcon anchors checkpoints, not merchant payments.</p>
-        <p>Later rewriting inconsistent with published checkpoints becomes detectable.</p>
-        <p><a class="btn secondary" href="/transparency">View verification details</a></p>
+        <p>402Signal commits routing evidence to an append-only log.</p>
+        <p>Published checkpoints make later changes to the recorded history detectable.</p>
+        <p><a class="btn secondary" href="/transparency">View transparency</a></p>
+      </section>
+
+      <section class="block" id="boundary">
+        <h2>402Signal recommends. You execute.</h2>
+        <p>402Signal finds and checks the route. Your application keeps control of its wallet, signs the seller payment, and calls the selected service.</p>
       </section>
 
       <section class="discover-row" aria-label="Public directories">
-        <h2>Public directories</h2>
-        <p>402Signal is currently listed in the following public directories and registries.</p>
+        <h2>Listed in</h2>
+        <p>Directory links show where 402Signal is listed. They are not endorsements.</p>
         <p class="listed-on">
           <a href="https://glama.ai/mcp/servers/402signal/402signal" rel="noopener noreferrer">Glama</a>
           <a href="https://registry.modelcontextprotocol.io/?q=402signal" rel="noopener noreferrer">MCP Registry</a>
@@ -123,17 +115,18 @@
           <a href="https://github.com/michielpost/x402-dev/blob/master/Projects.md" rel="noopener noreferrer">x402-dev</a>
           <a href="https://facilitator.goplausible.xyz/dashboard/bazaar?q=402signal" rel="noopener noreferrer">GoPlausible</a>
         </p>
-        <p class="note">These links confirm directory presence; they are not endorsements.</p>
       </section>
     </main>
 
     <footer class="foot">
+      <p>402Signal</p>
       <p>
         <a href="https://github.com/402signalhq/402signal" rel="noopener noreferrer">GitHub</a>
         <a href="https://x.com/402Signal" rel="noopener noreferrer">@402Signal</a>
         <a href="/openapi.json">OpenAPI</a>
         <a href="/mcp.json">MCP</a>
         <a href="/transparency">Transparency</a>
+        <a href="/contact">Contact</a>
         <a href="mailto:ross@402signal.com">ross@402signal.com</a>
       </p>
     </footer>
