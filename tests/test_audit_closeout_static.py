@@ -62,13 +62,16 @@ class CloseoutStaticTests(unittest.TestCase):
 
     def test_website_production_mainnet_copy(self):
         home = _read("live402/static/index.html")
-        self.assertIn("Algorand MainNet log · awaiting first confirmed checkpoint", home)
-        self.assertIn("Production log identity is Algorand MainNet", home)
+        self.assertIn("Algorand MainNet", home)
+        self.assertIn("Awaiting checkpoint", home)
+        self.assertIn('class="pq-chip"', home)
+        self.assertIn("Falcon anchors checkpoints, not merchant payments.", home)
         self.assertIn("PQ Trust is 402Signal's append-only transparency layer", home)
         self.assertIn('class="pq-trust"', home)
         self.assertNotIn("pq-testnet", home)
         self.assertNotIn("Signed checkpoints are periodically anchored to Algorand MainNet", home)
         self.assertNotIn("Currently Algorand TestNet", home)
+        self.assertNotIn("periodically anchored to Algorand TestNet", home)
         self.assertNotIn("quantum-proof", home.lower())
         self.assertNotIn("—", home)
         trans = _read("live402/pq/transparency.py")

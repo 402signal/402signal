@@ -144,8 +144,8 @@ def signal_flow_html(*, variant: str = "product") -> str:
         '  <div class="trust-rail">\n'
         '    <p class="trust-rail-label">PQ TRUST</p>\n'
         '    <ol class="trust-steps">\n'
-        '      <li>Commit route evidence to the PQ Trust log. Production log identity '
-        "is Algorand MainNet. Awaiting first confirmed MainNet checkpoint.</li>\n"
+        '      <li>Commit route evidence to the PQ Trust log. Falcon anchors '
+        "checkpoints, not merchant payments.</li>\n"
         "    </ol>\n"
         "  </div>\n"
         '  <figcaption class="sr-only" id="signal-flow-caption">Discovery, live check, '

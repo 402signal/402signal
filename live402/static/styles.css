@@ -642,6 +642,31 @@ a.lookup:link, a.lookup:visited { color: var(--ink); text-decoration: none; }
   padding: 4px 10px;
   margin: 0 0 12px;
 }
+.pq-status-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 12px;
+}
+.pq-status-row .pq-badge,
+.pq-status-row .pq-chip {
+  margin: 0;
+}
+.pq-chip {
+  display: inline-block;
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  padding: 4px 10px;
+  margin: 0;
+}
+.pq-chip.is-anchored {
+  color: var(--teal);
+  border-color: var(--teal);
+}
 .pq-trust h2 {
   margin: 0 0 10px;
   font-size: 22px;

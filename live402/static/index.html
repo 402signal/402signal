@@ -71,7 +71,7 @@
         <div class="trust-rail">
           <p class="trust-rail-label">PQ TRUST</p>
           <ol class="trust-steps">
-            <li>Commit route evidence to the PQ Trust log. Production log identity is Algorand MainNet. Awaiting first confirmed MainNet checkpoint.</li>
+            <li>Commit route evidence to the PQ Trust log. Falcon anchors checkpoints, not merchant payments.</li>
           </ol>
         </div>
         <figcaption class="sr-only" id="signal-flow-caption">Discovery, live check, policy, and result, with an append-only transparency log</figcaption>
@@ -100,13 +100,14 @@
       </section>
 
       <section class="pq-trust" id="pq-log">
-        <p class="pq-badge">Algorand MainNet log · awaiting first confirmed checkpoint</p>
+        <div class="pq-status-row">
+          <p class="pq-badge">Algorand MainNet</p>
+          <p class="pq-chip"><!--PQ_LATEST-->Awaiting checkpoint</p>
+        </div>
         <h2>Verifiable routing history</h2>
         <p>PQ Trust is 402Signal's append-only transparency layer. Routing evidence is committed to an append-only Merkle log.</p>
-        <p>Falcon-1024 post-quantum transaction authorization.</p>
-        <!--PQ_LATEST-->
+        <p>Falcon anchors checkpoints, not merchant payments.</p>
         <p>Later rewriting inconsistent with published checkpoints becomes detectable.</p>
-        <p>This post-quantum authorization protects the checkpoint transaction. It does not make Base or Solana merchant payments post-quantum secure. Production log identity is Algorand MainNet. Awaiting first confirmed MainNet checkpoint.</p>
         <p><a class="btn secondary" href="/transparency">View verification details</a></p>
       </section>
 
