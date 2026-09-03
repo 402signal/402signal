@@ -1602,6 +1602,131 @@ def last_confirmed_checkpoint() -> dict:
     }
 
 
+_CONFIRM_PROOF_HOSTS = {
+    "tatum": "algorand-mainnet-indexer.gateway.tatum.io",
+    "nownodes": "algo-index.nownodes.io",
+}
+_MAINNET_ORIGIN = "402signal.com/pq/log/mainnet-v1"
+_MAINNET_GENESIS_ID = "mainnet-v1.0"
+
+
+def confirmation_provider_proof() -> dict:
+    """Return public-only provider proof metadata, or empty on corruption."""
+    raw = meta_get("confirmation_provider_proof")
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+        version = int(data.get("version") or 0)
+        tree_size = int(data.get("tree_size") or 0)
+        verified_at = int(data.get("verified_at") or 0)
+    except (AttributeError, TypeError, ValueError, json.JSONDecodeError):
+        return {}
+    provider = str(data.get("provider") or "")
+    host = str(data.get("host") or "")
+    root = str(data.get("root") or "")
+    txid = str(data.get("txid") or "")
+    if not (
+        version == 1
+        and _CONFIRM_PROOF_HOSTS.get(provider) == host
+        and str(data.get("network") or "") == "mainnet"
+        and str(data.get("falcon_scheme") or "") == "f1"
+        and tree_size >= 1
+        and len(root) == 64
+        and all(ch in "0123456789abcdef" for ch in root)
+        and len(txid) == 52
+        and all(ch in "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567" for ch in txid)
+        and verified_at >= 1
+    ):
+        return {}
+    return {
+        "version": 1,
+        "provider": provider,
+        "host": host,
+        "network": "mainnet",
+        "falcon_scheme": "f1",
+        "tree_size": tree_size,
+        "root": root,
+        "txid": txid,
+        "verified_at": verified_at,
+    }
+
+
+def save_confirmation_provider_proof(
+    *,
+    provider: str,
+    host: str,
+    tree_size: int,
+    root,
+    txid: str,
+    verified_at: int,
+) -> dict:
+    """Durably record an exact verification of the latest MainNet anchor.
+
+    This stores no credential or response body. The proof cannot be written
+    for an arbitrary transaction: it must exactly match the durable latest
+    confirmed checkpoint while the SQLite write lock is held.
+    """
+    name = str(provider or "")
+    want_host = str(host or "")
+    if _CONFIRM_PROOF_HOSTS.get(name) != want_host:
+        raise StoreError("invalid confirmation provider proof")
+    size = int(tree_size)
+    root_hex = bytes(root).hex() if isinstance(root, (bytes, bytearray)) else str(root or "")
+    want_txid = str(txid or "")
+    when = int(verified_at)
+    if not (
+        size >= 1
+        and len(root_hex) == 64
+        and all(ch in "0123456789abcdef" for ch in root_hex)
+        and len(want_txid) == 52
+        and all(ch in "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567" for ch in want_txid)
+        and when >= 1
+    ):
+        raise StoreError("invalid confirmation provider proof")
+    payload = {
+        "version": 1,
+        "provider": name,
+        "host": want_host,
+        "network": "mainnet",
+        "falcon_scheme": "f1",
+        "tree_size": size,
+        "root": root_hex,
+        "txid": want_txid,
+        "verified_at": when,
+    }
+    with _lock:
+        conn = _connect()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT v FROM meta WHERE k = 'last_confirmed_checkpoint'"
+            ).fetchone()
+            latest = json.loads(str(row[0] or "")) if row and row[0] else {}
+            if not isinstance(latest, dict):
+                raise StoreError("confirmed checkpoint unavailable")
+            if not (
+                int(latest.get("size") or 0) == size
+                and str(latest.get("root") or "") == root_hex
+                and str(latest.get("txid") or "") == want_txid
+                and str(latest.get("origin") or "") == _MAINNET_ORIGIN
+                and str(latest.get("network") or "") == "mainnet"
+                and str(latest.get("genesis_id") or "") == _MAINNET_GENESIS_ID
+            ):
+                raise StoreError("confirmation proof does not match latest checkpoint")
+            conn.execute(
+                "INSERT INTO meta(k, v) VALUES ('confirmation_provider_proof', ?) "
+                "ON CONFLICT(k) DO UPDATE SET v = excluded.v",
+                (json.dumps(payload, sort_keys=True, separators=(",", ":")),),
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        _chmod_db_files(_conn_path or db_path())
+    return confirmation_provider_proof()
+
+
 def save_confirmed_checkpoint(
     *,
     tree_size: int,

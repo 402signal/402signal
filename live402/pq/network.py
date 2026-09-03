@@ -28,6 +28,7 @@ txid is never confirmation. Submit-host pending is never independent.
 from __future__ import annotations
 
 import os
+import time
 from dataclasses import dataclass
 
 # Protocol base min (algod min-fee) is 1000 µAlgo today.
@@ -140,13 +141,16 @@ CONFIRM_PROVIDERS = {
 }
 # Optional alias for the primary (Tatum) key. Fly secret later.
 PRIMARY_INDEXER_TOKEN_ENV = "LIVE402_PQ_CONFIRM_INDEXER_TOKEN"
-# Falcon pqsig on the production endpoint is not proven in this
-# environment (no API key; no public MainNet f1 txn retrieved).
-# confirmation_ready stays false until a redacted fixture exists.
+# Provider capability is not readiness. Tatum preserved the native Falcon
+# pqsig for confirmed MainNet transaction TGCEA72N... during the 2026-09-03
+# activation preflight. Runtime readiness still requires a recent, durable
+# proof produced by fetch+decode+verify of a confirmed Falcon anchor. NowNodes
+# remains unproven and fail-closed.
 CONFIRM_FALCON_COMPATIBLE = {
-    "tatum": False,
+    "tatum": True,
     "nownodes": False,
 }
+CONFIRMATION_PROOF_MAX_AGE_S = 60 * 60
 
 
 @dataclass(frozen=True)
@@ -400,12 +404,53 @@ def runtime_confirmation_independent(network: str | None = None) -> bool:
     return confirmation_independent(cfg.submit_host, confirm)
 
 
-def confirmation_status(network: str | None = None) -> dict:
+def _confirmation_proof_valid(
+    provider: ConfirmProvider | None,
+    proof: dict | None,
+    *,
+    now: int,
+) -> tuple[bool, int | None]:
+    """Validate public-only evidence of an exact Falcon confirmation fetch."""
+    if provider is None or not isinstance(proof, dict):
+        return False, None
+    try:
+        version = int(proof.get("version") or 0)
+        verified_at = int(proof.get("verified_at") or 0)
+        tree_size = int(proof.get("tree_size") or 0)
+    except (TypeError, ValueError):
+        return False, None
+    root = str(proof.get("root") or "")
+    txid = str(proof.get("txid") or "")
+    age = int(now) - verified_at
+    valid = bool(
+        version == 1
+        and str(proof.get("network") or "") == MAINNET_NAME
+        and str(proof.get("provider") or "") == provider.name
+        and str(proof.get("host") or "") == provider.host
+        and str(proof.get("falcon_scheme") or "") == "f1"
+        and tree_size >= 1
+        and len(root) == 64
+        and all(ch in "0123456789abcdef" for ch in root)
+        and len(txid) == 52
+        and all(ch in "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567" for ch in txid)
+        and verified_at >= 1
+        and 0 <= age <= CONFIRMATION_PROOF_MAX_AGE_S
+    )
+    return valid, age if verified_at >= 1 else None
+
+
+def confirmation_status(
+    network: str | None = None,
+    *,
+    proof: dict | None = None,
+    now: int | None = None,
+) -> dict:
     """Split independence vs readiness. No secrets.
 
     confirmation_ready requires known provider, different org,
-    credentials configured, Falcon-compatible proven, and a reachable
-    probe. Missing any one stays false. This does not flip trust v2.
+    credentials configured, a known Falcon-compatible provider, and a
+    recent durable proof from exact fetch+decode+semantic verification.
+    Missing any one stays false. This does not flip trust v2.
     """
     name = (network or MAINNET_NAME).strip().lower()
     cfg = get_network(name)
@@ -422,17 +467,24 @@ def confirmation_status(network: str | None = None) -> dict:
     org_indep = confirmation_independent(cfg.submit_host, host) if known else False
     creds = bool(provider and confirm_auth_header())
     falcon_ok = bool(provider and CONFIRM_FALCON_COMPATIBLE.get(provider.name))
-    reachable = False
+    proof_ok, proof_age = _confirmation_proof_valid(
+        provider,
+        proof,
+        now=int(now if now is not None else time.time()),
+    )
+    reachable = bool(proof_ok)
     ready = bool(known and org_indep and creds and reachable and falcon_ok)
     blocker = ""
     if not known:
         blocker = "confirm_provider_not_selected"
-    elif not falcon_ok:
-        blocker = "tatum_falcon_pqsig_unproven_no_api_key"
-    elif not creds:
-        blocker = "confirm_credentials_missing"
     elif not org_indep:
         blocker = "confirm_org_not_independent"
+    elif not creds:
+        blocker = "confirm_credentials_missing"
+    elif not falcon_ok:
+        blocker = "confirm_provider_falcon_unproven"
+    elif not proof_ok:
+        blocker = "confirm_proof_missing_or_stale"
     return {
         "confirm_provider_known": known,
         "confirm_provider": provider.name if provider else "",
@@ -443,6 +495,8 @@ def confirmation_status(network: str | None = None) -> dict:
         "confirm_reachable": reachable,
         "confirm_falcon_compatible": falcon_ok,
         "confirmation_ready": ready,
+        "confirmation_proof_age_s": proof_age,
+        "confirmation_proof_max_age_s": CONFIRMATION_PROOF_MAX_AGE_S,
         "blocker": blocker,
     }
 

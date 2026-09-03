@@ -154,9 +154,9 @@ class ConfirmOrgMappingTests(unittest.TestCase):
         self.assertTrue(status["confirm_org_independent"])
         self.assertFalse(status["confirm_credentials_configured"])
         self.assertFalse(status["confirm_reachable"])
-        self.assertFalse(status["confirm_falcon_compatible"])
+        self.assertTrue(status["confirm_falcon_compatible"])
         self.assertFalse(status["confirmation_ready"])
-        self.assertEqual(status["blocker"], "tatum_falcon_pqsig_unproven_no_api_key")
+        self.assertEqual(status["blocker"], "confirm_credentials_missing")
         confirm = algo_anchor.confirm_provider("mainnet")
         self.assertTrue(confirm["independent_of_submit"])
         self.assertFalse(confirm["confirmation_ready"])
@@ -173,13 +173,15 @@ class ConfirmOrgMappingTests(unittest.TestCase):
         self.assertFalse(snap["confirm_provider"]["confirmation_ready"])
         self.assertTrue(snap["trust"]["not_mainnet_go"])
 
-    def test_credentials_without_falcon_proof_still_not_ready(self):
+    def test_credentials_without_recent_exact_proof_still_not_ready(self):
         os.environ["LIVE402_PQ_CONFIRM_PROVIDER"] = "tatum"
         os.environ["LIVE402_PQ_CONFIRM_TATUM_API_KEY"] = "named-not-logged"
         status = netcfg.confirmation_status("mainnet")
         self.assertTrue(status["confirm_credentials_configured"])
-        self.assertFalse(status["confirm_falcon_compatible"])
+        self.assertTrue(status["confirm_falcon_compatible"])
+        self.assertFalse(status["confirm_reachable"])
         self.assertFalse(status["confirmation_ready"])
+        self.assertEqual(status["blocker"], "confirm_proof_missing_or_stale")
         header = netcfg.confirm_auth_header()
         self.assertEqual(header[0], "x-api-key")
         blob = str(status) + str(monitor.snapshot())
@@ -194,6 +196,42 @@ class ConfirmOrgMappingTests(unittest.TestCase):
         status = netcfg.confirmation_status("mainnet")
         self.assertTrue(status["confirm_credentials_configured"])
         self.assertNotIn("alias-not-logged", str(status) + str(monitor.snapshot()))
+
+    def test_recent_exact_tatum_proof_is_ready_and_expires(self):
+        os.environ["LIVE402_PQ_CONFIRM_PROVIDER"] = "tatum"
+        os.environ["LIVE402_PQ_CONFIRM_TATUM_API_KEY"] = "never-in-status"
+        proof = {
+            "version": 1,
+            "provider": "tatum",
+            "host": "algorand-mainnet-indexer.gateway.tatum.io",
+            "network": "mainnet",
+            "falcon_scheme": "f1",
+            "tree_size": 273,
+            "root": "ab" * 32,
+            "txid": "A" * 52,
+            "verified_at": 10_000,
+        }
+        ready = netcfg.confirmation_status("mainnet", proof=proof, now=10_001)
+        self.assertTrue(ready["confirm_reachable"])
+        self.assertTrue(ready["confirm_falcon_compatible"])
+        self.assertTrue(ready["confirmation_ready"])
+        self.assertEqual(ready["confirmation_proof_age_s"], 1)
+        self.assertEqual(ready["blocker"], "")
+        self.assertNotIn("never-in-status", str(ready))
+
+        stale = netcfg.confirmation_status(
+            "mainnet",
+            proof=proof,
+            now=10_000 + netcfg.CONFIRMATION_PROOF_MAX_AGE_S + 1,
+        )
+        self.assertFalse(stale["confirm_reachable"])
+        self.assertFalse(stale["confirmation_ready"])
+        self.assertEqual(stale["blocker"], "confirm_proof_missing_or_stale")
+
+        mismatch = dict(proof, provider="nownodes", host="algo-index.nownodes.io")
+        status = netcfg.confirmation_status("mainnet", proof=mismatch, now=10_001)
+        self.assertFalse(status["confirm_reachable"])
+        self.assertFalse(status["confirmation_ready"])
 
     def test_no_blockdaemon_confirm_surface_and_singular_defs(self):
         src = Path(netcfg.__file__).read_text(encoding="utf-8")
@@ -217,7 +255,7 @@ class ConfirmOrgMappingTests(unittest.TestCase):
             "computed_confirmation_policy",
         ):
             self.assertEqual(names.count(target), 1, target)
-        self.assertFalse(netcfg.CONFIRM_FALCON_COMPATIBLE["tatum"])
+        self.assertTrue(netcfg.CONFIRM_FALCON_COMPATIBLE["tatum"])
         self.assertFalse(netcfg.CONFIRM_FALCON_COMPATIBLE["nownodes"])
 
 

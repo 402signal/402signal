@@ -133,9 +133,9 @@ confirm is Tatum or NowNodes and submit is AlgoNode/Nodely. Default
 repo / committed `trust_root.v2` still has both hosts Nodely, so
 `independent_provider` stays false there.
 
-Production MainNet GO requires the Tatum (or NowNodes) allowlisted
-confirm host plus the API key as a **Fly secret later**. Do not set
-those secrets in this PR.
+Production MainNet confirmation requires the selected allowlisted
+confirm host plus its API key as a Fly secret. Provider selection and
+credentials alone are not readiness.
 
 Org labels come from public company records, not a legal audit.
 
@@ -153,21 +153,20 @@ Flags: `confirm_provider_known`, `confirm_org_independent`,
 MainNet GO. Unknown provider/org is false. Missing credential or
 failed probe is not ready.
 
-## H. Tatum Falcon pqsig BLOCKER
+## H. Tatum Falcon pqsig proof
 
-This environment has no Tatum or NowNodes API key. A GET to the
-exact Tatum production indexer
-`https://algorand-mainnet-indexer.gateway.tatum.io/v2/transactions?sig-type=pqsig&limit=1`
-without a key returned HTTP 500 (statement timeout). The public
-AlgoNode MainNet indexer `sig-type=pqsig` search also timed out and
-returned 0 transactions.
+On 2026-09-03 an authenticated Tatum fetch of confirmed MainNet anchor
+`TGCEA72NGN7GE3MPPKP672UNSVZ7I6GIQVEZCEOXA5XMVLOEDGZA` preserved its
+native Falcon `f1` scheme, public key, signature, and PQ1 transaction
+fields. The existing `decode_chain_txn` -> `verify_fetched_anchor` path
+accepted the result. No API key or response body is committed.
 
-BLOCKER: Falcon `f1` fields (scheme, pk, sig, salt) are not proven
-on the Tatum production endpoint. `CONFIRM_FALCON_COMPATIBLE` stays
-false for both table entries. `confirmation_ready` stays false.
-The decoder is not weakened. Do not treat Tatum as a production
-confirm authority until a redacted fixture exists that
-`decode_chain_txn` -> `verify_fetched_anchor` accepts.
+Tatum is therefore a known Falcon-compatible provider; NowNodes remains
+unproven. Capability alone is not readiness. Operator preflight must fetch
+the exact latest durable CONFIRMED anchor through the selected provider,
+decode and semantically verify it, then store only public proof metadata.
+That proof expires after one hour. Missing, mismatched, malformed, future,
+or stale proof keeps `confirmation_ready=false`.
 
 ## I. Trust root stays pre-GO
 
@@ -192,16 +191,18 @@ import those final functions.
 
 ## Falcon confirm bootstrap (item 6)
 
-`CONFIRM_FALCON_COMPATIBLE` stays **false** for tatum and nownodes.
-`confirmation_ready` stays **false**. Do not invent Tatum proof.
+`CONFIRM_FALCON_COMPATIBLE` is true only for Tatum. NowNodes stays false.
+`confirmation_ready` remains false until a recent durable exact-anchor
+proof exists for the selected provider and its credential is configured.
 
 402security approval model for a later bootstrap exception:
 
 - Org independence is from public company records, not a legal audit.
-- API credentials are Fly secrets **later**. Do not set them here.
-- Schema check on TestNet Falcon if possible; MainNet Falcon is unproven.
-- Staging keys only after GO with `MAINNET_BROADCAST` and `MAINNET_CANARY` **OFF**.
-- The **first** MainNet canary **is** the MainNet compatibility proof.
+- API credentials remain Fly secrets and are never logged or persisted.
+- MainNet Tatum capability is proven; NowNodes remains unproven.
+- Run exact-anchor preflight with `MAINNET_BROADCAST`, `AUTO`, and
+  `MAINNET_CANARY` off before activation.
+- A generic status response is never compatibility or reachability proof.
 - If the provider lacks PQsig, the row stays `SUBMITTED` / unconfirmed.
 - AUTO stays OFF. No second txn to test another provider.
 - Recovery reuses the same expected txid via fallback. Never a new spend.
@@ -232,8 +233,8 @@ healthy.
 - No funding
 - No MainNet txn
 - No cutover
-- Tatum/NowNodes Falcon pqsig unproven
-- `confirmation_ready=false`
+- NowNodes Falcon pqsig unproven
+- `confirmation_ready=false` until a fresh exact-anchor preflight proof exists
 - `trust_root.v2.not_mainnet_go=true`
 - `trust_root.v2.confirmation_policy.independent_provider=false` (default hosts still Nodely)
 - Confirm API keys are Fly secrets later, not in this PR

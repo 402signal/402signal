@@ -1439,7 +1439,12 @@ def submit_provider(network: str) -> dict:
     }
 
 
-def confirm_provider(network: str) -> dict:
+def confirm_provider(
+    network: str,
+    *,
+    proof: dict | None = None,
+    now: int | None = None,
+) -> dict:
     """Allowlisted fetch+decode target. Separate from submit_provider.
 
     Separable endpoints are not the same as independent confirmation.
@@ -1457,7 +1462,7 @@ def confirm_provider(network: str) -> dict:
     try:
         host = netcfg.configured_confirm_host(cfg.name)
         url = netcfg.configured_confirm_txn_url(cfg.name)
-        status = netcfg.confirmation_status(cfg.name)
+        status = netcfg.confirmation_status(cfg.name, proof=proof, now=now)
     except netcfg.UnknownNetwork:
         host = cfg.confirm_host
         url = cfg.confirm_txn_url
@@ -1496,6 +1501,9 @@ def confirm_provider(network: str) -> dict:
         "confirm_reachable": bool(status.get("confirm_reachable")),
         "confirm_falcon_compatible": bool(status.get("confirm_falcon_compatible")),
         "confirmation_ready": bool(status.get("confirmation_ready")),
+        "confirmation_proof_age_s": status.get("confirmation_proof_age_s"),
+        "confirmation_proof_max_age_s": status.get("confirmation_proof_max_age_s"),
+        "blocker": status.get("blocker") or "",
         "confirmation_policy": computed,
     }
     return out
