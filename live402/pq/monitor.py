@@ -93,6 +93,14 @@ def snapshot() -> dict:
         confirm = {"network": network, "kind": "confirm", "host": "", "url": "", "org": ""}
     ops = ops_state.snapshot()
     flags = ready_flags()
+    from live402.pq import auto_anchor
+
+    automatic_active = bool(
+        algo_anchor.automatic_mainnet_enabled()
+        and algo_anchor.mainnet_broadcast_requested()
+        and not algo_anchor.mainnet_canary_requested()
+    )
+
     return {
         "epoch": epoch,
         "network": network,
@@ -190,13 +198,15 @@ def snapshot() -> dict:
             "testnet_flag": algo_anchor.broadcast_requested(),
             "mainnet_flag": algo_anchor.mainnet_broadcast_requested(),
             "mainnet_canary_flag": algo_anchor.mainnet_canary_requested(),
-            "automatic_mainnet": False,
+            "automatic_mainnet": algo_anchor.automatic_mainnet_enabled(),
+            "automatic_active": automatic_active,
             "network": network,
         },
+        "automation": auto_anchor.status(now=now),
         "trust": {
             "live_version": int((trust.trust_root() or {}).get("version") or 1),
             "v2_prepared": True,
-            "not_mainnet_go": True,
+            "not_mainnet_go": not automatic_active,
             "mmd_seconds": MMD_SECONDS,
             "default_epoch": EPOCH_TESTNET,
         },
@@ -469,7 +479,7 @@ ALERTS = (
     },
     {
         "id": "mainnet_flag_set",
-        "when": "LIVE402_PQ_FALCON_MAINNET_BROADCAST is 1 before the later GO",
+        "when": "MainNet broadcast is 1 without exactly one approved mode: automatic or human canary",
         "severity": "incident",
     },
     {
@@ -481,5 +491,14 @@ ALERTS = (
         "id": "recovery_conflict",
         "when": "stored AUTHORIZED row disagrees on size, origin, root, or signed-note",
         "severity": "incident",
+    },
+    {
+        "id": "automatic_controller_halted",
+        "when": "the durable automatic job is HALTED; preserve state and require human recovery",
+        "severity": "incident",
+    },
+    {
+        "id": "automatic_budget_wait",
+        "when": "the hourly, daily, or monthly automatic fee ceiling blocks a new POST",
     },
 )

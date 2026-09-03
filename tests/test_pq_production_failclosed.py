@@ -158,7 +158,7 @@ class ProductionFailClosedTests(unittest.TestCase):
         self.assertFalse(algo_anchor.automatic_mainnet_enabled())
         src = Path(worker.__file__).read_text(encoding="utf-8")
         self.assertNotIn("submit_mainnet_canary", src)
-        self.assertIn("Automatic MainNet is off", src)
+        self.assertIn("Automatic MainNet is exact-opt-in and defaults off", src)
 
     def test_authorized_send_attempted_submitted_never_confirmed(self):
         os.environ["LIVE402_FIXTURE"] = "1"

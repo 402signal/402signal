@@ -1,8 +1,7 @@
 """PQ1 anchor worker on the HTTP app process.
 
 PRODUCTION is MainNet-only. Unset/unknown network fails closed.
-Automatic MainNet is off. Automatic MainNet anchoring stays off.
-Worker, tick, and boot never auto-send. Production never dials the TestNet signer (pq-anchor/1),
+Automatic MainNet is exact-opt-in and defaults off. Production never dials the TestNet signer (pq-anchor/1),
 never reads LIVE402_PQ_SIGNER_TOKEN, and never confirms via TestNet.
 
 TEST SUPPORT (LIVE402_FIXTURE=1 or LIVE402_PQ_TEST_SUPPORT=1) may use
@@ -338,8 +337,9 @@ def maybe_submit(
 ) -> dict | None:
     """TEST SUPPORT TestNet 6PN client only. Production never dials.
 
-    PRODUCTION / NETWORK=mainnet: return None. No pq-anchor/1, no
-    LIVE402_PQ_SIGNER_TOKEN, no auto-send. Automatic MainNet stays off.
+    PRODUCTION / NETWORK=mainnet: this legacy TestNet helper returns None.
+    No pq-anchor/1 and no LIVE402_PQ_SIGNER_TOKEN. The separate default-off
+    MainNet controller is invoked by tick(), never by this helper.
 
     TEST SUPPORT: a signer reply persists AUTHORIZED. Does not advance
     CONFIRMED. BROADCAST=1 may POST a TestNet SignedTxn. POST is not
@@ -584,16 +584,23 @@ def tick(
     fetch_fn=None,
     tree_size: int | None = None,
 ) -> dict | None:
-    """Existing PQ worker tick. PRODUCTION never auto-sends.
+    """Existing PQ worker tick.
 
-    MainNet / production: return None. No TestNet signer, no TestNet
-    confirm, no auto-send. Automatic anchoring stays off.
+    MainNet / production delegates to the default-off durable controller.
+    No TestNet signer or TestNet confirmation is reachable on that path.
 
     TEST SUPPORT: submit if needed, then independently confirm TestNet.
     POST success is not confirmation.
     """
     if _production_or_mainnet():
-        return None
+        from live402.pq import auto_anchor
+
+        return auto_anchor.tick(
+            now=now,
+            sign_fn=signer_callback,
+            send_fn=send_fn,
+            fetch_fn=fetch_fn,
+        )
     try:
         maybe_submit(
             signer_callback,

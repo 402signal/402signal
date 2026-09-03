@@ -95,23 +95,27 @@ class CloseoutStaticTests(unittest.TestCase):
         self.assertNotIn("LIVE402_PQ_FALCON_MAINNET_BROADCAST", fly)
         self.assertNotIn("LIVE402_PQ_FALCON_MAINNET_CANARY", fly)
 
-    def test_no_mainnet_falcon_submit(self):
+    def test_mainnet_submit_remains_exact_opt_in(self):
         algo = _read("live402/pq/algo_anchor.py")
         self.assertIn("testnet", algo.lower())
         self.assertIn("MAINNET_BROADCAST_ENV", algo)
         self.assertIn("def automatic_mainnet_enabled", algo)
-        self.assertIn("return False", algo.split("def automatic_mainnet_enabled")[1][:400])
-        self.assertIn("Never posts MainNet", algo)
+        auto = algo.split("def automatic_mainnet_enabled")[1][:500]
+        self.assertIn("MAINNET_AUTO_ENV", auto)
+        self.assertIn("MAINNET_AUTO_KILL_ENV", auto)
+        self.assertIn('strip() == "1"', auto)
         self.assertIn("MAINNET_CANARY_ENV", algo)
         self.assertIn("canary gate off", algo)
         self.assertIn("def _post_mainnet", algo)
         worker = _read("live402/pq/worker.py")
-        self.assertIn("Automatic MainNet is off", worker)
+        self.assertIn("Automatic MainNet is exact-opt-in and defaults off", worker)
+        self.assertIn("auto_anchor.tick", worker)
         self.assertNotIn("submit_mainnet_canary", worker)
         boot = _read("live402/server.py")
         self.assertNotIn("submit_mainnet_canary", boot)
         self.assertNotIn("LIVE402_PQ_FALCON_MAINNET_CANARY", FLY)
         self.assertNotIn("LIVE402_PQ_FALCON_MAINNET_BROADCAST", FLY)
+        self.assertNotIn("LIVE402_PQ_FALCON_MAINNET_AUTO", FLY)
 
     def test_no_raw_payment_logging(self):
         route = _read("live402/route.py")
@@ -133,6 +137,7 @@ class CloseoutStaticTests(unittest.TestCase):
             "docs/pq-first-production-event.md",
             "docs/backup.md",
             "docs/automation-security-boundaries.md",
+            "docs/pq-automatic-anchoring.md",
             "docs/github-protection.md",
             "docs/runbooks/mainnet-prelaunch-reset.md",
             "docs/settle-idempotency.md",

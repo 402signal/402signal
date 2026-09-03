@@ -31,15 +31,16 @@ Do not use `fee = minFee`, `fee = suggested`, or
 `max(minFee, 3000)` as the whole formula. Those ignore congestion and
 signed size.
 
-SLA cadence (unchanged): a new checkpoint is eligible after 15 minutes
-with at least one new leaf, or 1000 new leaves, whichever first.
-Automatic MainNet is off in this PR, so cadence is planning only.
+SLA cadence: a new checkpoint is eligible after 15 minutes with at
+least one new leaf, or 1000 new leaves, whichever happens first.
+Automatic MainNet is exact-opt-in and defaults off. See
+`docs/pq-automatic-anchoring.md`.
 
 ## Limited ALGO
 
 Keep a small balance. This is not a treasury.
 
-Suggested starting buffer after the later GO:
+Suggested starting buffer after activation:
 
 - 2 ALGO on the Falcon account
 - About 60+ fee-capped anchors at 0.03 ALGO, more if required fee stays
@@ -49,12 +50,12 @@ Do not keep a large unused balance on the signing account.
 
 ## Alert
 
-Treat balance below 0.5 ALGO as a low-balance alert (about 16
-fee-capped txns at the cap). Unexpected non-PQ1 activity on the Falcon
-account is an incident, not a funding event.
+Warn below 5 ALGO. Halt automatic anchoring below 1 ALGO. Unexpected
+non-PQ1 activity on the Falcon account is an incident, not a funding
+event. Replenishment remains a human action.
 
 ## Cadence vs spend
 
-PR40 is readiness only. It does not execute a MainNet canary. Until a
-later canary PR and a later automatic-GO, expected spend is zero. Do
-not pre-fund for a worker that is not enabled.
+The committed deployment configuration does not enable automatic
+anchoring. Expected automatic spend is zero until the one-time
+activation gates are set.

@@ -1,5 +1,9 @@
 # Prepare Falcon transparency anchoring for Algorand MainNet
 
+> Historical prelaunch runbook. MainNet canary preparation remains documented
+> here. The later default-off automatic controller and its activation procedure
+> are documented in `docs/pq-automatic-anchoring.md`.
+
 This PR prepares MainNet. It does not cut over.
 
 - NO MAINNET TRANSACTION WAS SUBMITTED
@@ -11,7 +15,8 @@ PRODUCTION is MainNet-only (`LIVE402_PQ_FALCON_NETWORK=mainnet`,
 `LIVE402_PQ_LOG_DB=/data/pq-log-mainnet.sqlite`,
 origin `402signal.com/pq/log/mainnet-v1`). Unset or unknown network
 fails closed. TestNet env names and `/data/pq-log.sqlite` are TEST
-SUPPORT (tests and archive) only. Automatic anchoring stays off.
+SUPPORT (tests and archive) only. Automatic anchoring remains default-off and
+requires the separate activation procedure linked above.
 Paid `/route` never waits for chain. Public status is CONFIRMED only.
 
 ## Threat-model delta

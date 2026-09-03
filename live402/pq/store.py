@@ -21,6 +21,7 @@ Never checkpoint a size whose tiles/bundles are missing.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sqlite3
@@ -121,6 +122,35 @@ CREATE TABLE IF NOT EXISTS confirmed_anchors (
     at INTEGER NOT NULL,
     network TEXT NOT NULL DEFAULT '',
     genesis_id TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS anchor_automation_state (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    confirmed_size INTEGER NOT NULL DEFAULT 0,
+    observed_tree_size INTEGER NOT NULL DEFAULT 0,
+    unanchored_since INTEGER NOT NULL DEFAULT 0,
+    updated_at INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS anchor_automation_jobs (
+    tree_size INTEGER PRIMARY KEY,
+    origin TEXT NOT NULL,
+    root TEXT NOT NULL,
+    checkpoint TEXT NOT NULL,
+    request_id TEXT NOT NULL,
+    params TEXT NOT NULL,
+    authorize_at INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    resign_count INTEGER NOT NULL DEFAULT 0,
+    sign_attempts INTEGER NOT NULL DEFAULT 0,
+    superseded_signed_sha256 TEXT NOT NULL DEFAULT '',
+    last_error TEXT NOT NULL DEFAULT '',
+    updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS anchor_automation_sends (
+    tree_size INTEGER PRIMARY KEY,
+    expected_txid TEXT NOT NULL UNIQUE,
+    fee INTEGER NOT NULL,
+    attempted_at INTEGER NOT NULL,
+    status TEXT NOT NULL
 );
 """
 
@@ -1047,6 +1077,487 @@ def discard_authorized_checkpoint(tree_size: int) -> None:
                 (json.dumps({"size": 0, "at": 0, "request_id": "", "origin": "", "root": ""}),),
             )
         conn.commit()
+
+
+_AUTO_STATUS_RANK = {
+    "PENDING": 0,
+    "AUTHORIZED": 1,
+    "SEND_ATTEMPTED": 2,
+    "SUBMITTED": 3,
+    "CONFIRMED": 4,
+    "HALTED": 5,
+}
+
+
+def automation_observe(*, tree_size: int, confirmed_size: int, now: int) -> dict:
+    """Durably track when the first currently-unanchored leaf was observed."""
+    current = max(0, int(tree_size))
+    confirmed = max(0, int(confirmed_size))
+    when = int(now)
+    with _lock:
+        conn = _connect()
+        row = conn.execute(
+            "SELECT confirmed_size, observed_tree_size, unanchored_since, updated_at "
+            "FROM anchor_automation_state WHERE singleton = 1"
+        ).fetchone()
+        prior_confirmed = int(row[0] or 0) if row else 0
+        prior_current = int(row[1] or 0) if row else 0
+        since = int(row[2] or 0) if row else 0
+        if current <= confirmed:
+            since = 0
+        elif not row or confirmed != prior_confirmed or since < 1:
+            since = when
+        if (
+            row
+            and confirmed == prior_confirmed
+            and current == prior_current
+            and since == int(row[2] or 0)
+        ):
+            # The worker wakes frequently. Avoid a SQLite commit when the
+            # observation did not change; this keeps WAL/volume churn tied
+            # to actual log growth or confirmation progress.
+            return {
+                "confirmed_size": prior_confirmed,
+                "observed_tree_size": prior_current,
+                "unanchored_since": since,
+                "updated_at": int(row[3] or 0),
+            }
+        conn.execute(
+            "INSERT INTO anchor_automation_state"
+            "(singleton, confirmed_size, observed_tree_size, unanchored_since, updated_at) "
+            "VALUES (1, ?, ?, ?, ?) "
+            "ON CONFLICT(singleton) DO UPDATE SET "
+            "confirmed_size = excluded.confirmed_size, "
+            "observed_tree_size = excluded.observed_tree_size, "
+            "unanchored_since = excluded.unanchored_since, "
+            "updated_at = excluded.updated_at",
+            (confirmed, current, since, when),
+        )
+        conn.commit()
+        return {
+            "confirmed_size": confirmed,
+            "observed_tree_size": current,
+            "unanchored_since": since,
+            "updated_at": when,
+        }
+
+
+def automation_state() -> dict:
+    with _lock:
+        row = _connect().execute(
+            "SELECT confirmed_size, observed_tree_size, unanchored_since, updated_at "
+            "FROM anchor_automation_state WHERE singleton = 1"
+        ).fetchone()
+        if not row:
+            return {
+                "confirmed_size": 0,
+                "observed_tree_size": 0,
+                "unanchored_since": 0,
+                "updated_at": 0,
+            }
+        return {
+            "confirmed_size": int(row[0] or 0),
+            "observed_tree_size": int(row[1] or 0),
+            "unanchored_since": int(row[2] or 0),
+            "updated_at": int(row[3] or 0),
+        }
+
+
+def _automation_job_row(conn: sqlite3.Connection, tree_size: int) -> dict | None:
+    row = conn.execute(
+        "SELECT tree_size, origin, root, checkpoint, request_id, params, authorize_at, "
+        "status, resign_count, sign_attempts, superseded_signed_sha256, "
+        "last_error, updated_at "
+        "FROM anchor_automation_jobs WHERE tree_size = ?",
+        (int(tree_size),),
+    ).fetchone()
+    if not row:
+        return None
+    try:
+        params = json.loads(str(row[5] or "{}"))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        params = {}
+    return {
+        "tree_size": int(row[0]),
+        "origin": str(row[1] or ""),
+        "root": str(row[2] or ""),
+        "checkpoint": str(row[3] or ""),
+        "request_id": str(row[4] or ""),
+        "params": params if isinstance(params, dict) else {},
+        "authorize_at": int(row[6] or 0),
+        "status": str(row[7] or ""),
+        "resign_count": int(row[8] or 0),
+        "sign_attempts": int(row[9] or 0),
+        "superseded_signed_sha256": str(row[10] or ""),
+        "last_error": str(row[11] or ""),
+        "updated_at": int(row[12] or 0),
+    }
+
+
+def automation_job_at(tree_size: int) -> dict | None:
+    with _lock:
+        return _automation_job_row(_connect(), int(tree_size))
+
+
+def last_automation_job() -> dict | None:
+    with _lock:
+        conn = _connect()
+        row = conn.execute(
+            "SELECT tree_size FROM anchor_automation_jobs ORDER BY updated_at DESC, tree_size DESC LIMIT 1"
+        ).fetchone()
+        return _automation_job_row(conn, int(row[0])) if row else None
+
+
+def create_automation_job(
+    *,
+    tree_size: int,
+    origin: str,
+    root,
+    checkpoint: str,
+    request_id: str,
+    params: dict,
+    authorize_at: int,
+) -> dict:
+    """Persist exact sign intent before dialing the signer."""
+    size = int(tree_size)
+    root_hex = bytes(root).hex() if isinstance(root, (bytes, bytearray)) else str(root or "")
+    when = int(authorize_at)
+    params_text = json.dumps(dict(params or {}), sort_keys=True, separators=(",", ":"))
+    with _lock:
+        conn = _connect()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            existing = _automation_job_row(conn, size)
+            if existing:
+                same = (
+                    existing["origin"] == str(origin or "")
+                    and existing["root"] == root_hex
+                    and existing["checkpoint"] == str(checkpoint or "")
+                    and existing["request_id"] == str(request_id or "")
+                    and existing["params"] == dict(params or {})
+                    and existing["authorize_at"] == when
+                )
+                if not same:
+                    raise StoreError("automation job conflict")
+                conn.commit()
+                return existing
+            conn.execute(
+                "INSERT INTO anchor_automation_jobs"
+                "(tree_size, origin, root, checkpoint, request_id, params, authorize_at, "
+                "status, resign_count, sign_attempts, superseded_signed_sha256, "
+                "last_error, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, 'PENDING', 0, 0, '', '', ?)",
+                (
+                    size,
+                    str(origin or ""),
+                    root_hex,
+                    str(checkpoint or ""),
+                    str(request_id or ""),
+                    params_text,
+                    when,
+                    when,
+                ),
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        return _automation_job_row(conn, size) or {}
+
+
+def set_automation_job_status(
+    tree_size: int, status: str, *, now: int, error: str = ""
+) -> dict:
+    want = str(status or "").strip()
+    if want not in _AUTO_STATUS_RANK:
+        raise StoreError("unknown automation status")
+    with _lock:
+        conn = _connect()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            existing = _automation_job_row(conn, int(tree_size))
+            if not existing:
+                raise StoreError("automation job missing")
+            have = str(existing.get("status") or "")
+            if have == "HALTED" and want != "HALTED":
+                raise StoreError("halted automation job")
+            if (
+                want != "HALTED"
+                and _AUTO_STATUS_RANK[want] < _AUTO_STATUS_RANK.get(have, -1)
+            ):
+                raise StoreError("automation status regression")
+            conn.execute(
+                "UPDATE anchor_automation_jobs SET status = ?, last_error = ?, updated_at = ? "
+                "WHERE tree_size = ?",
+                (want, str(error or "")[:120], int(now), int(tree_size)),
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        return _automation_job_row(conn, int(tree_size)) or {}
+
+
+def record_automation_sign_attempt(tree_size: int, *, now: int) -> dict:
+    """Persist before IPC. Initial call plus one exact-request recovery only."""
+    with _lock:
+        conn = _connect()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            job = _automation_job_row(conn, int(tree_size))
+            if not job or job.get("status") != "PENDING":
+                raise StoreError("automation sign state")
+            if int(job.get("sign_attempts") or 0) >= 2:
+                raise StoreError("automation sign attempt cap")
+            conn.execute(
+                "UPDATE anchor_automation_jobs SET sign_attempts = sign_attempts + 1, "
+                "updated_at = ? WHERE tree_size = ?",
+                (int(now), int(tree_size)),
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        return _automation_job_row(conn, int(tree_size)) or {}
+
+
+def begin_automation_resign(
+    tree_size: int,
+    *,
+    request_id: str,
+    params: dict,
+    authorize_at: int,
+) -> dict:
+    """Allow one pre-POST policy refresh. Never after SEND_ATTEMPTED."""
+    size = int(tree_size)
+    when = int(authorize_at)
+    params_text = json.dumps(dict(params or {}), sort_keys=True, separators=(",", ":"))
+    with _lock:
+        conn = _connect()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            job = _automation_job_row(conn, size)
+            auth = _authorized_row(conn, size)
+            if not job or job.get("status") != "AUTHORIZED":
+                raise StoreError("automation resign state")
+            if int(job.get("resign_count") or 0) >= 1:
+                raise StoreError("automation resign cap")
+            if auth and send_state_rank(auth.get("send_state")) >= _LATCHED_RANK:
+                raise StoreError("cannot resign after SEND_ATTEMPTED")
+            prior_digest = (
+                hashlib.sha256(bytes(auth.get("signed") or b"")).hexdigest()
+                if auth and auth.get("signed")
+                else ""
+            )
+            conn.execute("DELETE FROM authorized_anchors WHERE tree_size = ?", (size,))
+            raw = conn.execute(
+                "SELECT v FROM meta WHERE k = 'last_authorized_checkpoint'"
+            ).fetchone()
+            try:
+                meta = json.loads(raw[0]) if raw and raw[0] else {}
+            except (TypeError, ValueError, json.JSONDecodeError):
+                meta = {}
+            if isinstance(meta, dict) and int(meta.get("size") or 0) == size:
+                conn.execute(
+                    "INSERT INTO meta(k, v) VALUES ('last_authorized_checkpoint', ?) "
+                    "ON CONFLICT(k) DO UPDATE SET v = excluded.v",
+                    (
+                        json.dumps(
+                            {
+                                "size": 0,
+                                "at": 0,
+                                "request_id": "",
+                                "origin": "",
+                                "root": "",
+                            }
+                        ),
+                    ),
+                )
+            conn.execute(
+                "UPDATE anchor_automation_jobs SET request_id = ?, params = ?, authorize_at = ?, "
+                "status = 'PENDING', resign_count = resign_count + 1, sign_attempts = 0, "
+                "superseded_signed_sha256 = ?, last_error = '', updated_at = ? "
+                "WHERE tree_size = ?",
+                (str(request_id or ""), params_text, when, prior_digest, when, size),
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        return _automation_job_row(conn, size) or {}
+
+
+def reserve_automatic_send(
+    *,
+    tree_size: int,
+    expected_txid: str,
+    fee: int,
+    now: int,
+    hour_start: int,
+    day_start: int,
+    month_start: int,
+    hourly_max: int,
+    daily_max: int,
+    monthly_max: int,
+) -> dict:
+    """Atomically reserve budgets and persist SEND_ATTEMPTED before POST."""
+    size = int(tree_size)
+    expected = str(expected_txid or "").strip()
+    amount = int(fee)
+    when = int(now)
+    if not expected or amount < 1:
+        raise StoreError("invalid automatic send reservation")
+    with _lock:
+        conn = _connect()
+        try:
+            # Serialize the read-check-write reservation across processes.
+            # A contender must observe the committed row before it can POST.
+            conn.execute("BEGIN IMMEDIATE")
+
+            def fail(message: str) -> None:
+                raise StoreError(message)
+
+            existing_send = conn.execute(
+                "SELECT expected_txid, fee FROM anchor_automation_sends "
+                "WHERE tree_size = ?",
+                (size,),
+            ).fetchone()
+            auth = _authorized_row(conn, size)
+            job = _automation_job_row(conn, size)
+            if existing_send:
+                if str(existing_send[0]) != expected or int(existing_send[1]) != amount:
+                    fail("automatic send conflict")
+                fail("automatic send already reserved")
+            if not auth or not auth.get("signed") or not job:
+                fail("automatic authorization missing")
+            if job.get("status") != "AUTHORIZED":
+                fail("automatic job not authorized")
+            if send_state_rank(auth.get("send_state")) >= _LATCHED_RANK:
+                fail("automatic send already latched")
+            hourly = int(
+                conn.execute(
+                    "SELECT COUNT(*) FROM anchor_automation_sends "
+                    "WHERE attempted_at >= ?",
+                    (int(hour_start),),
+                ).fetchone()[0]
+                or 0
+            )
+            if hourly >= int(hourly_max):
+                fail("automatic hourly rate cap")
+            daily = int(
+                conn.execute(
+                    "SELECT COALESCE(SUM(fee), 0) FROM anchor_automation_sends "
+                    "WHERE attempted_at >= ?",
+                    (int(day_start),),
+                ).fetchone()[0]
+                or 0
+            )
+            monthly = int(
+                conn.execute(
+                    "SELECT COALESCE(SUM(fee), 0) FROM anchor_automation_sends "
+                    "WHERE attempted_at >= ?",
+                    (int(month_start),),
+                ).fetchone()[0]
+                or 0
+            )
+            if daily + amount > int(daily_max):
+                fail("automatic daily fee cap")
+            if monthly + amount > int(monthly_max):
+                fail("automatic monthly fee cap")
+            conn.execute(
+                "INSERT INTO anchor_automation_sends"
+                "(tree_size, expected_txid, fee, attempted_at, status) "
+                "VALUES (?, ?, ?, ?, 'SEND_ATTEMPTED')",
+                (size, expected, amount, when),
+            )
+            conn.execute(
+                "UPDATE authorized_anchors SET send_state = 'SEND_ATTEMPTED', "
+                "expected_txid = ?, send_attempted_at = ? WHERE tree_size = ?",
+                (expected, when, size),
+            )
+            conn.execute(
+                "UPDATE anchor_automation_jobs SET status = 'SEND_ATTEMPTED', "
+                "last_error = '', updated_at = ? WHERE tree_size = ?",
+                (when, size),
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        _chmod_db_files(_conn_path or db_path())
+        return _authorized_row(conn, size) or {}
+
+
+def set_automatic_send_status(tree_size: int, status: str, *, now: int) -> None:
+    want = str(status or "").strip()
+    if want not in {"SUBMITTED", "CONFIRMED"}:
+        raise StoreError("invalid automatic send status")
+    with _lock:
+        conn = _connect()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT status FROM anchor_automation_sends WHERE tree_size = ?",
+                (int(tree_size),),
+            ).fetchone()
+            if not row:
+                raise StoreError("automatic send missing")
+            ranks = {"SEND_ATTEMPTED": 1, "SUBMITTED": 2, "CONFIRMED": 3}
+            if ranks.get(str(row[0] or ""), -1) > ranks[want]:
+                raise StoreError("automatic send status regression")
+            conn.execute(
+                "UPDATE anchor_automation_sends SET status = ? WHERE tree_size = ?",
+                (want, int(tree_size)),
+            )
+            conn.execute(
+                "UPDATE anchor_automation_jobs SET status = ?, updated_at = ? WHERE tree_size = ?",
+                (want, int(now), int(tree_size)),
+            )
+            if want == "CONFIRMED":
+                # Existing authorized_anchors/confirmed_anchors retain the
+                # audit record. Keep only recent automatic budget metadata.
+                cutoff = int(now) - (40 * 24 * 60 * 60)
+                conn.execute(
+                    "DELETE FROM anchor_automation_sends "
+                    "WHERE status = 'CONFIRMED' AND attempted_at < ?",
+                    (cutoff,),
+                )
+                conn.execute(
+                    "DELETE FROM anchor_automation_jobs "
+                    "WHERE status = 'CONFIRMED' AND updated_at < ?",
+                    (cutoff,),
+                )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+
+
+def automatic_budget_usage(*, hour_start: int, day_start: int, month_start: int) -> dict:
+    with _lock:
+        conn = _connect()
+        hourly = int(
+            conn.execute(
+                "SELECT COUNT(*) FROM anchor_automation_sends WHERE attempted_at >= ?",
+                (int(hour_start),),
+            ).fetchone()[0]
+            or 0
+        )
+        daily = int(
+            conn.execute(
+                "SELECT COALESCE(SUM(fee), 0) FROM anchor_automation_sends WHERE attempted_at >= ?",
+                (int(day_start),),
+            ).fetchone()[0]
+            or 0
+        )
+        monthly = int(
+            conn.execute(
+                "SELECT COALESCE(SUM(fee), 0) FROM anchor_automation_sends WHERE attempted_at >= ?",
+                (int(month_start),),
+            ).fetchone()[0]
+            or 0
+        )
+        return {"hourly_count": hourly, "daily_fee": daily, "monthly_fee": monthly}
 
 
 def last_confirmed_checkpoint() -> dict:
