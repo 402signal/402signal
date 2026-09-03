@@ -171,7 +171,22 @@ class AutoAnchorTests(unittest.TestCase):
         snap = monitor.snapshot()
         self.assertTrue(snap["confirm_provider"]["confirm_reachable"])
         self.assertTrue(snap["confirm_provider"]["confirmation_ready"])
-        self.assertNotIn("must-not-leak", str(health) + str(proof) + str(snap))
+        public = trust._public_descriptor_mainnet()
+        public_confirm = public["confirmation_policy"]
+        self.assertEqual(public_confirm["confirm_provider"], "tatum")
+        self.assertEqual(
+            public_confirm["confirm_host"],
+            "algorand-mainnet-indexer.gateway.tatum.io",
+        )
+        self.assertEqual(public_confirm["confirm_org"], "tatum")
+        self.assertTrue(public_confirm["independent_provider"])
+        self.assertTrue(public_confirm["confirmation_ready"])
+        self.assertNotIn(
+            "must-not-leak", str(health) + str(proof) + str(snap) + str(public)
+        )
+        self.assertFalse(
+            trust.trust_root_v2()["confirmation_policy"]["independent_provider"]
+        )
 
     def test_malformed_provider_response_never_persists_readiness(self):
         root, txid = self._confirmed_anchor()
@@ -245,10 +260,16 @@ class AutoAnchorTests(unittest.TestCase):
         desc = trust._public_descriptor_mainnet()
         self.assertEqual(desc["falcon"]["allowed_broadcast"], "none")
         self.assertTrue(desc["not_mainnet_go"])
+        self.assertFalse(desc["confirmation_policy"]["independent_provider"])
         self._arm_auto()
         desc = trust._public_descriptor_mainnet()
         self.assertEqual(desc["falcon"]["allowed_broadcast"], "mainnet")
         self.assertFalse(desc["not_mainnet_go"])
+        self.assertEqual(desc["confirmation_policy"]["confirm_provider"], "tatum")
+        self.assertEqual(desc["confirmation_policy"]["confirm_org"], "tatum")
+        self.assertTrue(desc["confirmation_policy"]["independent_provider"])
+        self.assertTrue(desc["confirmation_policy"]["confirm_falcon_compatible"])
+        self.assertFalse(desc["confirmation_policy"]["confirmation_ready"])
         snap = monitor.snapshot()
         self.assertTrue(snap["broadcast"]["automatic_active"])
         self.assertFalse(snap["trust"]["not_mainnet_go"])
