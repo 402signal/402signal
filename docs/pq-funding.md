@@ -42,8 +42,9 @@ Keep a small balance. This is not a treasury.
 
 Suggested starting buffer after activation:
 
-- 2 ALGO on the Falcon account
-- About 60+ fee-capped anchors at 0.03 ALGO, more if required fee stays
+- 5 ALGO on the Falcon account so activation does not begin below the
+  low-balance warning threshold
+- About 160+ fee-capped anchors at 0.03 ALGO, more if required fee stays
   near the uncongested Falcon floor (3000 µAlgo)
 
 Do not keep a large unused balance on the signing account.
