@@ -226,6 +226,8 @@ def _public_descriptor_mainnet() -> dict:
     from live402.pq import algo_anchor
     from live402.pq import canary
     from live402.pq import log_identity
+    from live402.pq import network as netcfg
+    from live402.pq import store
 
     desc = dict(trust_root_v2())
     falcon = dict(desc.get("falcon") or {})
@@ -251,6 +253,41 @@ def _public_descriptor_mainnet() -> dict:
         "balance_halt_microalgo": canary.AUTO_BALANCE_HALT,
     }
     desc["broadcast_policy"] = policy
+    try:
+        confirmation = netcfg.computed_confirmation_policy(netcfg.MAINNET_NAME)
+        status = netcfg.confirmation_status(
+            netcfg.MAINNET_NAME,
+            proof=store.confirmation_provider_proof(),
+        )
+        confirmation["confirm_provider"] = str(
+            status.get("confirm_provider") or ""
+        )
+        confirmation["confirm_provider_known"] = bool(
+            status.get("confirm_provider_known")
+        )
+        confirmation["confirm_falcon_compatible"] = bool(
+            status.get("confirm_falcon_compatible")
+        )
+        confirmation["confirm_reachable"] = bool(status.get("confirm_reachable"))
+        confirmation["confirmation_ready"] = bool(status.get("confirmation_ready"))
+        confirmation["confirmation_proof_age_s"] = status.get(
+            "confirmation_proof_age_s"
+        )
+        confirmation["confirmation_proof_max_age_s"] = status.get(
+            "confirmation_proof_max_age_s"
+        )
+        confirmation["blocker"] = str(status.get("blocker") or "")
+        desc["confirmation_policy"] = confirmation
+    except Exception:
+        # Public metadata fails closed without affecting routing or anchoring.
+        confirmation = dict(desc.get("confirmation_policy") or {})
+        confirmation["independent_provider"] = False
+        confirmation["confirm_provider_known"] = False
+        confirmation["confirm_falcon_compatible"] = False
+        confirmation["confirm_reachable"] = False
+        confirmation["confirmation_ready"] = False
+        confirmation["blocker"] = "runtime_confirmation_status_unavailable"
+        desc["confirmation_policy"] = confirmation
     desc["not_mainnet_go"] = not active
     desc["witness_policy"] = []
     sig = dict(desc.get("log_signature") or {})

@@ -171,7 +171,10 @@ or stale proof keeps `confirmation_ready=false`.
 ## I. Trust root stays pre-GO
 
 `LIVE402_PQ_CONFIRM_PROVIDER=tatum` does not rewrite committed
-`trust_root.v2`. Runtime/ops may report different-org configured.
+`trust_root.v2`. The live public descriptor overlays the configured
+provider, organization independence, Falcon compatibility, and recent
+proof readiness so it does not present the inactive Nodely template as
+current runtime policy. Runtime/ops report the same computed policy.
 `validate_descriptor_v2` still requires `independent_provider=false`
 and `not_mainnet_go=true`.
 
