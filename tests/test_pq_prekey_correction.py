@@ -480,10 +480,10 @@ class PrekeyCorrectionTests(unittest.TestCase):
         self.assertFalse(health["confirm_provider"].get("probed"))
         self.assertFalse(health["confirm_provider"].get("reachable"))
 
-    def test_falcon_compatible_stays_false(self):
+    def test_tatum_capability_does_not_bypass_runtime_proof(self):
         from live402.pq import network as netcfg
 
-        self.assertFalse(netcfg.CONFIRM_FALCON_COMPATIBLE["tatum"])
+        self.assertTrue(netcfg.CONFIRM_FALCON_COMPATIBLE["tatum"])
         self.assertFalse(netcfg.CONFIRM_FALCON_COMPATIBLE["nownodes"])
         status = netcfg.confirmation_status("mainnet")
         self.assertFalse(status["confirm_falcon_compatible"])

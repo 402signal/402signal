@@ -121,6 +121,8 @@ def _configuration_gate() -> None:
         raise AutoAnchorError("confirm_provider_not_independent")
     if not confirmation.get("confirm_credentials_configured"):
         raise AutoAnchorError("confirm_credentials_missing")
+    if not confirmation.get("confirm_falcon_compatible"):
+        raise AutoAnchorError("confirm_provider_falcon_unproven")
 
 
 def _confirmation_path_verified(*, fetch_fn=None) -> bool:
@@ -149,7 +151,23 @@ def _confirmation_path_verified(*, fetch_fn=None) -> bool:
         )
     except (ValueError, algo_anchor.AnchorError):
         return False
-    return str(verified.get("txid") or "") == txid
+    if str(verified.get("txid") or "") != txid:
+        return False
+    try:
+        provider = netcfg.configured_confirm_provider()
+        if provider is None or not netcfg.CONFIRM_FALCON_COMPATIBLE.get(provider.name):
+            return False
+        store.save_confirmation_provider_proof(
+            provider=provider.name,
+            host=provider.host,
+            tree_size=size,
+            root=root,
+            txid=txid,
+            verified_at=int(time.time()),
+        )
+    except (netcfg.UnknownNetwork, store.StoreError, TypeError, ValueError):
+        return False
+    return True
 
 
 def _identity_from_job(job: dict) -> dict:

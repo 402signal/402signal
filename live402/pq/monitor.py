@@ -87,7 +87,11 @@ def snapshot() -> dict:
         if network not in {algo_anchor.TESTNET_NAME, algo_anchor.MAINNET_NAME}:
             raise algo_anchor.AnchorError("unknown network")
         submit = algo_anchor.submit_provider(network)
-        confirm = algo_anchor.confirm_provider(network)
+        confirm = algo_anchor.confirm_provider(
+            network,
+            proof=store.confirmation_provider_proof(),
+            now=now,
+        )
     except Exception:
         submit = {"network": network, "kind": "submit", "host": "", "url": "", "org": ""}
         confirm = {"network": network, "kind": "confirm", "host": "", "url": "", "org": ""}
@@ -172,6 +176,9 @@ def snapshot() -> dict:
             "confirm_reachable": bool(confirm.get("confirm_reachable")),
             "confirm_falcon_compatible": bool(confirm.get("confirm_falcon_compatible")),
             "confirmation_ready": bool(confirm.get("confirmation_ready")),
+            "confirmation_proof_age_s": confirm.get("confirmation_proof_age_s"),
+            "confirmation_proof_max_age_s": confirm.get("confirmation_proof_max_age_s"),
+            "blocker": confirm.get("blocker") or "",
             "computed_independent_provider": bool(
                 (confirm.get("confirmation_policy") or {}).get("independent_provider")
             ),
@@ -216,20 +223,13 @@ def snapshot() -> dict:
     }
 
 
-def _redact_secret(text: str) -> str:
-    """Never echo an API key. Returns a type-only token."""
-    raw = str(text or "")
-    if not raw:
-        return ""
-    return "redacted"
-
-
 def _confirm_reachable(fetch_fn=None) -> dict:
-    """Confirm provider reachability via the static provider contract.
+    """Prove the selected provider using the latest confirmed Falcon anchor.
 
-    Uses the hardcoded host + path template + auth-header name. Never
-    logs the API key. Fixture without fetch_fn does not dial.
-    "not probed" is not reachable.
+    Reachability is not a generic HTTP response. The exact durable txid is
+    fetched through the pinned provider, decoded, and passed through the full
+    anchor verifier. Success stores public-only proof metadata. No API key or
+    response body is persisted or returned.
     """
     from live402 import fixtures
     from live402.pq import network as netcfg
@@ -246,7 +246,7 @@ def _confirm_reachable(fetch_fn=None) -> dict:
             "probed": False,
             "auth_header": "",
             "error": "unknown_network",
-            "contract": "static_provider",
+            "contract": "exact_confirmed_falcon_anchor",
         }
     confirm = algo_anchor.confirm_provider(network)
     host = confirm.get("host") or ""
@@ -260,62 +260,95 @@ def _confirm_reachable(fetch_fn=None) -> dict:
             auth_header = provider.auth_header
     except netcfg.UnknownNetwork:
         provider = None
-    if fetch_fn is not None:
-        try:
-            ok = bool(fetch_fn(host))
-        except Exception:
-            ok = False
-        return {
-            "reachable": ok,
-            "host": host,
-            "org": org,
-            "probed": True,
-            "auth_header": auth_header,
-            "contract": "static_provider",
-        }
-    if fixtures.fixture_mode():
+    if network != algo_anchor.MAINNET_NAME or provider is None:
         return {
             "reachable": False,
             "host": host,
             "org": org,
             "probed": False,
             "auth_header": auth_header,
-            "contract": "static_provider",
+            "error": "confirm_provider_not_selected",
+            "contract": "exact_confirmed_falcon_anchor",
         }
-    dummy = "A" * 52
+    if not netcfg.confirm_auth_header():
+        return {
+            "reachable": False,
+            "host": host,
+            "org": org,
+            "probed": False,
+            "auth_header": auth_header,
+            "error": "confirm_credentials_missing",
+            "contract": "exact_confirmed_falcon_anchor",
+        }
+    if fixtures.fixture_mode() and fetch_fn is None:
+        return {
+            "reachable": False,
+            "host": host,
+            "org": org,
+            "probed": False,
+            "auth_header": auth_header,
+            "contract": "exact_confirmed_falcon_anchor",
+        }
+    confirmed = store.last_confirmed_checkpoint()
+    txid = str(confirmed.get("txid") or "")
+    tree_size = int(confirmed.get("size") or 0)
+    root = str(confirmed.get("root") or "")
+    if tree_size < 1 or len(root) != 64 or not txid:
+        return {
+            "reachable": False,
+            "host": host,
+            "org": org,
+            "probed": False,
+            "auth_header": auth_header,
+            "error": "confirmed_anchor_unavailable",
+            "contract": "exact_confirmed_falcon_anchor",
+        }
     try:
-        url = netcfg.configured_confirm_txn_url(network, dummy)
-    except netcfg.UnknownNetwork:
+        fetched = algo_anchor.fetch_confirmed_txn(
+            txid,
+            network=algo_anchor.MAINNET_NAME,
+            fetch_fn=fetch_fn,
+        )
+        decoded = algo_anchor.decode_chain_txn(fetched)
+        verified = algo_anchor.verify_fetched_anchor(
+            decoded,
+            expected_origin=str(confirmed.get("origin") or ORIGIN),
+            expected_size=tree_size,
+            expected_root=bytes.fromhex(root),
+            expected_address=algo_anchor.falcon_address_for(algo_anchor.MAINNET_NAME),
+            expected_txid=txid,
+            expected_network=algo_anchor.MAINNET_NAME,
+        )
+        if str(verified.get("txid") or "") != txid:
+            raise algo_anchor.AnchorError("provider txid mismatch")
+        store.save_confirmation_provider_proof(
+            provider=provider.name,
+            host=provider.host,
+            tree_size=tree_size,
+            root=root,
+            txid=txid,
+            verified_at=int(time.time()),
+        )
+    except Exception:
         return {
             "reachable": False,
             "host": host,
             "org": org,
             "probed": True,
             "auth_header": auth_header,
-            "error": "unknown_network",
-            "contract": "static_provider",
+            "error": "confirmed_falcon_verification_failed",
+            "contract": "exact_confirmed_falcon_anchor",
         }
-    extra = None
-    try:
-        auth = netcfg.confirm_auth_header() if network == algo_anchor.MAINNET_NAME else None
-        if auth:
-            extra = {auth[0]: auth[1]}
-            auth_header = auth[0]
-    except Exception:
-        extra = None
-    raw = algo_anchor._probe_confirm_contract(url, host, 5.0, extra_headers=extra)
-    blob = str({"host": host, "url": url, "auth_header": auth_header})
-    if extra:
-        secret = list(extra.values())[0]
-        if secret and secret in blob:
-            blob = blob.replace(secret, _redact_secret(secret))
     return {
-        "reachable": bool(raw),
+        "reachable": True,
         "host": host,
         "org": org,
         "probed": True,
         "auth_header": auth_header,
-        "contract": "static_provider",
+        "falcon_compatible": True,
+        "verified_tree_size": tree_size,
+        "verified_txid": txid,
+        "contract": "exact_confirmed_falcon_anchor",
     }
 
 

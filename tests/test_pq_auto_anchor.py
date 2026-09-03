@@ -133,6 +133,99 @@ class AutoAnchorTests(unittest.TestCase):
             "genesisHash": algo_anchor.MAINNET_GENESIS_HASH,
         }
 
+    def _confirmed_anchor(self):
+        root = self._leaf()
+        blob = _signed(1, root)
+        txid = algo_anchor.signed_txn_txid(blob)
+        store.save_confirmed_checkpoint(
+            tree_size=1,
+            origin=ORIGIN_MAINNET,
+            root=root,
+            txid=txid,
+            confirmed_round=123,
+            at=1_000,
+            network="mainnet",
+            genesis_id=algo_anchor.MAINNET_GENESIS_ID,
+        )
+        return root, txid
+
+    def test_preflight_proves_tatum_with_exact_confirmed_falcon_anchor(self):
+        root, txid = self._confirmed_anchor()
+        os.environ["LIVE402_PQ_CONFIRM_PROVIDER"] = "tatum"
+        os.environ["LIVE402_PQ_CONFIRM_TATUM_API_KEY"] = "must-not-leak"
+        health = monitor.preflight(
+            signer_probe_fn=lambda: {
+                "reachable": True,
+                "protocol": True,
+                "probed": True,
+            },
+            confirm_fetch_fn=lambda got: _indexer(got, 1, root),
+        )
+        self.assertTrue(health["confirm_provider"]["reachable"])
+        self.assertTrue(health["confirm_provider"]["falcon_compatible"])
+        self.assertEqual(health["confirm_provider"]["verified_txid"], txid)
+        proof = store.confirmation_provider_proof()
+        self.assertEqual(proof["provider"], "tatum")
+        self.assertEqual(proof["txid"], txid)
+        self.assertEqual(proof["root"], root.hex())
+        snap = monitor.snapshot()
+        self.assertTrue(snap["confirm_provider"]["confirm_reachable"])
+        self.assertTrue(snap["confirm_provider"]["confirmation_ready"])
+        self.assertNotIn("must-not-leak", str(health) + str(proof) + str(snap))
+
+    def test_malformed_provider_response_never_persists_readiness(self):
+        root, txid = self._confirmed_anchor()
+        os.environ["LIVE402_PQ_CONFIRM_PROVIDER"] = "tatum"
+        os.environ["LIVE402_PQ_CONFIRM_TATUM_API_KEY"] = "fixture-key"
+        bad = _indexer(txid, 1, root)
+        bad["transaction"].pop("signature")
+        health = monitor.preflight(
+            signer_probe_fn=lambda: {},
+            confirm_fetch_fn=lambda _got: bad,
+        )
+        self.assertFalse(health["confirm_provider"]["reachable"])
+        self.assertEqual(store.confirmation_provider_proof(), {})
+        self.assertFalse(monitor.snapshot()["confirm_provider"]["confirmation_ready"])
+
+    def test_confirmation_proof_must_match_latest_durable_checkpoint(self):
+        root, txid = self._confirmed_anchor()
+        with self.assertRaises(store.StoreError):
+            store.save_confirmation_provider_proof(
+                provider="tatum",
+                host="algorand-mainnet-indexer.gateway.tatum.io",
+                tree_size=1,
+                root=b"\x99" * 32,
+                txid=txid,
+                verified_at=1_001,
+            )
+        self.assertEqual(store.confirmation_provider_proof(), {})
+        with self.assertRaises(store.StoreError):
+            store.save_confirmation_provider_proof(
+                provider="evil",
+                host="evil.example",
+                tree_size=1,
+                root=root,
+                txid=txid,
+                verified_at=1_001,
+            )
+
+    def test_unproven_nownodes_provider_blocks_automatic_controller(self):
+        self._leaf()
+        os.environ["LIVE402_PQ_FALCON_MAINNET_AUTO"] = "1"
+        os.environ["LIVE402_PQ_FALCON_MAINNET_BROADCAST"] = "1"
+        os.environ["LIVE402_PQ_CONFIRM_PROVIDER"] = "nownodes"
+        os.environ["LIVE402_PQ_CONFIRM_NOWNODES_API_KEY"] = "fixture-key"
+        signs = []
+        with patch.object(auto_anchor, "_runtime_allowed", return_value=True):
+            self.assertIsNone(
+                auto_anchor.tick(
+                    now=1_000,
+                    sign_fn=lambda ident: signs.append(ident),
+                )
+            )
+        self.assertEqual(signs, [])
+        self.assertIsNone(store.last_automation_job())
+
     def test_default_off_and_kill_switch_never_send(self):
         self._leaf()
         sent = []
