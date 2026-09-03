@@ -88,9 +88,11 @@ OUTPUT_SCHEMA = {
         },
         "pq_trust": {
             "type": "object",
+            "description": schema_fields.TRANSPARENCY_RETENTION_DESC,
             "properties": {
                 "transparency": {
                     "type": "object",
+                    "description": schema_fields.TRANSPARENCY_RETENTION_DESC,
                     "properties": {
                         "status": {"type": "string", "enum": list(schema_fields.TRANSPARENCY_STATUSES)},
                         "state": {"type": "string", "enum": list(schema_fields.TRANSPARENCY_STATES)},
@@ -98,8 +100,17 @@ OUTPUT_SCHEMA = {
                         "leaf_type": {"type": "string"},
                         "index": {"type": "integer"},
                         "checkpoint_size": {"type": "integer"},
-                        "receipt": {"type": "object"},
-                        "reveal": {"type": "object"},
+                        "receipt": {
+                            "type": "object",
+                            "description": "Retain with reveal for later verification.",
+                        },
+                        "reveal": {
+                            "type": "object",
+                            "description": (
+                                "Customer-private evidence. Not retained by 402Signal; "
+                                "retain securely with receipt."
+                            ),
+                        },
                     },
                 }
             },

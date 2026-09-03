@@ -22,6 +22,14 @@ TRANSPARENCY_STATES = (
 # Public status kept for clients that still read pending = durable + signed checkpoint.
 TRANSPARENCY_STATUSES = ("pending", "logged_uncheckpointed", "unavailable")
 
+TRANSPARENCY_RETENTION_DESC = (
+    "To verify the routing decision later, securely retain the complete paid /route "
+    "response, especially pq_trust.transparency.receipt and "
+    "pq_trust.transparency.reveal. 402Signal does not retain the private reveal and "
+    "cannot recover it if lost. Modified evidence fails verification against the "
+    "public log."
+)
+
 NEED_OR_URL_ANYOF = (
     {"required": ["need"]},
     {"required": ["url"]},
@@ -49,6 +57,9 @@ ACCEPT_PAYTO_CHANGE_DESC = (
 )
 REQUIRE_TRANSPARENCY_DESC = (
     "If true, paid /route fails when a signed checkpoint receipt cannot be produced. "
+    "This guarantees delivery of verifiable evidence, not server-side recovery. "
+    + TRANSPARENCY_RETENTION_DESC
+    + " "
     "Default false (SEC-ROUTER-004 / A-14): paid 200/503 does not require a durable "
     "signed leaf. Routing continues if append, signing, or anchoring is down "
     "(logged_uncheckpointed or unavailable). logged_uncheckpointed is never success "

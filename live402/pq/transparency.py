@@ -1231,6 +1231,22 @@ def _how_verification_works() -> str:
     )
 
 
+def _customer_verification_record() -> str:
+    return (
+        '<section class="block transparency-explainer" id="keep-verification-record">\n'
+        "  <h2>Keep your verification record</h2>\n"
+        "  <p>To verify a specific decision later, securely retain the complete paid "
+        "<code>/route</code> response, including <code>compared[]</code>. At minimum, "
+        "keep <code>pq_trust.transparency.receipt</code> and "
+        "<code>pq_trust.transparency.reveal</code> together.</p>\n"
+        "  <p>402Signal publishes the commitment, but does not retain the private reveal "
+        "and cannot recover it if lost. You do not have to trust your stored copy: changed "
+        "evidence will fail verification against the public log. The reveal contains private "
+        "request and decision evidence, so do not put it in public logs.</p>\n"
+        "</section>\n"
+    )
+
+
 def _anchor_boundary() -> str:
     return (
         '<section class="scope-note" id="anchor-boundary">\n'
@@ -1253,6 +1269,7 @@ def _main(model: dict) -> str:
         + "      <h2>Current status</h2>\n"
         + _ross_status_panel(model)
         + _how_verification_works()
+        + _customer_verification_record()
         + _anchor_boundary()
         + _confirmed_card(model)
         + _current_vs_anchored(model)
