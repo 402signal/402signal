@@ -185,7 +185,12 @@ BAZAAR_MCP = {
                         "type": "boolean",
                         "description": (
                             "If true, paid /route fails when a signed checkpoint receipt "
-                            "cannot be produced. Default false (SEC-ROUTER-004 / A-14): "
+                            "cannot be produced. This guarantees delivery, not server-side "
+                            "recovery. Securely retain the complete paid /route response, "
+                            "especially pq_trust.transparency.receipt and "
+                            "pq_trust.transparency.reveal. 402Signal does not retain the "
+                            "private reveal and cannot recover it if lost. Default false "
+                            "(SEC-ROUTER-004 / A-14): "
                             "paid 200/503 does not require a durable signed leaf."
                         ),
                     },

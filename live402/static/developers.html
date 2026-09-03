@@ -82,7 +82,8 @@
         <p class="eyebrow">PQ Trust</p>
         <h2>Make routing evidence part of the response</h2>
         <p>Set <code>"require_transparency": true</code> when the route must include a durable log leaf and signed checkpoint. If 402Signal cannot produce that receipt, it fails closed.</p>
-        <p>The response includes the receipt under <code>pq_trust.transparency</code>. Signed checkpoints are anchored on Algorand MainNet with native Falcon-1024 authorization. The route call does not wait for chain confirmation.</p>
+        <p>The response includes <code>receipt</code> and <code>reveal</code> under <code>pq_trust.transparency</code>. Signed checkpoints are anchored on Algorand MainNet with native Falcon-1024 authorization. The route call does not wait for chain confirmation.</p>
+        <p class="note"><strong>Keep the verification record:</strong> securely retain the complete paid <code>/route</code> response, including <code>compared[]</code>. At minimum, later verification requires both <code>pq_trust.transparency.receipt</code> and <code>pq_trust.transparency.reveal</code>. 402Signal does not retain the private reveal and cannot recover it if lost. A modified copy will fail verification against the public log. Because the reveal contains private request and decision evidence, do not put it in public logs.</p>
         <p class="pq-boundary"><strong>Scope:</strong> Falcon-1024 authorizes the checkpoint transaction. It does not authorize or secure the seller payment.</p>
         <p><a href="/transparency">Inspect checkpoints and verification details</a></p>
       </section>
