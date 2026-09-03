@@ -48,6 +48,7 @@ import json
 import os
 import time
 import uuid
+from datetime import datetime, timezone
 
 from live402.pq import ORIGIN_MAINNET
 from live402.pq import algo_anchor
@@ -70,7 +71,16 @@ HUMAN_GO_VALUE = "I_UNDERSTAND"
 # Algorand ~2.8s/round * 1000 MaxTxnLife, plus operator slack.
 VALIDITY_WINDOW_S = 3600
 
+# Automatic MainNet budget ceilings. Fees are microAlgos.
+AUTO_MAX_FEE = 30_000
+AUTO_DAILY_FEE_MAX = 500_000
+AUTO_MONTHLY_FEE_MAX = 10_000_000
+AUTO_HOURLY_ANCHOR_MAX = 12
+AUTO_BALANCE_WARN = 5_000_000
+AUTO_BALANCE_HALT = 1_000_000
+
 _POST_STATES = frozenset({STATE_SEND_ATTEMPTED, STATE_SUBMITTED, STATE_CONFIRMED})
+_AUTO_SEND_CAPABILITY = object()
 
 
 class CanaryError(RuntimeError):
@@ -169,6 +179,42 @@ def current_checkpoint_identity() -> dict:
         consistency = []
     else:
         consistency = [node.hex() for node in store.consistency_path(prev, size)]
+    return {
+        "origin": origin,
+        "tree_size": size,
+        "root": root,
+        "root_hex": root.hex(),
+        "checkpoint": note,
+        "consistency": consistency,
+    }
+
+
+def _automation_checkpoint_identity(raw: dict, *, _capability) -> dict:
+    """Re-derive a frozen job's identity from the local append-only log."""
+    if _capability is not _AUTO_SEND_CAPABILITY or not isinstance(raw, dict):
+        raise CanarySecurityError("automatic identity capability missing")
+    size = int(raw.get("tree_size") or 0)
+    if size < 1 or size > int(store.size() or 0):
+        raise CanarySecurityError("automatic tree size mismatch")
+    origin = str(raw.get("origin") or "")
+    if origin != ORIGIN_MAINNET or origin != (store.origin() or log_identity.configured_origin()):
+        raise CanarySecurityError("automatic origin mismatch")
+    root = store.root(size)
+    if root.hex() != _root_hex(raw.get("root")):
+        raise CanarySecurityError("automatic root mismatch")
+    note = store.checkpoint_at(size)
+    if not note or note != str(raw.get("checkpoint") or ""):
+        raise CanarySecurityError("automatic checkpoint mismatch")
+    try:
+        ckpt.parse_signed_note(note)
+    except ValueError as exc:
+        raise CanarySecurityError("automatic checkpoint unsigned") from exc
+    prev = _authorized_consistency_floor(size)
+    consistency = (
+        []
+        if prev >= size
+        else [node.hex() for node in store.consistency_path(prev, size)]
+    )
     return {
         "origin": origin,
         "tree_size": size,
@@ -336,6 +382,8 @@ def authorize(
     port: int | None = None,
     fetch_params_fn=None,
     observed_params: dict | None = None,
+    _identity: dict | None = None,
+    _capability=None,
 ) -> dict:
     """Checkpoint -> fetch frozen policy -> MainNet signer -> verify -> persist.
 
@@ -349,7 +397,11 @@ def authorize(
     response HMAC. Fixture sign_fn under LIVE402_FIXTURE / TEST SUPPORT may persist.
     Unpaid /route and read-only trust are not on this path.
     """
-    ident = current_checkpoint_identity()
+    ident = (
+        _automation_checkpoint_identity(_identity, _capability=_capability)
+        if _identity is not None
+        else current_checkpoint_identity()
+    )
     existing = store.authorized_at(ident["tree_size"])
     if existing and existing.get("signed"):
         return _existing_authorized_usable(existing, ident, now=now)
@@ -682,6 +734,129 @@ def send_durable(
         raise CanarySecurityError("provider txid mismatch")
     submitted = mark_submitted(attempted, str(txid))
     polled = poll_expected(submitted, fetch_fn=fetch_fn, now=now)
+    return polled or submitted
+
+
+def _budget_windows(now: int) -> tuple[int, int, int]:
+    dt = datetime.fromtimestamp(int(now), tz=timezone.utc)
+    hour = int(dt.replace(minute=0, second=0, microsecond=0).timestamp())
+    day = int(dt.replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
+    month = int(
+        dt.replace(day=1, hour=0, minute=0, second=0, microsecond=0).timestamp()
+    )
+    return hour, day, month
+
+
+def send_automatic_durable(
+    row: dict,
+    *,
+    _capability,
+    send_fn=None,
+    fetch_fn=None,
+    balance_fetch_fn=None,
+    now: int | None = None,
+    crash_before_post: bool = False,
+    crash_after_send: bool = False,
+) -> dict:
+    """Automatic one-shot send with atomic budget reservation and send latch."""
+    if _capability is not _AUTO_SEND_CAPABILITY:
+        raise CanarySecurityError("automatic send capability missing")
+    if not algo_anchor.automatic_mainnet_enabled():
+        raise CanaryError("automatic mainnet off")
+    if algo_anchor.automatic_mainnet_killed():
+        raise CanaryError("automatic mainnet killed")
+    if not algo_anchor.mainnet_broadcast_requested():
+        raise CanaryError("mainnet broadcast gate off")
+    if algo_anchor.mainnet_canary_requested():
+        raise CanaryError("manual canary and automatic modes are exclusive")
+    when = int(now if now is not None else time.time())
+    state = send_state_of(row)
+    if state == STATE_CONFIRMED:
+        confirmed = store.last_confirmed_checkpoint()
+        expected = str(row.get("expected_txid") or row.get("txid") or "").strip()
+        if (
+            int(confirmed.get("size") or 0) == int(row.get("tree_size") or 0)
+            and str(confirmed.get("txid") or "") == expected
+            and _root_hex(confirmed.get("root")) == _root_hex(row.get("root"))
+        ):
+            store.set_automatic_send_status(
+                int(row["tree_size"]), "CONFIRMED", now=when
+            )
+            return confirmed
+        # A crash may occur after the exact fetched transaction advances the
+        # authorized row but before last_confirmed is committed. Re-fetch and
+        # repair only from that already-latched, locally-derived txid.
+        polled = poll_expected(row, fetch_fn=fetch_fn, now=when)
+        if polled:
+            store.set_automatic_send_status(
+                int(row["tree_size"]), "CONFIRMED", now=when
+            )
+            return polled
+        raise CanaryError("automatic confirmation pointer awaiting repair")
+    if state in {STATE_SEND_ATTEMPTED, STATE_SUBMITTED}:
+        polled = poll_expected(row, fetch_fn=fetch_fn, now=when)
+        if polled:
+            store.set_automatic_send_status(int(row["tree_size"]), "CONFIRMED", now=when)
+            return polled
+        raise CanaryError("automatic send latched; polling expected txid")
+    if state != STATE_AUTHORIZED:
+        raise CanaryError("automatic send requires AUTHORIZED")
+    balance = algo_anchor.fetch_mainnet_account_balance(
+        algo_anchor.falcon_address_for(algo_anchor.MAINNET_NAME),
+        fetch_fn=balance_fetch_fn,
+    )
+    if balance < AUTO_BALANCE_HALT:
+        raise CanaryError("automatic balance halt")
+    blob = bytes(row.get("signed") or b"")
+    _reject_unsendable_policy(row, now=when)
+    policy = _frozen_policy(row)
+    fee = int(policy.get("canonical_fee") or 0)
+    if fee < algo_anchor.MIN_FEE or fee > min(AUTO_MAX_FEE, algo_anchor.MAX_FEE):
+        raise CanaryError("automatic fee cap")
+    expected = algo_anchor.signed_txn_txid(blob)
+    hour, day, month = _budget_windows(when)
+    attempted = store.reserve_automatic_send(
+        tree_size=int(row["tree_size"]),
+        expected_txid=expected,
+        fee=fee,
+        now=when,
+        hour_start=hour,
+        day_start=day,
+        month_start=month,
+        hourly_max=AUTO_HOURLY_ANCHOR_MAX,
+        daily_max=AUTO_DAILY_FEE_MAX,
+        monthly_max=AUTO_MONTHLY_FEE_MAX,
+    )
+    stored_blob = bytes(attempted.get("signed") or b"")
+    if not stored_blob or stored_blob != blob:
+        raise CanarySecurityError("stored blob mismatch")
+    if crash_before_post:
+        raise CanaryError("crash before post")
+    params = _policy_params(attempted, None)
+    try:
+        txid = algo_anchor.submit_mainnet_automatic(
+            stored_blob,
+            _capability=algo_anchor._AUTOMATIC_POST_CAPABILITY,
+            sender=algo_anchor.falcon_address_for(algo_anchor.MAINNET_NAME),
+            params=params,
+            expected_origin=attempted["origin"],
+            expected_size=int(attempted["tree_size"]),
+            expected_root=_root_bytes(attempted["root"]),
+            send_fn=send_fn,
+        )
+    except Exception as exc:
+        # SEND_ATTEMPTED is already durable. Every failure is ambiguous:
+        # future ticks poll expected_txid and never POST this tree again.
+        raise CanaryError("automatic submit incomplete") from exc
+    if crash_after_send:
+        raise CanaryError("crash after send")
+    if str(txid or "") != expected:
+        raise CanarySecurityError("provider txid mismatch")
+    submitted = mark_submitted(attempted, expected)
+    store.set_automatic_send_status(int(row["tree_size"]), "SUBMITTED", now=when)
+    polled = poll_expected(submitted, fetch_fn=fetch_fn, now=when)
+    if polled:
+        store.set_automatic_send_status(int(row["tree_size"]), "CONFIRMED", now=when)
     return polled or submitted
 
 

@@ -1012,7 +1012,7 @@ def boot_http_process() -> None:
     """HTTP process boot: production PQ identity, then log signer.
 
     PRODUCTION fail-closed: unset/unknown network never becomes TestNet.
-    Automatic MainNet anchoring stays off. No Algorand SK load.
+    Automatic MainNet anchoring remains default-off. No Algorand SK load.
     """
     from live402.pq import log_identity
 

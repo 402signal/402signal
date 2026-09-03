@@ -186,11 +186,19 @@ def falcon_address() -> str:
 
 
 def falcon_allowed_broadcast() -> str:
-    """PRODUCTION: none. TEST SUPPORT archive may still say testnet."""
+    """Truthful runtime policy; automatic MainNet remains default-off."""
     from live402.pq import log_identity
 
     if log_identity.is_production_runtime():
-        return "none"
+        from live402.pq import algo_anchor
+
+        return (
+            "mainnet"
+            if algo_anchor.automatic_mainnet_enabled()
+            and algo_anchor.mainnet_broadcast_requested()
+            and not algo_anchor.mainnet_canary_requested()
+            else "none"
+        )
     desc = trust_root()
     falcon = desc.get("falcon") if isinstance(desc.get("falcon"), dict) else {}
     return str(falcon.get("allowed_broadcast") or "testnet").strip().lower()
@@ -213,18 +221,37 @@ def _strip_secrets(desc: dict) -> dict:
 
 
 def _public_descriptor_mainnet() -> dict:
-    """Public MainNet-epoch descriptor. Broadcast stays off. No secrets."""
+    """Public MainNet descriptor reflects the effective runtime gate."""
     from live402.pq import ORIGIN_MAINNET
+    from live402.pq import algo_anchor
+    from live402.pq import canary
     from live402.pq import log_identity
 
     desc = dict(trust_root_v2())
     falcon = dict(desc.get("falcon") or {})
     falcon["network"] = "mainnet-v1.0"
-    falcon["allowed_broadcast"] = "none"
+    active = bool(
+        algo_anchor.automatic_mainnet_enabled()
+        and algo_anchor.mainnet_broadcast_requested()
+        and not algo_anchor.mainnet_canary_requested()
+    )
+    falcon["allowed_broadcast"] = "mainnet" if active else "none"
     falcon["address"] = (os.environ.get(log_identity.MAINNET_ADDRESS_ENV) or "").strip()
     desc["falcon"] = falcon
     desc["origin"] = ORIGIN_MAINNET
-    desc["not_mainnet_go"] = True
+    policy = dict(desc.get("broadcast_policy") or {})
+    policy["default"] = "off"
+    policy["automatic"] = "on" if active else "off"
+    policy["kill_switch"] = algo_anchor.MAINNET_AUTO_KILL_ENV
+    policy["limits"] = {
+        "max_fee_microalgo": canary.AUTO_MAX_FEE,
+        "daily_fee_microalgo": canary.AUTO_DAILY_FEE_MAX,
+        "monthly_fee_microalgo": canary.AUTO_MONTHLY_FEE_MAX,
+        "max_anchors_per_hour": canary.AUTO_HOURLY_ANCHOR_MAX,
+        "balance_halt_microalgo": canary.AUTO_BALANCE_HALT,
+    }
+    desc["broadcast_policy"] = policy
+    desc["not_mainnet_go"] = not active
     desc["witness_policy"] = []
     sig = dict(desc.get("log_signature") or {})
     sig["vkey"] = vkey()
@@ -235,7 +262,8 @@ def _public_descriptor_mainnet() -> dict:
 def public_descriptor() -> dict:
     """Public trust descriptor. Runtime PUBLIC vkey. Never a private key.
 
-    PRODUCTION uses MainNet identity (origin, genesis, allowed_broadcast=none).
+    PRODUCTION uses MainNet identity and reports only the effective runtime
+    broadcast policy. Default-off reports allowed_broadcast=none.
     TEST SUPPORT may still expose the archived TestNet v1 descriptor.
     Empty witness_policy stays empty. Never fabricated secrets.
     """

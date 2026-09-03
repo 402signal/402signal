@@ -2,7 +2,7 @@
 
 PRODUCTION is MainNet-only. Unset or unknown network fails closed.
 TEST SUPPORT may still name TestNet constants for tests and archive.
-MainNet broadcast defaults off. Automatic MainNet submit stays off.
+MainNet broadcast and automatic submission both default off.
 
 Submit provider (algod POST) and confirm provider (indexer GET +
 decode + semantic verify) are separate allowlists. Confirmation is
@@ -58,6 +58,8 @@ BROADCAST_ENV = "LIVE402_PQ_FALCON_BROADCAST"
 ADDRESS_ENV = "LIVE402_PQ_FALCON_ADDRESS"
 MAINNET_BROADCAST_ENV = "LIVE402_PQ_FALCON_MAINNET_BROADCAST"
 MAINNET_CANARY_ENV = "LIVE402_PQ_FALCON_MAINNET_CANARY"
+MAINNET_AUTO_ENV = "LIVE402_PQ_FALCON_MAINNET_AUTO"
+MAINNET_AUTO_KILL_ENV = "LIVE402_PQ_FALCON_MAINNET_AUTO_KILL"
 MAINNET_ADDRESS_ENV = "LIVE402_PQ_FALCON_MAINNET_ADDRESS"
 MAINNET_SIGNER_TOKEN_ENV = "LIVE402_PQ_SIGNER_MAINNET_TOKEN"
 MAINNET_SIGNER_HOST_ENV = "LIVE402_PQ_SIGNER_MAINNET_HOST"

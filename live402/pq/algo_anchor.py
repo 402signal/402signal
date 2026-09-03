@@ -24,10 +24,9 @@ algod unless a send/fetch hook is injected.
 
 MainNet submit is a separate flag LIVE402_PQ_FALCON_MAINNET_BROADCAST.
 A one-shot canary also requires LIVE402_PQ_FALCON_MAINNET_CANARY=1.
-Both default unset. TestNet BROADCAST=1 plus NETWORK=mainnet with the
-MainNet flag unset never sends. Automatic MainNet broadcast stays off.
-send_if_allowed never POSTs MainNet. Worker, tick, and boot never call
-submit_mainnet_canary.
+The automatic controller separately requires LIVE402_PQ_FALCON_MAINNET_AUTO=1
+and is stopped immediately by LIVE402_PQ_FALCON_MAINNET_AUTO_KILL=1.
+All default unset. TestNet BROADCAST=1 never sends MainNet.
 """
 
 from __future__ import annotations
@@ -77,6 +76,7 @@ TESTNET_EXPLORER_ADDRESS_URL = "https://testnet.explorer.perawallet.app/address/
 MAINNET_ALGOD_HOST = netcfg.MAINNET.submit_host
 MAINNET_ALGOD_SEND_URL = netcfg.MAINNET.submit_url
 MAINNET_ALGOD_PENDING_URL = netcfg.MAINNET.pending_url
+MAINNET_ALGOD_ACCOUNT_URL = "https://%s/v2/accounts/" % MAINNET_ALGOD_HOST
 MAINNET_INDEXER_HOST = netcfg.MAINNET.confirm_host
 MAINNET_INDEXER_TXN_URL = netcfg.MAINNET.confirm_txn_url
 MAINNET_EXPLORER_TX_URL = netcfg.MAINNET.explorer_tx_url
@@ -89,6 +89,8 @@ BROADCAST_ENV = netcfg.BROADCAST_ENV
 ADDRESS_ENV = netcfg.ADDRESS_ENV
 MAINNET_BROADCAST_ENV = netcfg.MAINNET_BROADCAST_ENV
 MAINNET_CANARY_ENV = netcfg.MAINNET_CANARY_ENV
+MAINNET_AUTO_ENV = netcfg.MAINNET_AUTO_ENV
+MAINNET_AUTO_KILL_ENV = netcfg.MAINNET_AUTO_KILL_ENV
 MAINNET_ADDRESS_ENV = netcfg.MAINNET_ADDRESS_ENV
 MAINNET_SIGNER_TOKEN_ENV = netcfg.MAINNET_SIGNER_TOKEN_ENV
 MAINNET_SIGNER_HOST_ENV = netcfg.MAINNET_SIGNER_HOST_ENV
@@ -805,8 +807,14 @@ def mainnet_canary_requested() -> bool:
 
 
 def automatic_mainnet_enabled() -> bool:
-    """Later GO. Hard-off in this PR. Worker and tick never MainNet-submit."""
-    return False
+    """Exact opt-in plus independent emergency stop. Default is off."""
+    enabled = (os.environ.get(MAINNET_AUTO_ENV) or "").strip() == "1"
+    killed = (os.environ.get(MAINNET_AUTO_KILL_ENV) or "").strip() == "1"
+    return bool(enabled and not killed)
+
+
+def automatic_mainnet_killed() -> bool:
+    return (os.environ.get(MAINNET_AUTO_KILL_ENV) or "").strip() == "1"
 
 
 def falcon_address(sender: str | None = None) -> str:
@@ -1384,7 +1392,8 @@ def validate_signed_txn(
 def send_if_allowed(signed: bytes, *, send_fn=None, sender: str | None = None, params: dict | None = None) -> str | None:
     """POST signer-approved SignedTxn bytes only when TestNet submit_allowed.
 
-    Never posts MainNet. MainNet uses submit_mainnet_canary only.
+    Never posts MainNet. MainNet uses the mutually exclusive human canary
+    or automatic controller paths.
     send_fn is injected by tests. Fixture mode without send_fn never
     dials live algod. The pqsig marker is never treated as txn bytes.
     """
@@ -1515,7 +1524,7 @@ def submit_mainnet_canary(
     if authorize_human_canary is not True:
         raise AnchorError("canary not authorized")
     if automatic_mainnet_enabled():
-        raise AnchorError("automatic mainnet is a later GO")
+        raise AnchorError("manual canary and automatic modes are exclusive")
     if not mainnet_canary_requested():
         raise AnchorError("canary gate off")
     if not mainnet_broadcast_requested():
@@ -1549,16 +1558,68 @@ def submit_mainnet_canary(
     return _post_mainnet(blob)
 
 
-def _post_mainnet(blob: bytes) -> str | None:
-    """POST SignedTxn bytes to pinned MainNet algod. Dual-gate only.
+_AUTOMATIC_POST_CAPABILITY = object()
 
-    Reached only after submit_mainnet_canary has checked both
-    MAINNET_BROADCAST and MAINNET_CANARY, plus every identity gate.
-    Worker and boot never call this. Fixture mode never reaches this.
+
+def submit_mainnet_automatic(
+    signed: bytes,
+    *,
+    _capability,
+    sender: str | None = None,
+    params: dict | None = None,
+    expected_origin: str = "",
+    expected_size: int = 0,
+    expected_root=None,
+    send_fn=None,
+) -> str | None:
+    """Policy controller send path. Exact opt-in, never the canary path."""
+    if _capability is not _AUTOMATIC_POST_CAPABILITY:
+        raise AnchorError("automatic submit capability missing")
+    if not automatic_mainnet_enabled() or not mainnet_broadcast_requested():
+        raise AnchorError("automatic mainnet gates off")
+    if mainnet_canary_requested():
+        raise AnchorError("manual canary and automatic modes are exclusive")
+    blob = bytes(signed) if isinstance(signed, (bytes, bytearray)) else b""
+    if not blob or blob == PQSIG_MARKER.encode("utf-8"):
+        raise AnchorError("not a signed pq1 txn")
+    hook = send_fn is not None
+    if not mainnet_submit_allowed(
+        sender=sender,
+        params=params,
+        signed=blob,
+        expected_origin=expected_origin,
+        expected_size=expected_size,
+        expected_root=expected_root,
+        allow_fixture_send_hook=hook,
+    ):
+        raise AnchorError("mainnet submit gates failed")
+    if send_fn is not None:
+        if not callable(send_fn):
+            raise AnchorError("invalid send hook")
+        out = send_fn(blob)
+        text = str(out or "").strip()
+        if not _looks_like_txid(text):
+            raise AnchorError("invalid submitted txid")
+        return text
+    from live402 import fixtures
+
+    if fixtures.fixture_mode():
+        raise AnchorError("fixture mode never sends mainnet")
+    return _post_mainnet(blob, automatic=True)
+
+
+def _post_mainnet(blob: bytes, *, automatic: bool = False) -> str | None:
+    """POST SignedTxn bytes to pinned MainNet algod after mode-specific gates.
+
+    Reached only after the canary or automatic submit path has checked its
+    exact mode gates plus every identity gate. Fixture mode never reaches it.
     """
-    if not mainnet_broadcast_requested() or not mainnet_canary_requested():
+    if not mainnet_broadcast_requested():
         return None
-    if automatic_mainnet_enabled():
+    if automatic:
+        if not automatic_mainnet_enabled() or mainnet_canary_requested():
+            return None
+    elif not mainnet_canary_requested() or automatic_mainnet_enabled():
         return None
     if not _pinned_https(MAINNET_ALGOD_SEND_URL, MAINNET_ALGOD_HOST):
         return None
@@ -1688,6 +1749,51 @@ def _get_pinned(url: str, host: str, timeout: float, extra_headers: dict | None 
         return None
     except Exception:
         return None
+
+
+def fetch_mainnet_account_balance(address: str | None = None, *, fetch_fn=None) -> int:
+    """GET the public Falcon account balance from the pinned MainNet algod."""
+    expected = falcon_address_for(MAINNET_NAME)
+    addr = str(address or expected or "").strip()
+    if not addr or addr != expected:
+        raise AnchorError("falcon account mismatch")
+    if fetch_fn is not None:
+        if not callable(fetch_fn):
+            raise AnchorError("invalid balance hook")
+        raw = fetch_fn(addr)
+        if isinstance(raw, dict):
+            raw = raw.get("amount")
+        try:
+            amount = int(raw)
+        except (TypeError, ValueError) as exc:
+            raise AnchorError("invalid account balance") from exc
+        if isinstance(raw, bool) or amount < 0:
+            raise AnchorError("invalid account balance")
+        return amount
+    from live402 import fixtures
+
+    if fixtures.fixture_mode():
+        raise AnchorError("fixture mode never fetches mainnet balance")
+    url = MAINNET_ALGOD_ACCOUNT_URL + addr
+    parsed = urlparse(url)
+    if (
+        not _pinned_https(url, MAINNET_ALGOD_HOST)
+        or parsed.path != "/v2/accounts/" + addr
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise AnchorError("account url not pinned")
+    body = _get_pinned(url, MAINNET_ALGOD_HOST, TESTNET_FETCH_TIMEOUT)
+    if not body:
+        raise AnchorError("account balance unavailable")
+    try:
+        data = json.loads(body.decode("utf-8"))
+        amount = data.get("amount") if isinstance(data, dict) else None
+        if isinstance(amount, bool) or not isinstance(amount, int) or amount < 0:
+            raise ValueError("amount")
+    except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError) as exc:
+        raise AnchorError("invalid account balance") from exc
+    return int(amount)
 
 
 def fetch_confirmed_txn(txid: str, network: str | None = None, fetch_fn=None):

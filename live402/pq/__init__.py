@@ -3,7 +3,8 @@
 PRODUCTION is MainNet-only: epoch mainnet-v1, origin
 402signal.com/pq/log/mainnet-v1, DB /data/pq-log-mainnet.sqlite,
 pq-anchor/3, MainNet Falcon address, authenticated MainNet signer response.
-Unset or unknown network fails closed. Automatic anchoring stays off.
+Unset or unknown network fails closed. Automatic anchoring is exact-opt-in
+and defaults off.
 
 TEST SUPPORT (tests/archive) may still use TestNet constants, pq-anchor/1,
 LIVE402_PQ_LOG_SK, and LIVE402_PQ_SIGNER_TOKEN. Those are not a live
