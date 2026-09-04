@@ -829,6 +829,7 @@ class HomepageProductTests(unittest.TestCase):
             "/preview?need=weather",
             "/openapi.json",
             "/mcp.json",
+            "/mcp/v0.3.1",
             "/.well-known/x402.json",
             "/rails",
             "/pulse",
@@ -853,6 +854,11 @@ class HomepageProductTests(unittest.TestCase):
         mcp_status, mcp_raw, _mcp_hdrs = _get_full(self.port, "/mcp")
         self.assertIn(mcp_status, (200, 400, 402, 405, 406))
         self.assertTrue(mcp_raw.strip())
+        registry_status, registry_raw, _registry_hdrs = _get_full(
+            self.port, "/mcp/v0.3.1"
+        )
+        self.assertEqual(registry_status, 200)
+        self.assertEqual(json.loads(registry_raw), mcp)
         conn = HTTPConnection("127.0.0.1", self.port, timeout=5)
         conn.request(
             "POST",
@@ -1075,10 +1081,18 @@ class HomepageProductTests(unittest.TestCase):
             "/favicon.svg",
             "/sitemap.xml",
             "/.well-known/security.txt",
+            "/.well-known/x402list.txt",
         ):
             status, raw, _hdrs = _get_full(self.port, path)
             self.assertEqual(status, 200, path)
             self.assertTrue(raw, path)
+        status, token, hdrs = _get_full(self.port, "/.well-known/x402list.txt")
+        self.assertEqual(status, 200)
+        self.assertEqual(
+            token,
+            "x402list-verify-52dmS9yTO-vP6AMJh6H8mZZBInntQZP7zSLPF806CnQ\n",
+        )
+        self.assertIn("text/plain", hdrs.get("content-type", ""))
         self.assertGreater((STATIC / "og.png").stat().st_size, 10000)
         self.assertGreater((STATIC / "hero-routing.png").stat().st_size, 10000)
         conn = HTTPConnection("127.0.0.1", self.port, timeout=5)

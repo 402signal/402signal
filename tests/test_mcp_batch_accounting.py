@@ -113,6 +113,19 @@ class McpBatchAccountingTests(unittest.TestCase):
         amounts = [str(a.get("amount")) for a in body.get("accepts") or []]
         self.assertEqual(amounts, ["3000", "3000", "3000"])
 
+    def test_versioned_registry_endpoint_uses_its_own_payment_resource(self):
+        status, body = _json_post(
+            self.port,
+            "/mcp/v0.3.1",
+            _tools_call_route(1, "weather"),
+            extra_headers=FAKE_PAYMENT,
+        )
+        self.assertEqual(status, 402)
+        self.assertEqual(
+            body.get("resource", {}).get("url"),
+            "https://402signal.com/mcp/v0.3.1",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

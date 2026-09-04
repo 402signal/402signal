@@ -22,6 +22,8 @@ from live402.http_body import BodyReadError
 from live402.route import handle_route
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+MCP_REGISTRY_PATH = "/mcp/v0.3.1"
+X402LIST_VERIFY_TOKEN = "x402list-verify-52dmS9yTO-vP6AMJh6H8mZZBInntQZP7zSLPF806CnQ"
 # Human pages served as static HTML from STATIC_DIR. Same CSP as GET /.
 HUMAN_PAGES = {
     "/": "index.html",
@@ -505,7 +507,7 @@ class Handler(SimpleHTTPRequestHandler):
             return "rails"
         if path == "/health":
             return "health"
-        if path in {"/mcp", "/mcp.json"}:
+        if path in {"/mcp", "/mcp.json", MCP_REGISTRY_PATH}:
             return "mcp"
         if path.startswith("/pq/log"):
             return "pq_log"
@@ -684,6 +686,9 @@ class Handler(SimpleHTTPRequestHandler):
         return discover.ORIGIN
 
     def _mcp_resource_url(self) -> str:
+        path = urlparse(self.path).path
+        if path == MCP_REGISTRY_PATH:
+            return discover.ORIGIN + MCP_REGISTRY_PATH
         return discover.ORIGIN + "/mcp"
 
     def _close_unread_body(self) -> None:
@@ -728,6 +733,7 @@ class Handler(SimpleHTTPRequestHandler):
             "/llms.txt",
             "/openapi.json",
             "/mcp.json",
+            MCP_REGISTRY_PATH,
             "/preview",
             "/rails",
             "/pulse",
@@ -737,6 +743,7 @@ class Handler(SimpleHTTPRequestHandler):
             "/og.png",
             "/hero-routing.png",
             "/.well-known/security.txt",
+            "/.well-known/x402list.txt",
         }
         human = self._read_human_html()
         if human is not None:
@@ -912,9 +919,11 @@ class Handler(SimpleHTTPRequestHandler):
                 "Expires: 2027-09-02T00:00:00Z\n"
                 "Preferred-Languages: en\n",
             )
+        if parsed.path == "/.well-known/x402list.txt":
+            return self._text(200, X402LIST_VERIFY_TOKEN + "\n")
         if parsed.path == "/llms.txt":
             return self._text(200, discover.LLMS_TXT)
-        if parsed.path in {"/mcp", "/mcp.json", "/.well-known/mcp.json"}:
+        if parsed.path in {"/mcp", "/mcp.json", "/.well-known/mcp.json", MCP_REGISTRY_PATH}:
             return self._json(
                 200,
                 mcp.manifest(),
@@ -931,7 +940,7 @@ class Handler(SimpleHTTPRequestHandler):
             self._shutdown_client()
             return
         parsed = urlparse(self.path)
-        if parsed.path in {"/mcp", "/mcp.json"}:
+        if parsed.path in {"/mcp", "/mcp.json", MCP_REGISTRY_PATH}:
             return self._post_mcp()
         if parsed.path == "/validate":
             return self._post_validate()

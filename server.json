@@ -8,7 +8,7 @@
   "remotes": [
     {
       "type": "streamable-http",
-      "url": "https://402signal.com/mcp"
+      "url": "https://402signal.com/mcp/v0.3.1"
     }
   ]
 }
