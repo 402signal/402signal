@@ -21,9 +21,11 @@ SOLANA_FACILITATOR = "https://facilitator.payai.network"
 SOLANA_FEE_PAYER = "CjNFTjvBhbJJd2B5ePPMHRLx1ELZpa8dwQgGL727eKww"
 BASE_CAIP2 = "eip155:8453"
 CDP_FACILITATOR = "https://api.cdp.coinbase.com/platform/v2/x402"
-# $0.01 USDC, 6 decimals
-AMOUNT_ATOMIC = "10000"
-AMOUNT_USD = "$0.01"
+# $0.003 USDC, 6 decimals
+AMOUNT_ATOMIC = "3000"
+AMOUNT_USD = "$0.003"
+ROUTING_BILLING_MODEL = "success_only_v1"
+ROUTING_SETTLEMENT_CONDITION = "live_eligible_route_found"
 USDC_DECIMALS = 6
 
 # CDP / Bazaar / PayAI / GoPlausible listing blurb. Keep at or under 500 chars.
@@ -31,6 +33,7 @@ CATALOG_DESCRIPTION = (
     "402Signal is the independent check an AI agent makes right before spending. "
     "It finds the strongest x402 route across Base, Solana, and Algorand, verifies it live, "
     "and shows the evidence behind the choice. Your agent keeps the wallet. "
+    "The routing authorization settles only when a live eligible route is returned. "
     "The decision history is committed to an append-only PQ Trust log. "
     "Production identity is Algorand MainNet."
 )
@@ -63,6 +66,16 @@ BAZAAR_EXTENSION = {
                     "latency_ms": 87,
                     "has_402_challenge": True,
                     "status": 402,
+                },
+                "billing": {
+                    "model": ROUTING_BILLING_MODEL,
+                    "condition": ROUTING_SETTLEMENT_CONDITION,
+                    "asset": "USDC",
+                    "amount_atomic": AMOUNT_ATOMIC,
+                    "display_amount": AMOUNT_USD,
+                    "rail": "base",
+                    "settlement_attempted": True,
+                    "settled": True,
                 },
             },
         },
@@ -184,14 +197,15 @@ BAZAAR_MCP = {
                     "require_transparency": {
                         "type": "boolean",
                         "description": (
-                            "If true, paid /route fails when a signed checkpoint receipt "
+                            "If true, a settled /route winner fails when a signed checkpoint receipt "
                             "cannot be produced. This guarantees delivery, not server-side "
                             "recovery. Securely retain the complete paid /route response, "
                             "especially pq_trust.transparency.receipt and "
                             "pq_trust.transparency.reveal. 402Signal does not retain the "
                             "private reveal and cannot recover it if lost. Default false "
                             "(SEC-ROUTER-004 / A-14): "
-                            "paid 200/503 does not require a durable signed leaf."
+                            "a settled winner does not require a durable signed leaf; "
+                            "free typed misses create no route-decision leaf."
                         ),
                     },
                 },
@@ -218,6 +232,16 @@ BAZAAR_MCP = {
                 "miss_reason": None,
                 "tried": 1,
                 "latency_ms": 87,
+                "billing": {
+                    "model": ROUTING_BILLING_MODEL,
+                    "condition": ROUTING_SETTLEMENT_CONDITION,
+                    "asset": "USDC",
+                    "amount_atomic": AMOUNT_ATOMIC,
+                    "display_amount": AMOUNT_USD,
+                    "rail": "base",
+                    "settlement_attempted": True,
+                    "settled": True,
+                },
             },
         },
     },
@@ -293,6 +317,15 @@ def payment_required(resource_url: str, bazaar: dict | None = None, algorand_sen
         "network": "base",
         "asset": "USDC",
         "amount": AMOUNT_USD,
+        "billing": {
+            "model": ROUTING_BILLING_MODEL,
+            "condition": ROUTING_SETTLEMENT_CONDITION,
+            "asset": "USDC",
+            "amount_atomic": AMOUNT_ATOMIC,
+            "display_amount": AMOUNT_USD,
+            "typed_misses_settled": False,
+            "seller_payment_separate": True,
+        },
         "resource": {
             "url": resource_url,
             "description": CATALOG_DESCRIPTION,
@@ -350,7 +383,11 @@ def payment_required(resource_url: str, bazaar: dict | None = None, algorand_sen
             "mcp": "https://402signal.com/mcp.json",
             "dashboard": "https://402signal.com/dashboard",
             "rails": ["base", "solana", "algorand"],
-            "amount": "$0.01",
+            "amount": AMOUNT_USD,
+            "billingModel": ROUTING_BILLING_MODEL,
+            "settlementCondition": ROUTING_SETTLEMENT_CONDITION,
+            "typedMissesSettled": False,
+            "sellerPaymentSeparate": True,
             "contact": "https://x.com/402Signal",
             "post": "POST /route with PAYMENT-SIGNATURE after this 402. Agents should POST, not GET.",
         },
@@ -1095,6 +1132,64 @@ def selected_payment_fields(opt) -> dict | None:
         "payTo": opt.get("payTo"),
         "facilitator": opt.get("facilitator"),
     }
+
+
+def selected_payment_matches_current_envelope(selected, result) -> bool:
+    """Require selected_payment to equal one valid option in this response's envelope.
+
+    This is the settlement provenance boundary. Catalog, target.accepts, and
+    legacy top-level fallbacks are intentionally excluded even though they
+    remain useful to non-economic display and compatibility code.
+    """
+    if not isinstance(selected, dict) or not isinstance(result, dict):
+        return False
+    env = result.get("envelope")
+    if not isinstance(env, dict) or type(env.get("x402Version")) is not int:
+        return False
+    accepts = env.get("accepts")
+    if not isinstance(accepts, list) or not accepts:
+        return False
+    rail = selected.get("rail")
+    network = selected.get("network")
+    asset = selected.get("asset")
+    amount = sane_atomic_amount(selected.get("amount_atomic"))
+    pay_to = selected.get("payTo")
+    if rail not in SUPPORTED_RAILS or type(network) is not str or amount is None:
+        return False
+    selected_asset = asset_identity(
+        {"rail": rail, "network": network, "asset": asset}
+    )
+    if selected_asset is None:
+        return False
+    for accept in accepts:
+        opt = validate_observed_accept(accept, env)
+        if opt is None or opt.get("rail") != rail or opt.get("network") != network:
+            continue
+        if sane_atomic_amount(opt.get("amount_atomic")) != amount:
+            continue
+        if asset_identity(opt) != selected_asset:
+            continue
+        if not payto_equal(opt.get("payTo"), pay_to, rail):
+            continue
+        expected = selected_payment_fields(opt)
+        if not isinstance(expected, dict):
+            continue
+        if any(
+            selected.get(key) != expected.get(key)
+            for key in (
+                "rail",
+                "network",
+                "asset",
+                "amount_atomic",
+                "display_amount",
+                "normalized_usd",
+                "payTo",
+                "facilitator",
+            )
+        ):
+            continue
+        return True
+    return False
 
 
 def asset_identity(opt: dict | None) -> str | None:

@@ -186,6 +186,15 @@ class ConcurrentReplayTests(unittest.TestCase):
             probe_calls.append(url)
             probe_started.set()
             release_probe.wait(timeout=2)
+            seller_accept = {
+                "scheme": "exact",
+                "network": payment.BASE_CAIP2,
+                "asset": payment.USDC_BASE,
+                "amount": "10000",
+                "payTo": payment.DEFAULT_PAYTO,
+                "maxTimeoutSeconds": 60,
+            }
+            envelope = {"x402Version": 2, "accepts": [seller_accept]}
             return {
                 "url": url,
                 "live": True,
@@ -194,13 +203,10 @@ class ConcurrentReplayTests(unittest.TestCase):
                 "payable": True,
                 "invocable": True,
                 "payTo": payment.DEFAULT_PAYTO,
-                "selected_payment": {
-                    "rail": "base",
-                    "network": payment.BASE_CAIP2,
-                    "asset": payment.USDC_BASE,
-                    "amount_atomic": 10000,
-                    "payTo": payment.DEFAULT_PAYTO,
-                },
+                "envelope": envelope,
+                "selected_payment": payment.selected_payment_fields(
+                    payment.validate_observed_accept(seller_accept, envelope)
+                ),
             }
 
         headers = _headers_for(_payload("cc"))

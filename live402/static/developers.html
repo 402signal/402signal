@@ -46,11 +46,11 @@
       <section class="block quickstart" id="quickstart">
         <p class="eyebrow">Quick start</p>
         <h2>Send an unpaid request first</h2>
-        <p>This returns HTTP 402 and a <code>PAYMENT-REQUIRED</code> header with payment options for the $0.01 USDC routing fee.</p>
+        <p>This returns HTTP 402 and a <code>PAYMENT-REQUIRED</code> header with Base, Solana, and Algorand options to authorize $0.003 USDC.</p>
         <pre class="code">curl -sS -D - https://402signal.com/route \
   -H 'Content-Type: application/json' \
   -d '{"need":"weather data","max_price_usd":0.02}'</pre>
-        <p>Sign one payment option, then retry the same request with <code>PAYMENT-SIGNATURE</code>. A paid request returns HTTP 200 with a route or HTTP 503 with a typed miss.</p>
+        <p>Sign one authorization, then retry the same request with <code>PAYMENT-SIGNATURE</code>. 402Signal verifies it before probing and settles it only after finding a valid live eligible route. A normal typed HTTP 503 miss is not settled.</p>
       </section>
 
       <section class="block request-options">
@@ -72,16 +72,16 @@
       <section class="block response-guide">
         <h2>What comes back</h2>
         <dl class="checks compact">
-          <div><dt>HTTP 200</dt><dd>A current qualifying target plus the exact observed <code>selected_payment</code> that made it win.</dd></div>
-          <div><dt>HTTP 503</dt><dd>No checked candidate qualified. <code>miss_reason</code> explains why evaluation stopped.</dd></div>
-          <div><dt>Payment boundary</dt><dd>402Signal settles only its routing fee. The caller decides whether to pay and invoke the selected seller.</dd></div>
+          <div><dt>HTTP 200</dt><dd>A settled routing authorization, a current qualifying target, the exact observed <code>selected_payment</code>, and <code>billing.settled=true</code>.</dd></div>
+          <div><dt>HTTP 503</dt><dd>A normal typed miss has <code>billing.settlement_attempted=false</code> and <code>billing.settled=false</code>. <code>miss_reason</code> explains why evaluation stopped.</dd></div>
+          <div><dt>Payment boundary</dt><dd>$0.003 only when a valid live route is found. Normal typed misses are not settled. Seller payment is separate.</dd></div>
         </dl>
       </section>
 
       <section class="block pq-developer" id="pq-trust">
         <p class="eyebrow">PQ Trust</p>
         <h2>Make routing evidence part of the response</h2>
-        <p>Set <code>"require_transparency": true</code> when the route must include a durable log leaf and signed checkpoint. If 402Signal cannot produce that receipt, it fails closed.</p>
+        <p>Set <code>"require_transparency": true</code> when a settled winner must include a durable log leaf and signed checkpoint. A free miss creates no route-decision leaf. If settlement succeeds but the required receipt then cannot be produced, 402Signal returns a fail-closed HTTP 503 whose billing object still truthfully reports <code>settled=true</code>; it does not settle again or call the request free.</p>
         <p>The response includes <code>receipt</code> and <code>reveal</code> under <code>pq_trust.transparency</code>. Signed checkpoints are anchored on Algorand MainNet with native Falcon-1024 authorization. The route call does not wait for chain confirmation.</p>
         <p class="note"><strong>Keep the verification record:</strong> securely retain the complete paid <code>/route</code> response, including <code>compared[]</code>. At minimum, later verification requires both <code>pq_trust.transparency.receipt</code> and <code>pq_trust.transparency.reveal</code>. 402Signal does not retain the private reveal and cannot recover it if lost. A modified copy will fail verification against the public log. Because the reveal contains private request and decision evidence, do not put it in public logs.</p>
         <p class="pq-boundary"><strong>Scope:</strong> Falcon-1024 authorizes the checkpoint transaction. It does not authorize or secure the seller payment.</p>

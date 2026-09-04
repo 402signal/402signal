@@ -90,7 +90,8 @@ _VOLUME_DUMP_PATHS = frozenset(
 MAX_BODY = http_body.MAX_BODY
 DEFAULT_MAX_HANDLERS = 32
 REQUEST_TIMEOUT = http_body.BODY_READ_TIMEOUT
-DEFAULT_ROUTE_RPM = 60
+# Verified-but-unsettled misses can otherwise amplify discovery/probe work.
+DEFAULT_ROUTE_RPM = 12
 DEFAULT_PREVIEW_RPM = 180
 DEFAULT_PUBLIC_RPM = 180
 DEFAULT_VALIDATE_RPM = 60

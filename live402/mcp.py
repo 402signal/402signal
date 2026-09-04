@@ -17,6 +17,7 @@ INPUT_SCHEMA = schema_fields.route_body_schema()
 
 OUTPUT_SCHEMA = {
     "type": "object",
+    "required": ["billing"],
     "properties": {
         "live": {"type": "boolean"},
         "url": {"type": ["string", "null"]},
@@ -35,6 +36,24 @@ OUTPUT_SCHEMA = {
                 "payTo": {"type": ["string", "null"]},
                 "facilitator": {"type": ["string", "null"]},
             },
+        },
+        "billing": {
+            "type": "object",
+            "description": "402Signal routing-fee outcome. Seller payment is separate.",
+            "properties": {
+                "model": {"type": "string", "const": payment.ROUTING_BILLING_MODEL},
+                "condition": {"type": "string", "const": payment.ROUTING_SETTLEMENT_CONDITION},
+                "asset": {"type": "string", "const": "USDC"},
+                "amount_atomic": {"type": "string", "const": payment.AMOUNT_ATOMIC},
+                "display_amount": {"type": "string", "const": payment.AMOUNT_USD},
+                "rail": {"type": "string", "enum": ["base", "solana", "algorand"]},
+                "settlement_attempted": {"type": "boolean"},
+                "settled": {"type": "boolean"},
+            },
+            "required": [
+                "model", "condition", "asset", "amount_atomic", "display_amount",
+                "rail", "settlement_attempted", "settled",
+            ],
         },
         "changes": {
             "type": "object",

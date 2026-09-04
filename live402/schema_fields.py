@@ -56,12 +56,13 @@ ACCEPT_PAYTO_CHANGE_DESC = (
     "independent observation of the same destination can establish it."
 )
 REQUIRE_TRANSPARENCY_DESC = (
-    "If true, paid /route fails when a signed checkpoint receipt cannot be produced. "
+    "If true, a settled /route winner fails when a signed checkpoint receipt cannot be produced. "
     "This guarantees delivery of verifiable evidence, not server-side recovery. "
     + TRANSPARENCY_RETENTION_DESC
     + " "
-    "Default false (SEC-ROUTER-004 / A-14): paid 200/503 does not require a durable "
-    "signed leaf. Routing continues if append, signing, or anchoring is down "
+    "Default false (SEC-ROUTER-004 / A-14): a settled winner does not require a durable "
+    "signed leaf. A free typed miss creates no route-decision leaf. Routing continues "
+    "if append, signing, or anchoring is down after settlement "
     "(logged_uncheckpointed or unavailable). logged_uncheckpointed is never success "
     "when this flag is true."
 )

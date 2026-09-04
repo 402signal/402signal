@@ -6,8 +6,8 @@ UNIQUE constraint so restart, TTL expiry, and a second process cannot
 settle the same authorization again.
 
 Outcome states: settlement_pending and unknown are non-terminal. They
-fail closed and never authorize a second economic action. settled and
-rejected are terminal and may replay a stored HTTP result.
+fail closed and never authorize a second economic action. settled,
+not_settled, and rejected are terminal and may replay a stored HTTP result.
 
 Never persist raw payment material. Single-machine until a shared
 ledger exists. This is not facilitator exactly-once.
@@ -34,9 +34,10 @@ VOLUME_DB = "/data/live402-replay.sqlite"
 STATE_PENDING = "settlement_pending"
 STATE_UNKNOWN = "unknown"
 STATE_SETTLED = "settled"
+STATE_NOT_SETTLED = "not_settled"
 STATE_REJECTED = "rejected"
 NON_TERMINAL_STATES = frozenset({STATE_PENDING, STATE_UNKNOWN})
-TERMINAL_STATES = frozenset({STATE_SETTLED, STATE_REJECTED})
+TERMINAL_STATES = frozenset({STATE_SETTLED, STATE_NOT_SETTLED, STATE_REJECTED})
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS settle_ledger (
@@ -257,6 +258,44 @@ def _decode_outcome(raw: str) -> tuple | None:
     return code, body, extra
 
 
+def _explicit_settlement_state(result: tuple) -> bool | None:
+    """Read a valid success-only terminal outcome; legacy rows return None."""
+    try:
+        code, body, _extra = result
+    except (TypeError, ValueError):
+        return None
+    if code not in (200, 503) or not isinstance(body, dict):
+        return None
+    billing = body.get("billing")
+    if not isinstance(billing, dict):
+        return None
+    if billing.get("model") != payment.ROUTING_BILLING_MODEL:
+        return None
+    if billing.get("condition") != payment.ROUTING_SETTLEMENT_CONDITION:
+        return None
+    if billing.get("asset") != "USDC":
+        return None
+    if billing.get("amount_atomic") != payment.AMOUNT_ATOMIC:
+        return None
+    if billing.get("display_amount") != payment.AMOUNT_USD:
+        return None
+    if billing.get("rail") not in payment.SUPPORTED_RAILS:
+        return None
+    attempted = billing.get("settlement_attempted")
+    settled = billing.get("settled")
+    if type(attempted) is not bool or type(settled) is not bool:
+        return None
+    if settled and not attempted:
+        return None
+    if not settled and attempted:
+        return None
+    if settled and code == 200 and body.get("live") is not True:
+        return None
+    if not settled and (code != 503 or body.get("live") is not False):
+        return None
+    return settled
+
+
 def _ledger_lookup(fp_hash: str) -> tuple[str, tuple | None]:
     """Read a durable row. missing / cached / reject. Fail closed on sqlite errors.
 
@@ -307,7 +346,14 @@ def _ledger_finish(fp_hash: str, result: tuple, cache: bool) -> None:
     try:
         conn = _connect()
         if cache:
-            state = STATE_SETTLED if result[0] in (200, 503) else STATE_REJECTED
+            explicit = _explicit_settlement_state(result)
+            if explicit is True:
+                state = STATE_SETTLED
+            elif explicit is False:
+                state = STATE_NOT_SETTLED
+            else:
+                # Backward compatibility for outcomes stored before this model.
+                state = STATE_SETTLED if result[0] in (200, 503) else STATE_REJECTED
             conn.execute(
                 "UPDATE settle_ledger SET state = ?, outcome_json = ? WHERE fp_hash = ?",
                 (state, _encode_outcome(result), fp_hash),

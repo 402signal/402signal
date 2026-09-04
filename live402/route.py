@@ -1,4 +1,4 @@
-"""POST /route orchestration: verify → probe → settle."""
+"""POST /route orchestration: verify → probe → settle only a valid winner."""
 
 from __future__ import annotations
 
@@ -262,6 +262,74 @@ def _log_settle(ok: bool, rail: str) -> None:
     )
 
 
+def _log_settle_skipped(rail: str) -> None:
+    """Coarse success-only decision log. No payment material."""
+    rid = reqctx.request_id.get()
+    sys.stderr.write(
+        "settlement_skipped=true reason=no_billable_winner rail=%s request_id=%s\n"
+        % (rail or "unknown", rid or "-")
+    )
+
+
+def _billing(rail: str, *, settlement_attempted: bool, settled: bool) -> dict:
+    return {
+        "model": payment.ROUTING_BILLING_MODEL,
+        "condition": payment.ROUTING_SETTLEMENT_CONDITION,
+        "asset": "USDC",
+        "amount_atomic": payment.AMOUNT_ATOMIC,
+        "display_amount": payment.AMOUNT_USD,
+        "rail": rail or "unknown",
+        "settlement_attempted": bool(settlement_attempted),
+        "settled": bool(settled),
+    }
+
+
+def _billable_winner(body: dict, code: int, result: dict) -> bool:
+    """Independent final settlement gate over current observed wire evidence."""
+    if code != 200 or not isinstance(result, dict):
+        return False
+    if result.get("live") is not True or result.get("payable") is not True:
+        return False
+    url = result.get("url")
+    if type(url) is not str or not url.strip().lower().startswith("https://"):
+        return False
+    # 402Signal defines a live x402 route as a current HTTP 402 challenge;
+    # a reachable HTTP 200 must never become billable through field confusion.
+    if type(result.get("status")) is not int or result.get("status") != 402:
+        return False
+    try:
+        objective = select.parse_objective(body.get("objective"))
+        constraints = policy_mod.merge_constraints(body)
+        if not select.http200_winner_ok(result, objective, constraints):
+            return False
+        if not select.passes_constraints(result, constraints):
+            return False
+        if not select._payto_selectable(result, constraints):
+            return False
+        selected = result.get("selected_payment")
+        if not payment.selected_payment_matches_current_envelope(selected, result):
+            return False
+        return payment.payto_equal(
+            result.get("payTo"), selected.get("payTo"), selected.get("rail")
+        )
+    except Exception:
+        return False
+
+
+def _downgrade_unbillable_result(result: dict) -> dict:
+    """Turn a purported malformed winner into a typed fail-closed miss."""
+    out = dict(result) if isinstance(result, dict) else {}
+    out["error"] = "route result failed billable winner validation"
+    out["miss_reason"] = out.get("miss_reason") or "constraints_unmet"
+    out["stop_reason"] = "constraints_unmet"
+    _preserve_observed_facts(out)
+    out["live"] = False
+    out["payable"] = False
+    out["invocable"] = False
+    out["selected_payment"] = None
+    return out
+
+
 def _require_transparency(body: dict | None) -> bool:
     if not isinstance(body, dict):
         return False
@@ -286,10 +354,10 @@ def _transparency_ok(result: dict) -> bool:
 
 
 def _attach_pq_trust(code: int, result: dict, body: dict) -> dict:
-    """Optional transparency receipt. Paid 200/503 is not atomic with log append.
+    """Optional transparency receipt. Settlement is not atomic with log append.
 
-    SEC-ROUTER-004 / A-14: a paid hit (200) or typed miss (503) does not
-    require a durable signed leaf unless require_transparency is set.
+    SEC-ROUTER-004 / A-14: a settled hit (200) does not require a durable
+    signed leaf unless require_transparency is set. Free misses never call this.
     Append failure is best-effort (logged_uncheckpointed or unavailable).
     """
     if not isinstance(result, dict):
@@ -346,10 +414,31 @@ def _paid_execute(
     if code == 400:
         return 400, result, None
 
+    rail = payment.rail_of_accept(accept)
+    if not _billable_winner(body, code, result):
+        if code == 200 or (
+            isinstance(result, dict)
+            and (
+                result.get("live") is True
+                or result.get("payable") is True
+                or result.get("selected_payment") is not None
+            )
+        ):
+            result = _downgrade_unbillable_result(result)
+            code = 503
+        if not isinstance(result, dict):
+            result = _downgrade_unbillable_result({})
+            code = 503
+        result["billing"] = _billing(
+            rail, settlement_attempted=False, settled=False
+        )
+        _log_settle_skipped(rail)
+        # Free misses remain tentative history and create no PQ route leaf.
+        return code, result, None
+
     settle_t = deadline_mod.settle_timeout(paid_deadline)
     settle = facilitator.settle(parsed, accept, timeout=settle_t)
     extra: dict = {}
-    rail = payment.rail_of_accept(accept)
     if settle.body:
         extra["PAYMENT-RESPONSE"] = payment.payment_response_header(settle.body)
     if not settle.ok:
@@ -360,6 +449,9 @@ def _paid_execute(
         _log_settle(False, rail)
         return 402, required, extra
     _log_settle(True, rail)
+    result["billing"] = _billing(
+        rail, settlement_attempted=True, settled=True
+    )
     try:
         from live402 import history as history_mod
 
@@ -373,6 +465,7 @@ def _paid_execute(
             "live": False,
             "invocable": False,
             "miss_reason": attached.get("miss_reason") if isinstance(attached, dict) else None,
+            "billing": attached.get("billing") if isinstance(attached, dict) else None,
             "pq_trust": attached.get("pq_trust") if isinstance(attached, dict) else None,
         }, extra or None
     return code, attached, extra or None
@@ -440,7 +533,7 @@ def handle_route(body: dict, headers, resource_url: str, bazaar: dict | None = N
     cache = False
     try:
         out = _paid_execute(body, parsed, accept, resource_url, bazaar, paid_deadline)
-        # Cache settled and rejected payment outcomes. Do not cache 400 body errors.
+        # Cache terminal settled, not-settled, and rejected outcomes. A 400 may retry.
         cache = out[0] != 400
         replay.finish(fp, out, cache=cache)
         return out

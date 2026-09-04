@@ -111,7 +111,7 @@ class McpBatchAccountingTests(unittest.TestCase):
         self.assertIn("accepts", body)
         self.assertEqual(len(body.get("accepts") or []), 3)
         amounts = [str(a.get("amount")) for a in body.get("accepts") or []]
-        self.assertEqual(amounts, ["10000", "10000", "10000"])
+        self.assertEqual(amounts, ["3000", "3000", "3000"])
 
 
 if __name__ == "__main__":

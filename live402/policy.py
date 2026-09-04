@@ -243,6 +243,8 @@ def merge_constraints(body: dict | None, compiled: dict | None = None) -> dict:
         "min_reputation_confidence",
         "max_settlement_latency_ms",
         "max_total_cost_usd",
+        "accept_payTo_change",
+        "require_transparency",
     ):
         if key in src:
             overlay[key] = src[key]

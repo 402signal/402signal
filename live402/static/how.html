@@ -45,26 +45,31 @@
       <section class="block">
         <dl class="checks compact">
           <div>
-            <dt>1. Find candidates</dt>
+            <dt>1. Verify authorization</dt>
+            <dd>Authorize $0.003 USDC on Base, Solana, or Algorand. 402Signal matches the advertised terms, reserves replay protection, and verifies before route work begins.</dd>
+          </div>
+          <div>
+            <dt>2. Find candidates</dt>
             <dd>402Signal searches supported x402 sources, or starts with the URL you supplied.</dd>
           </div>
           <div>
-            <dt>2. Check endpoints</dt>
+            <dt>3. Check endpoints</dt>
             <dd>Candidate endpoints are called before selection. 402Signal reads the x402 payment requirements they return now.</dd>
           </div>
           <div>
-            <dt>3. Apply your rules</dt>
+            <dt>4. Apply your rules</dt>
             <dd>Network, price, latency, invocation requirements, and other limits are applied to the observed options.</dd>
           </div>
           <div>
-            <dt>4. Return a decision</dt>
-            <dd>402Signal returns the strongest qualifying option. If none qualify, it returns a typed reason.</dd>
+            <dt>5. Settle only a winner</dt>
+            <dd>A valid live eligible route settles the routing authorization. A normal typed miss is not settled and its authorization cannot be reused.</dd>
           </div>
           <div>
-            <dt>5. Caller executes</dt>
+            <dt>6. Caller executes</dt>
             <dd>Your application decides whether to use the route. It keeps the wallet, signs the seller payment, and calls the service.</dd>
           </div>
         </dl>
+        <p class="scope-note"><strong>Billing:</strong> $0.003 only when a valid live route is found. Normal typed misses are not settled. Seller payment is separate.</p>
         <p class="scope-note"><strong>Scope:</strong> a live result means the endpoint returned a usable x402 payment offer during the check. It is not a guarantee about the seller's paid output.</p>
         <p class="scope-note"><strong>PQ Trust records:</strong> if you request transparency evidence, securely retain the complete paid <code>/route</code> response. 402Signal does not retain the private reveal and cannot recover it later.</p>
         <p><a class="btn" href="/developers">Call POST /route</a></p>

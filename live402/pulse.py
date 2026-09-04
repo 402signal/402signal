@@ -1171,7 +1171,7 @@ def dashboard_html(payload: dict | None = None) -> str:
         <p class="lede">Example lookups from public x402 discovery sources. They are candidates, not current verification.</p>
       </section>
       <p class="muted">Last updated <time id="updated-at">{updated}</time> · refreshes about every 20s · <a href="/pulse">/pulse JSON</a></p>
-      <p class="note">The paid routing check is POST /route for $0.01 USDC. Examples on this page are not current verification.</p>
+      <p class="note">POST /route authorizes $0.003 USDC. 402Signal settles only when it returns a valid live eligible route; normal typed misses are not settled. Seller payment is separate. Examples on this page are not current verification.</p>
       <div class="board" id="board">
         {"".join(cols)}
       </div>
