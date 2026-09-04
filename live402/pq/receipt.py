@@ -348,10 +348,11 @@ def _unavailable(result: dict, origin: str) -> dict:
 
 
 def attach_to_route(result: dict, request_body: dict | None = None) -> dict:
-    """Best-effort transparency object. Not atomic with paid /route success.
+    """Best-effort transparency object. Not atomic with settled /route success.
 
-    SEC-ROUTER-004 / A-14: paid 200/503 does not require a durable signed
-    leaf unless the caller set require_transparency (handled by route.py).
+    SEC-ROUTER-004 / A-14: a settled winner does not require a durable
+    signed leaf unless the caller set require_transparency (handled by
+    route.py). Success-only free misses never enter this function.
     """
     if not isinstance(result, dict):
         return {}

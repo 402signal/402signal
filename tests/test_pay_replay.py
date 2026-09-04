@@ -7,6 +7,7 @@ auth and sequential replay. No live spend.
 from __future__ import annotations
 
 import base64
+import copy
 import hashlib
 import json
 import os
@@ -22,11 +23,12 @@ from unittest.mock import patch
 os.environ.setdefault("LIVE402_FIXTURE", "1")
 os.environ.pop("LOCAL_FREE", None)
 
-from live402 import discover, payment, replay
+from live402 import algo_tx, discover, facilitator, payment, replay
 from live402.route import handle_route
 
 
 def _payload(nonce="11", resource_url="https://402signal.com/route"):
+    nonce_hex = hashlib.sha256(str(nonce).encode("utf-8")).hexdigest()
     body = {
         "x402Version": 2,
         "accepted": {
@@ -46,7 +48,7 @@ def _payload(nonce="11", resource_url="https://402signal.com/route"):
                 "value": payment.AMOUNT_ATOMIC,
                 "validAfter": "0",
                 "validBefore": "9999999999",
-                "nonce": "0x" + (nonce * 32),
+                "nonce": "0x" + nonce_hex,
             },
         },
     }
@@ -79,12 +81,23 @@ def _decode_payment_header(raw):
     return json.loads(blob.decode("utf-8"))
 
 
+def _settlement_receipt(**extra):
+    receipt = {
+        "success": True,
+        "transaction": "0x" + ("cd" * 32),
+        "network": payment.BASE_CAIP2,
+        "payer": "0x1111111111111111111111111111111111111111",
+    }
+    receipt.update(extra)
+    return receipt
+
+
 def _fake_facilitator(url, body, headers=None, timeout=20.0):
     _ = headers, timeout, body
     if str(url).rstrip("/").endswith("/verify"):
         return 200, {"isValid": True}
     if str(url).rstrip("/").endswith("/settle"):
-        return 200, {"success": True, "network": "eip155:8453"}
+        return 200, _settlement_receipt()
     return 404, {"error": "unexpected"}
 
 
@@ -100,13 +113,21 @@ def _counting_facilitator(verify_calls, settle_calls, settle_response=None):
             settle_calls.append(url)
             if settle_response is not None:
                 return settle_response
-            return 200, {"success": True, "network": "eip155:8453"}
+            return 200, _settlement_receipt()
         return 404, {"error": "unexpected"}
 
     return fake_post
 
 
 class ReplayFingerprintTests(unittest.TestCase):
+    @staticmethod
+    def _accept(rail):
+        return next(
+            row
+            for row in payment.payment_required(discover.ROUTE)["accepts"]
+            if payment.rail_of_accept(row) == rail
+        )
+
     def test_same_payload_and_rail_same_digest(self):
         accept = {
             "scheme": "exact",
@@ -122,6 +143,135 @@ class ReplayFingerprintTests(unittest.TestCase):
         c = replay.canonical_fingerprint(_payload("bb"), accept)
         self.assertNotEqual(a, c)
 
+    def test_base_wrapper_signature_and_numeric_spelling_are_semantic_replay(self):
+        accept = self._accept("base")
+        original = _payload("economic-base")
+        variant = copy.deepcopy(original)
+        variant["resource"]["description"] = "unsigned metadata changed"
+        variant["extensions"] = {"attacker": {"marker": "not signed"}}
+        variant["payload"]["signature"] = "0x" + ("ef" * 65)
+        variant["payload"]["authorization"]["from"] = (
+            variant["payload"]["authorization"]["from"].upper().replace("0X", "0x")
+        )
+        variant["payload"]["authorization"]["value"] = "0003000"
+        variant["payload"]["authorization"]["validAfter"] = "000"
+        self.assertEqual(
+            replay.canonical_fingerprint(original, accept),
+            replay.canonical_fingerprint(variant, accept),
+        )
+        changed = copy.deepcopy(original)
+        changed["payload"]["authorization"]["nonce"] = "0x" + ("01" * 32)
+        self.assertNotEqual(
+            replay.canonical_fingerprint(original, accept),
+            replay.canonical_fingerprint(changed, accept),
+        )
+
+    def test_base_permit2_binds_authorization_not_signature_or_wrapper(self):
+        accept = self._accept("base")
+        payload = _payload("unused")
+        payload["payload"] = {
+            "signature": "0x" + ("ab" * 65),
+            "permit2Authorization": {
+                "permitted": {"token": payment.USDC_BASE, "amount": "3000"},
+                "from": "0x1111111111111111111111111111111111111111",
+                "spender": "0x402085c248EeA27D92E8b30b2C58ed07f9E20001",
+                "nonce": "1234",
+                "deadline": "9999999999",
+                "witness": {"to": payment.DEFAULT_PAYTO, "validAfter": "0"},
+            },
+        }
+        variant = copy.deepcopy(payload)
+        variant["payload"]["signature"] = "0x" + ("cd" * 65)
+        variant["resource"]["description"] = "unsigned"
+        self.assertEqual(
+            replay.canonical_fingerprint(payload, accept),
+            replay.canonical_fingerprint(variant, accept),
+        )
+        variant["payload"]["permit2Authorization"]["deadline"] = "9999999998"
+        self.assertNotEqual(
+            replay.canonical_fingerprint(payload, accept),
+            replay.canonical_fingerprint(variant, accept),
+        )
+
+    def test_solana_binds_message_not_signatures_metadata_or_base64_padding(self):
+        accept = self._accept("solana")
+        message = b"\x80\x00economic-solana-message"
+        first = b"\x01" + (b"A" * 64) + message
+        second = b"\x01" + (b"B" * 64) + message
+        payload = {
+            "x402Version": 2,
+            "resource": {"url": discover.ROUTE, "description": "one"},
+            "payload": {"transaction": base64.b64encode(first).decode("ascii")},
+        }
+        variant = copy.deepcopy(payload)
+        variant["resource"]["description"] = "two"
+        variant["payload"]["transaction"] = base64.b64encode(second).decode("ascii").rstrip("=")
+        self.assertEqual(
+            replay.canonical_fingerprint(payload, accept),
+            replay.canonical_fingerprint(variant, accept),
+        )
+        changed = copy.deepcopy(payload)
+        changed_raw = b"\x01" + (b"A" * 64) + message + b"!"
+        changed["payload"]["transaction"] = base64.b64encode(changed_raw).decode("ascii")
+        self.assertNotEqual(
+            replay.canonical_fingerprint(payload, accept),
+            replay.canonical_fingerprint(changed, accept),
+        )
+
+    def test_algorand_binds_unsigned_group_and_index_not_signature_wrapper(self):
+        accept = self._accept("algorand")
+        txn = {
+            "aamt": 3000,
+            "arcv": b"R" * 32,
+            "fv": 1,
+            "gh": b"G" * 32,
+            "lv": 100,
+            "snd": b"S" * 32,
+            "type": "axfer",
+            "xaid": int(payment.USDC_ALGORAND_ASA),
+        }
+
+        def encoded(sig, value):
+            raw = algo_tx.msgpack_encode({"sig": sig, "txn": value})
+            return base64.b64encode(raw).decode("ascii")
+
+        payload = {
+            "x402Version": 2,
+            "resource": {"url": discover.ROUTE},
+            "payload": {"paymentIndex": 0, "paymentGroup": [encoded(b"A" * 64, txn)]},
+        }
+        variant = copy.deepcopy(payload)
+        variant["resource"]["description"] = "unsigned"
+        variant["payload"]["paymentGroup"] = [encoded(b"B" * 64, txn).rstrip("=")]
+        self.assertEqual(
+            replay.canonical_fingerprint(payload, accept),
+            replay.canonical_fingerprint(variant, accept),
+        )
+        changed_txn = dict(txn, aamt=3001)
+        changed = copy.deepcopy(payload)
+        changed["payload"]["paymentGroup"] = [encoded(b"A" * 64, changed_txn)]
+        self.assertNotEqual(
+            replay.canonical_fingerprint(payload, accept),
+            replay.canonical_fingerprint(changed, accept),
+        )
+
+    def test_invalid_rail_authorizations_fail_closed(self):
+        with self.assertRaises(ValueError):
+            replay.canonical_fingerprint(
+                {"payload": {"authorization": {"nonce": "0x00"}}},
+                self._accept("base"),
+            )
+        with self.assertRaises(ValueError):
+            replay.canonical_fingerprint(
+                {"payload": {"transaction": base64.b64encode(b"\x00bad").decode()}},
+                self._accept("solana"),
+            )
+        with self.assertRaises(ValueError):
+            replay.canonical_fingerprint(
+                {"payload": {"paymentIndex": 0, "paymentGroup": ["bm90LW1zZ3BhY2s="]}},
+                self._accept("algorand"),
+            )
+
 
 class ReplayDurabilityTests(unittest.TestCase):
     def setUp(self):
@@ -132,6 +282,7 @@ class ReplayDurabilityTests(unittest.TestCase):
 
     def tearDown(self):
         replay.reset()
+        os.environ.pop(replay.CUTOVER_ACK_ENV, None)
         if self._prev_db is None:
             os.environ.pop("LIVE402_REPLAY_DB", None)
         else:
@@ -147,6 +298,102 @@ class ReplayDurabilityTests(unittest.TestCase):
     def test_production_refuses_non_volume_replay_path(self):
         with patch.dict(os.environ, {"LIVE402_FIXTURE": ""}, clear=False):
             self.assertFalse(replay.durable_ready())
+
+    def test_legacy_hashes_replay_exact_but_block_new_identity_until_safe_cutover(self):
+        payload = _payload("legacy")
+        accept = next(
+            row
+            for row in payment.payment_required(discover.ROUTE)["accepts"]
+            if payment.rail_of_accept(row) == "base"
+        )
+        legacy_fp = replay.legacy_fingerprint(payload, accept)
+        old_outcome = {
+            "c": 503,
+            "b": {
+                "live": False,
+                "miss_reason": "no_candidates",
+                "paymentPayload": {
+                    "signature": "LEGACY-SECRET-CANARY",
+                    "authorization": {"nonce": "LEGACY-SECRET-CANARY"},
+                },
+                "facilitator_response": {"errorReason": "LEGACY-SECRET-CANARY"},
+                "billing": {
+                    "model": payment.ROUTING_BILLING_MODEL,
+                    "condition": payment.ROUTING_SETTLEMENT_CONDITION,
+                    "asset": "USDC",
+                    "amount_atomic": payment.AMOUNT_ATOMIC,
+                    "display_amount": payment.AMOUNT_USD,
+                    "rail": "base",
+                    "settlement_attempted": False,
+                    "settled": False,
+                },
+            },
+            "e": {
+                "PAYMENT-RESPONSE": payment.payment_response_header(
+                    _settlement_receipt(
+                        errorReason="LEGACY-SECRET-CANARY",
+                        paymentPayload={"signature": "LEGACY-SECRET-CANARY"},
+                    )
+                )
+            },
+        }
+        conn = sqlite3.connect(os.environ["LIVE402_REPLAY_DB"])
+        conn.executescript(
+            """
+            CREATE TABLE settle_ledger (
+                fp_hash TEXT NOT NULL,
+                state TEXT NOT NULL,
+                outcome_json TEXT,
+                created_at REAL NOT NULL,
+                CONSTRAINT settle_fp_hash_unique UNIQUE (fp_hash)
+            );
+            """
+        )
+        conn.execute(
+            "INSERT INTO settle_ledger (fp_hash,state,outcome_json,created_at) VALUES (?,?,?,?)",
+            (
+                replay.durable_hash(legacy_fp),
+                replay.STATE_NOT_SETTLED,
+                json.dumps(old_outcome),
+                1.0,
+            ),
+        )
+        conn.commit()
+        conn.close()
+
+        semantic_fp = replay.canonical_fingerprint(payload, accept)
+        kind, exact = replay.begin(semantic_fp, legacy_fp=legacy_fp)
+        self.assertEqual(kind, "cached")
+        self.assertEqual(exact[1]["miss_reason"], "no_candidates")
+        self.assertNotIn("LEGACY-SECRET-CANARY", json.dumps(exact))
+        self.assertIsNone(exact[2])
+        self.assertFalse(replay.durable_ready())
+
+        variant = copy.deepcopy(payload)
+        variant["resource"]["description"] = "legacy hash cannot reconstruct this"
+        self.assertEqual(
+            replay.canonical_fingerprint(variant, accept), semantic_fp
+        )
+        self.assertNotEqual(replay.legacy_fingerprint(variant, accept), legacy_fp)
+        self.assertEqual(
+            replay.begin(
+                semantic_fp,
+                legacy_fp=replay.legacy_fingerprint(variant, accept),
+            )[0],
+            "reject",
+        )
+
+        os.environ[replay.CUTOVER_ACK_ENV] = replay.CUTOVER_ACK_VALUE
+        replay.reset_memory()
+        self.assertTrue(replay.durable_ready())
+        self.assertEqual(
+            replay.begin(
+                semantic_fp,
+                legacy_fp=replay.legacy_fingerprint(variant, accept),
+            )[0],
+            "run",
+        )
+        replay.abandon(semantic_fp)
 
 
 class ConcurrentReplayTests(unittest.TestCase):
@@ -167,7 +414,7 @@ class ConcurrentReplayTests(unittest.TestCase):
             os.environ["LIVE402_REPLAY_DB"] = self._prev_db
         self.tmp.cleanup()
 
-    def test_concurrent_identical_auth_one_probe_one_settle(self):
+    def test_concurrent_semantic_auth_variants_one_probe_one_settle(self):
         probe_started = threading.Event()
         release_probe = threading.Event()
         probe_calls = []
@@ -179,13 +426,22 @@ class ConcurrentReplayTests(unittest.TestCase):
                 return 200, {"isValid": True}
             if str(url).rstrip("/").endswith("/settle"):
                 settle_calls.append(url)
-                return 200, {"success": True, "transaction": "0x" + ("cd" * 32)}
+                return 200, _settlement_receipt()
             return 404, {"error": "unexpected"}
 
         def fake_probe(url, catalog_item=None, deadline=None, **kwargs):
             probe_calls.append(url)
             probe_started.set()
             release_probe.wait(timeout=2)
+            seller_accept = {
+                "scheme": "exact",
+                "network": payment.BASE_CAIP2,
+                "asset": payment.USDC_BASE,
+                "amount": "10000",
+                "payTo": payment.DEFAULT_PAYTO,
+                "maxTimeoutSeconds": 60,
+            }
+            envelope = {"x402Version": 2, "accepts": [seller_accept]}
             return {
                 "url": url,
                 "live": True,
@@ -194,20 +450,21 @@ class ConcurrentReplayTests(unittest.TestCase):
                 "payable": True,
                 "invocable": True,
                 "payTo": payment.DEFAULT_PAYTO,
-                "selected_payment": {
-                    "rail": "base",
-                    "network": payment.BASE_CAIP2,
-                    "asset": payment.USDC_BASE,
-                    "amount_atomic": 10000,
-                    "payTo": payment.DEFAULT_PAYTO,
-                },
+                "envelope": envelope,
+                "selected_payment": payment.selected_payment_fields(
+                    payment.validate_observed_accept(seller_accept, envelope)
+                ),
             }
 
-        headers = _headers_for(_payload("cc"))
+        original = _payload("cc")
+        variant = copy.deepcopy(original)
+        variant["resource"]["description"] = "unsigned concurrent mutation"
+        variant["payload"]["signature"] = "0x" + ("ef" * 65)
+        request_headers = [_headers_for(original), _headers_for(variant)]
         body = _weather_body()
         results = []
 
-        def worker():
+        def worker(headers):
             results.append(
                 handle_route(body, headers, "https://402signal.com/route")
             )
@@ -215,8 +472,8 @@ class ConcurrentReplayTests(unittest.TestCase):
         with patch("live402.facilitator.post_json", side_effect=fake_post), patch(
             "live402.probe.probe_url", side_effect=fake_probe
         ), patch("live402.probe.route_need") as route_need:
-            t1 = threading.Thread(target=worker)
-            t2 = threading.Thread(target=worker)
+            t1 = threading.Thread(target=worker, args=(request_headers[0],))
+            t2 = threading.Thread(target=worker, args=(request_headers[1],))
             t1.start()
             self.assertTrue(probe_started.wait(timeout=2))
             t2.start()
@@ -240,7 +497,7 @@ class ConcurrentReplayTests(unittest.TestCase):
                 return 200, {"isValid": True}
             if str(url).rstrip("/").endswith("/settle"):
                 settle_calls.append(1)
-                return 200, {"success": True}
+                return 200, _settlement_receipt()
             return 404, {"error": "unexpected"}
 
         headers = _headers_for(_payload("dd"))
@@ -281,15 +538,21 @@ class ConcurrentReplayTests(unittest.TestCase):
                 return 200, {"isValid": True}
             if str(url).rstrip("/").endswith("/settle"):
                 settle_calls.append(1)
-                return 200, {"success": True}
+                return 200, _settlement_receipt()
             return 404, {"error": "unexpected"}
 
-        headers = _headers_for(_payload("rs"))
+        original = _payload("rs")
+        variant = copy.deepcopy(original)
+        variant["resource"]["description"] = "unsigned restart mutation"
+        variant["payload"]["signature"] = "0x" + ("ef" * 65)
+        headers = _headers_for(original)
         body = {"need": "weather", "url": "https://fixture.402signal.local/weather"}
         with patch("live402.facilitator.post_json", side_effect=fake_post):
             first = handle_route(body, headers, "https://402signal.com/route")
             replay.reset_memory()
-            second = handle_route(body, headers, "https://402signal.com/route")
+            second = handle_route(
+                body, _headers_for(variant), "https://402signal.com/route"
+            )
         self.assertEqual(first[0], 200)
         self.assertEqual(second[0], 200)
         self.assertEqual(first[1].get("url"), second[1].get("url"))
@@ -309,7 +572,7 @@ class ConcurrentReplayTests(unittest.TestCase):
                 return 200, {"isValid": True}
             if str(url).rstrip("/").endswith("/settle"):
                 settle_calls.append(1)
-                return 200, {"success": True}
+                return 200, _settlement_receipt()
             return 404, {"error": "unexpected"}
 
         headers = _headers_for(_payload("tl"))
@@ -402,7 +665,7 @@ class ConcurrentReplayTests(unittest.TestCase):
                 return 200, {"isValid": True}
             if str(url).rstrip("/").endswith("/settle"):
                 settle_calls.append(1)
-                return 200, {"success": True}
+                return 200, _settlement_receipt()
             return 404, {"error": "unexpected"}
 
         headers = _headers_for(_payload("pd"))
@@ -418,7 +681,7 @@ class ConcurrentReplayTests(unittest.TestCase):
             code, _result, _extra = handle_route(
                 body, headers, "https://402signal.com/route"
             )
-        self.assertEqual(code, 402)
+        self.assertEqual(code, 503)
         self.assertEqual(len(settle_calls), 0)
         self.assertEqual(replay.ledger_state(fp), replay.STATE_PENDING)
 
@@ -464,14 +727,17 @@ class StateMachineReplayTests(unittest.TestCase):
         ):
             first = handle_route(body, headers, discover.ROUTE)
             second = handle_route(body, headers, discover.ROUTE)
-        self.assertEqual(first[0], 402)
-        self.assertEqual(second[0], 402)
+        self.assertEqual(first[0], 503)
+        self.assertEqual(second[0], 503)
         self.assertEqual(len(settle_calls), 1)
         self.assertEqual(len(verify_calls), 1)
-        decoded = _decode_payment_header((first[2] or {}).get("PAYMENT-RESPONSE"))
-        self.assertIsInstance(decoded, dict)
-        self.assertEqual(decoded.get("errorReason"), "settlement_pending")
-        self.assertTrue(decoded.get("transaction"))
+        self.assertIsNone(first[2])
+        self.assertEqual(first, second)
+        self.assertEqual(first[1]["miss_reason"], "settlement_unknown")
+        self.assertEqual(first[1]["billing"]["settlement_state"], "unknown")
+        self.assertTrue(first[1]["billing"]["settlement_attempted"])
+        self.assertIsNone(first[1]["billing"]["settled"])
+        self.assertNotIn("settlement_pending", json.dumps(first))
         self.assertNotEqual(first[1].get("live"), True)
 
     def test_lost_facilitator_settle_response_idempotent_retry(self):
@@ -487,11 +753,78 @@ class StateMachineReplayTests(unittest.TestCase):
         ):
             first = handle_route(body, headers, discover.ROUTE)
             second = handle_route(body, headers, discover.ROUTE)
-        self.assertEqual(first[0], 402)
-        self.assertEqual(second[0], 402)
+        self.assertEqual(first[0], 503)
+        self.assertEqual(second[0], 503)
         self.assertEqual(len(settle_calls), 1)
         self.assertEqual(len(verify_calls), 1)
+        self.assertEqual(first, second)
+        self.assertEqual(first[1]["billing"]["settlement_state"], "unknown")
+        self.assertIsNone(first[1]["billing"]["settled"])
         self.assertNotEqual(first[1].get("live"), True)
+
+    def test_lost_settle_outcome_write_failure_still_blocks_after_restart(self):
+        verify_calls = []
+        settle_calls = []
+        headers = _headers_for(_payload("lost-disk"))
+        with patch(
+            "live402.facilitator.post_json",
+            side_effect=_counting_facilitator(
+                verify_calls,
+                settle_calls,
+                (None, {"error": "FACILITATOR-SECRET-CANARY"}),
+            ),
+        ), patch("live402.replay._ledger_finish", return_value=None):
+            first = handle_route(_weather_body(), headers, discover.ROUTE)
+            replay.reset_memory()
+            second = handle_route(_weather_body(), headers, discover.ROUTE)
+        self.assertEqual(first[0], 503)
+        self.assertEqual(second[0], 503)
+        self.assertEqual(first[1]["billing"]["settlement_state"], "unknown")
+        self.assertEqual(second[1]["billing"]["settlement_state"], "unknown")
+        self.assertEqual(len(verify_calls), 1)
+        self.assertEqual(len(settle_calls), 1)
+        self.assertNotIn("FACILITATOR-SECRET-CANARY", json.dumps((first, second)))
+
+    def test_free_miss_outcome_write_failure_fails_closed_after_restart(self):
+        headers = _headers_for(_payload("free-disk"))
+        with patch("live402.facilitator.verify", return_value=facilitator.FacilitatorResult(ok=True, body={"isValid": True})) as verify, patch(
+            "live402.route.run_probe",
+            return_value=(
+                503,
+                {
+                    "live": False,
+                    "payable": False,
+                    "invocable": False,
+                    "selected_payment": None,
+                    "miss_reason": "no_candidates",
+                },
+            ),
+        ) as probe, patch("live402.facilitator.settle") as settle, patch(
+            "live402.replay._ledger_finish", return_value=None
+        ):
+            first = handle_route(_weather_body(), headers, discover.ROUTE)
+            replay.reset_memory()
+            second = handle_route(_weather_body(), headers, discover.ROUTE)
+        self.assertEqual(first[1]["billing"]["settlement_state"], "not_attempted")
+        self.assertEqual(second[1]["billing"]["settlement_state"], "unknown")
+        self.assertEqual(verify.call_count, 1)
+        self.assertEqual(probe.call_count, 1)
+        settle.assert_not_called()
+
+    def test_reservation_storage_failure_performs_no_work(self):
+        headers = _headers_for(_payload("reserve-disk"))
+        with patch("live402.replay._ledger_reserve", return_value="reject"), patch(
+            "live402.facilitator.verify"
+        ) as verify, patch("live402.route.run_probe") as probe, patch(
+            "live402.facilitator.settle"
+        ) as settle:
+            result = handle_route(_weather_body(), headers, discover.ROUTE)
+        self.assertEqual(result[0], 503)
+        self.assertEqual(result[1]["billing"]["settlement_state"], "unknown")
+        self.assertIsNone(result[1]["billing"]["settlement_attempted"])
+        verify.assert_not_called()
+        probe.assert_not_called()
+        settle.assert_not_called()
 
     def test_same_auth_different_resource_does_not_settle(self):
         """SEC-ROUTER-002: /route payment reused on /mcp is 402; no second settle."""
@@ -513,6 +846,32 @@ class StateMachineReplayTests(unittest.TestCase):
         self.assertNotEqual(second[1].get("live"), True)
         self.assertNotEqual(mcp_resource, discover.ROUTE)
 
+    def test_mutated_unsigned_resource_cannot_replay_cross_endpoint_result(self):
+        """Economic identity stays one-use while cached output remains endpoint-scoped."""
+        verify_calls = []
+        settle_calls = []
+        original = _payload("resource-scope", resource_url=discover.ROUTE)
+        changed = copy.deepcopy(original)
+        mcp_resource = discover.ORIGIN + "/mcp"
+        changed["resource"]["url"] = mcp_resource
+        body = _weather_body()
+        with patch(
+            "live402.facilitator.post_json",
+            side_effect=_counting_facilitator(verify_calls, settle_calls),
+        ):
+            first = handle_route(body, _headers_for(original), discover.ROUTE)
+            second = handle_route(
+                body,
+                _headers_for(changed),
+                mcp_resource,
+                bazaar=payment.BAZAAR_MCP,
+            )
+        self.assertEqual(first[0], 200)
+        self.assertEqual(second[0], 503)
+        self.assertEqual(second[1]["billing"]["settlement_state"], "unknown")
+        self.assertEqual(len(verify_calls), 1)
+        self.assertEqual(len(settle_calls), 1)
+
     def test_concurrent_identical_auth_holds_during_settle(self):
         """In-flight settle is non-terminal: waiter must not issue a second settle."""
         settle_started = threading.Event()
@@ -529,7 +888,7 @@ class StateMachineReplayTests(unittest.TestCase):
                 settle_calls.append(url)
                 settle_started.set()
                 release_settle.wait(timeout=2)
-                return 200, {"success": True, "transaction": "0x" + ("cd" * 32)}
+                return 200, _settlement_receipt()
             return 404, {"error": "unexpected"}
 
         headers = _headers_for(_payload("cs"))
@@ -598,6 +957,9 @@ class StateMachineReplayTests(unittest.TestCase):
         self.assertEqual(second[0], 402)
         self.assertEqual(len(settle_calls), 1)
         self.assertEqual(len(verify_calls), 1)
+        self.assertNotIn("unexpected_settle_error", json.dumps((first, second)))
+        self.assertNotIn("PAYMENT-RESPONSE", first[2] or {})
+        self.assertEqual(first[1]["billing"]["settlement_state"], "rejected")
 
     def test_empty_body_400_is_not_cached_valid_retry_settles_once(self):
         """400 body errors are not replay-cached. A later valid body may settle once."""

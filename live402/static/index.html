@@ -49,7 +49,7 @@
             <a class="btn" href="/developers#quickstart">View the quick start</a>
             <a class="btn secondary" href="/catalog">Search the free catalog</a>
           </div>
-          <p class="price-note">$0.01 USDC per live routing check. Seller payment is separate.</p>
+          <p class="price-note">Authorize $0.003 USDC. 402Signal settles only when it returns a valid live eligible route. Normal typed misses are not settled. Seller payment is separate.</p>
           <p class="hero-trust-note"><a href="/transparency"><strong>PQ Trust</strong></a> adds a verifiable routing history. Checkpoints use native Falcon-1024 authorization on Algorand MainNet.</p>
         </div>
         <figure class="hero-art">
@@ -94,7 +94,7 @@
         <div>
           <p class="eyebrow">For developers</p>
           <h2>Start with one POST request.</h2>
-          <p>The first response is HTTP 402 with payment options for the routing fee. After payment, 402Signal searches, checks, and ranks candidates.</p>
+          <p>The first response is HTTP 402 with a $0.003 USDC authorization option. 402Signal verifies it, searches, checks, and ranks candidates, then settles only a valid live eligible route.</p>
         </div>
         <div class="code-card">
           <div class="code-toolbar"><span>POST /route</span><a href="/developers">Full guide</a></div>

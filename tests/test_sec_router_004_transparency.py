@@ -1,7 +1,8 @@
 """SEC-ROUTER-004 / A-14: route success vs log append non-atomicity.
 
-Paid 200/503 does not require a durable signed leaf unless
-require_transparency. Env vkey wins over stale sqlite meta.vkey.
+Settled 200 does not require a durable signed leaf unless
+require_transparency. Unsettled typed 503 misses never append a route leaf.
+Env vkey wins over stale sqlite meta.vkey.
 No live spend.
 """
 
@@ -121,7 +122,7 @@ class PaidRequireTransparencyTests(unittest.TestCase):
             "logged_uncheckpointed",
         )
 
-    def test_paid_503_miss_allows_logged_uncheckpointed_by_default(self):
+    def test_verified_503_miss_is_unsettled_and_appends_no_leaf(self):
         code, result, _extra = self._paid(
             {"need": "echo", "url": "https://fixture.402signal.local/echo"},
             nonce="ms",
@@ -130,12 +131,12 @@ class PaidRequireTransparencyTests(unittest.TestCase):
         self.assertFalse(result.get("live"))
         self.assertEqual(result.get("miss_reason"), "reachable_200")
         self.assertNotIn("transparency receipt", (result.get("error") or "").lower())
-        self.assertEqual(
-            result["pq_trust"]["transparency"]["status"],
-            "logged_uncheckpointed",
-        )
+        self.assertNotIn("pq_trust", result)
+        self.assertEqual(result["billing"]["settlement_attempted"], False)
+        self.assertEqual(result["billing"]["settled"], False)
+        self.assertEqual(store.size(), 0)
 
-    def test_paid_503_miss_require_transparency_is_not_success(self):
+    def test_verified_503_miss_ignores_transparency_without_creating_evidence(self):
         code, result, _extra = self._paid(
             {
                 "need": "echo",
@@ -145,10 +146,12 @@ class PaidRequireTransparencyTests(unittest.TestCase):
             nonce="mt",
         )
         self.assertEqual(code, 503)
-        self.assertIn("transparency", (result.get("error") or "").lower())
-        tr = ((result.get("pq_trust") or {}).get("transparency") or {})
-        self.assertEqual(tr.get("status"), "logged_uncheckpointed")
         self.assertFalse(result.get("live"))
+        self.assertEqual(result.get("miss_reason"), "reachable_200")
+        self.assertNotIn("pq_trust", result)
+        self.assertEqual(result["billing"]["settlement_attempted"], False)
+        self.assertEqual(result["billing"]["settled"], False)
+        self.assertEqual(store.size(), 0)
 
 
 if __name__ == "__main__":

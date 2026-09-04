@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import io
 import json
 import os
@@ -156,6 +157,102 @@ class OfficialRailsTests(unittest.TestCase):
         self.assertTrue(sol_v.startswith(payment.SOLANA_FACILITATOR))
         self.assertTrue(algo_v.startswith(payment.ALGORAND_FACILITATOR))
         self.assertTrue(all(facilitator.facilitator_url_allowed(u) for u in (base_v, base_s, sol_v, sol_s, algo_v, algo_s)))
+
+    def test_verify_and_settle_never_reflect_facilitator_canaries(self):
+        canary = "FACILITATOR-PRIVATE-CANARY"
+        accept = next(
+            row
+            for row in payment.payment_required("https://402signal.com/route")["accepts"]
+            if payment.rail_of_accept(row) == "base"
+        )
+        receipt = {
+            "success": True,
+            "transaction": "0x" + ("cd" * 32),
+            "network": payment.BASE_CAIP2,
+            "payer": "0x1111111111111111111111111111111111111111",
+            "errorReason": canary,
+            "paymentPayload": {"signature": canary},
+            "headers": {"Authorization": canary},
+        }
+        with patch(
+            "live402.facilitator._call",
+            return_value=facilitator.FacilitatorResult(ok=True, body=receipt),
+        ):
+            settled = facilitator.settle({}, accept)
+        self.assertTrue(settled.ok)
+        self.assertEqual(
+            set(settled.body), {"success", "transaction", "network", "payer"}
+        )
+        self.assertNotIn(canary, json.dumps(settled.body))
+
+        with patch(
+            "live402.facilitator._call",
+            return_value=facilitator.FacilitatorResult(
+                ok=True,
+                body={"isValid": False, "invalidReason": canary, "paymentPayload": receipt},
+            ),
+        ):
+            verified = facilitator.verify({}, accept)
+        self.assertFalse(verified.ok)
+        self.assertEqual(verified.error, "payment_verification_failed")
+        self.assertEqual(verified.body, {})
+        self.assertNotIn(canary, json.dumps(verified.__dict__))
+
+    def test_malformed_success_and_pending_are_ambiguous_not_rejected(self):
+        accept = next(
+            row
+            for row in payment.payment_required("https://402signal.com/route")["accepts"]
+            if payment.rail_of_accept(row) == "base"
+        )
+        cases = (
+            {"success": True, "network": payment.BASE_CAIP2},
+            {"success": False, "errorReason": "settlement_pending"},
+            {"success": False, "errorReason": "submitted"},
+        )
+        for body in cases:
+            with self.subTest(body=body), patch(
+                "live402.facilitator._call",
+                return_value=facilitator.FacilitatorResult(ok=True, body=body),
+            ):
+                result = facilitator.settle({}, accept)
+            self.assertFalse(result.ok)
+            self.assertTrue(result.ambiguous)
+            self.assertEqual(result.error, "settlement_outcome_unknown")
+            self.assertEqual(result.body, {})
+
+    def test_receipt_requires_exact_mainnet_and_typed_txid(self):
+        base = {
+            "success": True,
+            "transaction": "0x" + ("cd" * 32),
+            "network": payment.BASE_CAIP2,
+        }
+        self.assertEqual(
+            payment.sanitize_settlement_receipt(base, rail="base"), base
+        )
+        self.assertIsNone(
+            payment.sanitize_settlement_receipt(dict(base, network="base"), rail="base")
+        )
+        self.assertIsNone(
+            payment.sanitize_settlement_receipt(dict(base, transaction="not-a-txid"), rail="base")
+        )
+        solana = {
+            "success": True,
+            "transaction": "1" * 64,
+            "network": payment.SOLANA_MAINNET,
+            "payer": payment.DEFAULT_PAYTO_SOLANA,
+        }
+        self.assertEqual(
+            payment.sanitize_settlement_receipt(solana, rail="solana"), solana
+        )
+        algorand = {
+            "success": True,
+            "transaction": base64.b32encode(b"T" * 32).decode("ascii").rstrip("="),
+            "network": payment.ALGORAND_MAINNET,
+            "payer": payment.DEFAULT_PAYTO_ALGORAND,
+        }
+        self.assertEqual(
+            payment.sanitize_settlement_receipt(algorand, rail="algorand"), algorand
+        )
 
 
 if __name__ == "__main__":

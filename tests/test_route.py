@@ -90,7 +90,7 @@ class PaywallTests(unittest.TestCase):
         self.assertEqual(status, 402)
         self.assertEqual(body["network"], "base")
         self.assertEqual(body["asset"], "USDC")
-        self.assertEqual(body["amount"], "$0.01")
+        self.assertEqual(body["amount"], "$0.003")
         self.assertEqual(body["payTo"], payment.DEFAULT_PAYTO)
         networks = [a.get("network") for a in body.get("accepts") or []]
         self.assertIn(payment.BASE_CAIP2, networks)
@@ -120,7 +120,7 @@ class PaywallTests(unittest.TestCase):
         self.assertEqual((ug.get("feePayerTxn") or {}).get("from"), payment.ALGORAND_FEE_PAYER)
         self.assertEqual((ug.get("paymentTxn") or {}).get("to"), payment.DEFAULT_PAYTO_ALGORAND)
         self.assertEqual((ug.get("paymentTxn") or {}).get("asset"), 31566704)
-        self.assertEqual((ug.get("paymentTxn") or {}).get("amount"), 10000)
+        self.assertEqual((ug.get("paymentTxn") or {}).get("amount"), 3000)
         self.assertEqual((ug.get("paymentTxn") or {}).get("note"), "x402-payment-v2")
         self.assertNotIn("txns", ug)
         self.assertNotIn("tag", base.get("extra") or {})
@@ -262,7 +262,8 @@ class PaywallTests(unittest.TestCase):
         self.assertNotIn("Catalog said X. We observed Y.", html)
         self.assertNotIn("Index is filling. Preview has no hits yet. Pulse counts are 0. Probe live still 402s /route.", html)
         self.assertNotIn("Facilitator reachability, not seller health.", html)
-        self.assertIn("$0.01 USDC per live routing check", html)
+        self.assertIn("Authorize $0.003 USDC", html)
+        self.assertIn("Normal typed misses are not settled", html)
         self.assertNotIn("Best capability match in the current index.", html)
         self.assertNotIn("Probe live ($0.01)", html)
         self.assertNotIn('id="preview-btn"', html)
@@ -308,7 +309,7 @@ class PaywallTests(unittest.TestCase):
         self.assertNotIn("x402 Global Challenge", html)
         self.assertNotIn("24klabs.ai/listing/402signal", html)
         self.assertNotIn("api.cdp.coinbase.com", html)
-        self.assertIn("$0.01", html)
+        self.assertIn("$0.003", html)
         self.assertNotIn("Find a live URL", html)
         self.assertNotIn("GET /preview", html)
         self.assertNotIn("<code>miss_reason</code>", html)
@@ -399,6 +400,9 @@ class PaywallTests(unittest.TestCase):
         self.assertIn('"need": "erc20 token balance"', devs)
         self.assertIn('"url": "https://seller.example/x402"', devs)
         self.assertIn("Use <code>need</code> to discover and rank services.", devs)
+        self.assertIn("billing.settlement_state", devs)
+        self.assertIn("settlement_state=unknown", devs)
+        self.assertIn("settled=null", devs)
         self.assertIn("/openapi.json", html)
         self.assertIn("/mcp.json", devs)
         self.assertIn("https://github.com/402signalhq/402signal", devs)
@@ -431,7 +435,7 @@ class PaywallTests(unittest.TestCase):
         self.assertIn("GET", headers.get("allow", ""))
         self.assertIn("POST", headers.get("allow", ""))
         self.assertIn("OPTIONS", headers.get("allow", ""))
-        self.assertIn("$0.01", html)
+        self.assertIn("$0.003", html)
         self.assertIn('href="/"', html)
         self.assertIn("POST /route", html)
         self.assertIn("paid routing endpoint", html)
@@ -443,7 +447,7 @@ class PaywallTests(unittest.TestCase):
         status, body = _json_post(self.port, "/route", {})
         self.assertEqual(status, 402)
         amounts = [str(a.get("amount")) for a in body.get("accepts") or []]
-        self.assertEqual(amounts, ["10000", "10000", "10000"])
+        self.assertEqual(amounts, ["3000", "3000", "3000"])
 
     def test_get_route_json_accept_is_402(self):
         status, raw, headers = _get_full(
@@ -457,7 +461,7 @@ class PaywallTests(unittest.TestCase):
         self.assertIn("accepts", body)
         self.assertEqual(len(body.get("accepts") or []), 3)
         amounts = [str(a.get("amount")) for a in body.get("accepts") or []]
-        self.assertEqual(amounts, ["10000", "10000", "10000"])
+        self.assertEqual(amounts, ["3000", "3000", "3000"])
         bazaar = (body.get("extensions") or {}).get("bazaar") or {}
         self.assertIn("info", bazaar)
         self.assertEqual(bazaar["info"]["input"]["method"], "POST")
@@ -469,7 +473,7 @@ class PaywallTests(unittest.TestCase):
         self.assertIn("application/json", headers.get("content-type", ""))
         body = json.loads(raw)
         amounts = [str(a.get("amount")) for a in body.get("accepts") or []]
-        self.assertEqual(amounts, ["10000", "10000", "10000"])
+        self.assertEqual(amounts, ["3000", "3000", "3000"])
         self.assertIn("bazaar", body.get("extensions") or {})
 
     def test_get_route_vary_accept(self):
@@ -490,12 +494,12 @@ class PaywallTests(unittest.TestCase):
                 self.assertIn("accept", tokens)
                 self.assertEqual(headers.get("cache-control"), cache)
 
-    def test_unpaid_empty_post_still_402_with_atomic_10000(self):
+    def test_unpaid_empty_post_still_402_with_atomic_3000(self):
         status, body = _json_post(self.port, "/route", {})
         self.assertEqual(status, 402)
         amounts = [str(a.get("amount")) for a in body.get("accepts") or []]
-        self.assertEqual(amounts, ["10000", "10000", "10000"])
-        self.assertEqual(body.get("amount"), "$0.01")
+        self.assertEqual(amounts, ["3000", "3000", "3000"])
+        self.assertEqual(body.get("amount"), "$0.003")
 
     def test_security_headers(self):
         conn = HTTPConnection("127.0.0.1", self.port, timeout=5)
@@ -694,20 +698,21 @@ class PaywallTests(unittest.TestCase):
         self.assertIn("402", route["responses"])
         price = route["x-payment-info"]["price"]
         self.assertEqual(price["mode"], "fixed")
-        self.assertEqual(price["amount"], "0.01")
+        self.assertEqual(price["amount"], "0.003")
         self.assertIn("x402", str(route["x-payment-info"]["protocols"]))
         wk = json.loads(_get(self.port, "/.well-known/x402")[1])
         wkj = json.loads(_get(self.port, "/.well-known/x402.json")[1])
         self.assertEqual(wk, wkj)
         self.assertIn("POST /route", str(wk.get("resources")))
-        self.assertEqual(str(wk.get("price_usdc")), "0.01")
+        self.assertEqual(str(wk.get("price_usdc")), "0.003")
         amounts = [str(a.get("amount")) for a in wk.get("accepts") or []]
-        self.assertEqual(amounts, ["10000", "10000", "10000"])
+        self.assertEqual(amounts, ["3000", "3000", "3000"])
         robots = _get(self.port, "/robots.txt")[1]
         self.assertIn("User-agent:", robots)
         llms = _get(self.port, "/llms.txt")[1]
         self.assertIn("402Signal", llms)
-        self.assertIn("$0.01", llms)
+        self.assertIn("$0.003", llms)
+        self.assertIn("Normal typed misses are not settled", llms)
         self.assertIn("POST /route, not GET", llms)
         self.assertIn("candidate_evaluation_complete", llms)
         self.assertIn("stop_reason", llms)
@@ -737,10 +742,10 @@ class PaywallTests(unittest.TestCase):
         help_block = body.get("help") or {}
         self.assertEqual(help_block.get("docs"), "https://402signal.com/llms.txt")
         self.assertEqual(help_block.get("mcp"), "https://402signal.com/mcp.json")
-        self.assertEqual(help_block.get("amount"), "$0.01")
+        self.assertEqual(help_block.get("amount"), "$0.003")
         self.assertEqual(help_block.get("rails"), ["base", "solana", "algorand"])
         amounts = [str(a.get("amount")) for a in body.get("accepts") or []]
-        self.assertEqual(amounts, ["10000", "10000", "10000"])
+        self.assertEqual(amounts, ["3000", "3000", "3000"])
 
     def test_get_mcp_json_lists_route_tool(self):
         status, raw = _get(self.port, "/mcp.json")
@@ -786,7 +791,7 @@ class PaywallTests(unittest.TestCase):
         self.assertEqual(len(body.get("accepts") or []), 3)
         self.assertIn("help", body)
         amounts = [str(a.get("amount")) for a in body.get("accepts") or []]
-        self.assertEqual(amounts, ["10000", "10000", "10000"])
+        self.assertEqual(amounts, ["3000", "3000", "3000"])
 
     def test_desc_under_cdp_500(self):
         from live402 import discover, mcp as mcp_mod
@@ -799,6 +804,7 @@ class PaywallTests(unittest.TestCase):
             "402Signal is the independent check an AI agent makes right before spending. "
             "It finds the strongest x402 route across Base, Solana, and Algorand, verifies it live, "
             "and shows the evidence behind the choice. Your agent keeps the wallet. "
+            "The routing authorization settles only when a live eligible route is returned. "
             "The decision history is committed to an append-only PQ Trust log. "
             "Production identity is Algorand MainNet.",
         )
@@ -1614,6 +1620,7 @@ class PulseAllowlistTests(unittest.TestCase):
 class RateLimitTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        cls._previous_route_rpm = os.environ.get("LIVE402_ROUTE_RPM")
         os.environ.pop("LOCAL_FREE", None)
         os.environ["LIVE402_ROUTE_RPM"] = "2"
         os.environ["FLY_APP_NAME"] = "402signal-test"
@@ -1623,7 +1630,10 @@ class RateLimitTests(unittest.TestCase):
     def tearDownClass(cls):
         cls.httpd.shutdown()
         cls.httpd.server_close()
-        os.environ.pop("LIVE402_ROUTE_RPM", None)
+        if cls._previous_route_rpm is None:
+            os.environ.pop("LIVE402_ROUTE_RPM", None)
+        else:
+            os.environ["LIVE402_ROUTE_RPM"] = cls._previous_route_rpm
         os.environ.pop("FLY_APP_NAME", None)
 
     def test_route_rate_limit_429(self):
@@ -1731,7 +1741,7 @@ class PreviewRateLimitTests(unittest.TestCase):
         )
         self.assertEqual(status, 402)
         amounts = [str(a.get("amount")) for a in body.get("accepts") or []]
-        self.assertEqual(amounts, ["10000", "10000", "10000"])
+        self.assertEqual(amounts, ["3000", "3000", "3000"])
 
 
 class ProductBriefTests(unittest.TestCase):
@@ -1814,7 +1824,7 @@ class ProductBriefTests(unittest.TestCase):
         self.assertEqual(status, 200)
         body = json.loads(raw)
         self.assertTrue(body.get("ok"))
-        self.assertEqual(str(body.get("amountAtomic")), "10000")
+        self.assertEqual(str(body.get("amountAtomic")), "3000")
         self.assertEqual(body.get("asset"), "USDC")
         rails = body.get("rails") or []
         self.assertEqual(len(rails), 3)
@@ -1823,7 +1833,7 @@ class ProductBriefTests(unittest.TestCase):
         for row in rails:
             self.assertIn("facilitator", row)
             self.assertIn("amountAtomic", row)
-            self.assertEqual(str(row.get("amountAtomic")), "10000")
+            self.assertEqual(str(row.get("amountAtomic")), "3000")
             self.assertIn("maxTimeoutSeconds", row)
             self.assertIn("up", row)
             self.assertIn("latency_ms", row)
@@ -1852,6 +1862,7 @@ class ProductBriefTests(unittest.TestCase):
             "probe_budget_exhausted",
             "probe_limit_reached",
             "unsafe_to_probe",
+            "settlement_unknown",
         }
         self.assertEqual(set(MISS_REASONS), expected)
         self.assertEqual(public_miss_reason("probe_budget_exhausted"), "probe_budget_exhausted")
@@ -1863,6 +1874,7 @@ class ProductBriefTests(unittest.TestCase):
         self.assertEqual(public_miss_reason("http_503"), "upstream_5xx")
         self.assertEqual(public_miss_reason("ssrf"), "ssrf")
         self.assertEqual(public_miss_reason("unsafe_to_probe"), "unsafe_to_probe")
+        self.assertEqual(public_miss_reason("settlement_unknown"), "settlement_unknown")
         for key in expected:
             self.assertIn(public_miss_reason(key), expected)
 

@@ -21,6 +21,10 @@ payTo pending/change, price/schema change clocks, `summary`, `rank_hints`,
 route batch. They do not write `url_state` and do not touch shadow
 freshness.
 
+A success-only free miss returns before `mark_batch_settled`. It remains
+tentative, does not affect observed success or reputation as settled route
+evidence, and does not enter the PQ route-decision append path.
+
 ## Old rows
 
 Additive column `trust_class` on `probes` and `observations`.
