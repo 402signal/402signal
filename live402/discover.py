@@ -1266,7 +1266,7 @@ $0.003 only when a valid live route is found. Normal typed misses are not settle
 ## Listed on
 
 - Glama: https://glama.ai/mcp/servers/402signal/402signal
-- MCP Registry: https://registry.modelcontextprotocol.io/?q=402signal (io.github.402signal/402signal)
+- MCP Registry: https://registry.modelcontextprotocol.io/?q=402signal (io.github.402signalhq/402signal)
 - Gold-402: https://github.com/Haustorium12/gold-402/blob/main/directory/aggregators.md
 - Smithery: https://smithery.ai/servers/live402/signal
 - Agentic Market: https://agentic.market/services/402signal-com
