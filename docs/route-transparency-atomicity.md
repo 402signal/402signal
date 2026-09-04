@@ -29,6 +29,10 @@ and state `checkpoint_signed`, with a receipt checkpoint).
 The response is HTTP 503 (`transparency receipt unavailable`) but its
 `billing` object remains explicit: settlement was attempted and succeeded.
 The request is not described as free, and no second settlement is attempted.
+Clients must inspect `billing.settlement_state` on every HTTP 503 before
+retrying. This settled transparency failure reports `settled`; a normal miss
+reports `not_attempted`; a lost or malformed settlement reply reports
+`unknown` with `settled:null`, and that authorization must not be reused.
 
 Crash-before-append still leaves tree size 0 and no receipt. Keep
 `test_crash_after_queue_before_append_no_receipt` and

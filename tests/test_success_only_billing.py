@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import os
 import sqlite3
@@ -107,10 +108,19 @@ def _verified() -> facilitator.FacilitatorResult:
 
 
 def _settled() -> facilitator.FacilitatorResult:
-    return facilitator.FacilitatorResult(ok=True, body={"success": True})
+    return facilitator.FacilitatorResult(
+        ok=True,
+        body={
+            "success": True,
+            "transaction": "0x" + ("cd" * 32),
+            "network": payment.BASE_CAIP2,
+            "payer": "0x1111111111111111111111111111111111111111",
+        },
+    )
 
 
 def _payload(nonce: str = "55") -> dict:
+    nonce_hex = hashlib.sha256(str(nonce).encode("utf-8")).hexdigest()
     return {
         "x402Version": 2,
         "resource": {"url": RESOURCE},
@@ -131,7 +141,7 @@ def _payload(nonce: str = "55") -> dict:
                 "value": payment.AMOUNT_ATOMIC,
                 "validAfter": "0",
                 "validBefore": "9999999999",
-                "nonce": "0x" + (nonce * 32),
+                "nonce": "0x" + nonce_hex,
             },
         },
     }
@@ -168,7 +178,38 @@ class RequirementAndBoundaryTests(unittest.TestCase):
         for status in ("200", "503"):
             schema = route_responses[status]["content"]["application/json"]["schema"]
             self.assertIn("billing", schema["required"])
+            billing = schema["properties"]["billing"]
+            self.assertIn("settlement_state", billing["required"])
+            self.assertEqual(
+                billing["properties"]["settled"]["type"], ["boolean", "null"]
+            )
         self.assertIn("billing", mcp.OUTPUT_SCHEMA["required"])
+        self.assertIn(
+            "settlement_state",
+            mcp.OUTPUT_SCHEMA["properties"]["billing"]["required"],
+        )
+
+        examples = route_responses["503"]["content"]["application/json"]["examples"]
+        states = {
+            item["value"]["billing"]["settlement_state"]
+            for item in examples.values()
+        }
+        self.assertEqual(states, {"not_attempted", "settled", "unknown"})
+        self.assertIsNone(
+            examples["settlement_unknown"]["value"]["billing"]["settled"]
+        )
+        self.assertIn("Every HTTP 503 requires inspecting billing", discover.LLMS_TXT)
+        self.assertIn("never reuse that authorization", discover.LLMS_TXT)
+
+        encoded = payment.payment_required_header(required)
+        decoded = json.loads(base64.b64decode(encoded).decode("utf-8"))
+        well_known = discover.well_known()["accepts"]
+        openapi_accepts = route_responses["402"]["content"]["application/json"][
+            "example"
+        ]["accepts"]
+        for accepts in (decoded["accepts"], well_known, openapi_accepts):
+            self.assertEqual(len(accepts), 3)
+            self.assertEqual({row["amount"] for row in accepts}, {"3000"})
 
     def test_billable_winner_requires_current_envelope_constraints_and_payto_policy(self):
         good = _winner()
@@ -210,6 +251,39 @@ class RequirementAndBoundaryTests(unittest.TestCase):
         too_expensive = _winner(amount="10000")
         self.assertFalse(
             _billable_winner({"max_price_usd": 0.005}, 200, too_expensive)
+        )
+
+        cheap = _seller_accept(amount="1000")
+        expensive = _seller_accept(amount="10000")
+        mixed = _winner(amount="10000")
+        mixed["envelope"] = {
+            "x402Version": 2,
+            "accepts": [cheap, expensive],
+        }
+        expensive_opt = payment.validate_observed_accept(
+            expensive, mixed["envelope"]
+        )
+        mixed["selected_payment"] = payment.selected_payment_fields(expensive_opt)
+        self.assertFalse(
+            _billable_winner({"max_price_usd": 0.005}, 200, mixed),
+            "a cheaper unselected option must not satisfy the selected option's bound",
+        )
+
+        base = _seller_accept("base", amount="1000")
+        solana = _seller_accept("solana", amount="1000")
+        cross_rail = _winner("solana", amount="1000")
+        cross_rail["envelope"] = {
+            "x402Version": 2,
+            "accepts": [base, solana],
+        }
+        solana_opt = payment.validate_observed_accept(
+            solana, cross_rail["envelope"]
+        )
+        cross_rail["selected_payment"] = payment.selected_payment_fields(solana_opt)
+        cross_rail["payTo"] = solana["payTo"]
+        self.assertFalse(
+            _billable_winner({"networks": ["base"]}, 200, cross_rail),
+            "a Base option must not satisfy a Solana selected option's network lock",
         )
 
         pending = _winner()
@@ -271,6 +345,7 @@ class PaidExecutionTests(unittest.TestCase):
                 "rail": "base",
                 "settlement_attempted": True,
                 "settled": True,
+                "settlement_state": "settled",
             },
         )
         self.assertIn("PAYMENT-RESPONSE", extra)
@@ -294,6 +369,7 @@ class PaidExecutionTests(unittest.TestCase):
             self.assertEqual(body["miss_reason"], reason)
             self.assertFalse(body["billing"]["settlement_attempted"])
             self.assertFalse(body["billing"]["settled"])
+            self.assertEqual(body["billing"]["settlement_state"], "not_attempted")
             self.assertIsNone(extra)
             verify.assert_called_once()
             probe.assert_called_once()
@@ -382,8 +458,41 @@ class PaidExecutionTests(unittest.TestCase):
         self.assertEqual(code, 503)
         self.assertTrue(body["billing"]["settlement_attempted"])
         self.assertTrue(body["billing"]["settled"])
+        self.assertEqual(body["billing"]["settlement_state"], "settled")
         self.assertIn("PAYMENT-RESPONSE", extra)
         settle.assert_called_once()
+
+    def test_settlement_receipt_allowlist_survives_route_and_replay(self):
+        canary = "FACILITATOR-SECRET-CANARY"
+        raw = dict(
+            _settled().body,
+            errorReason=canary,
+            paymentPayload={"signature": canary, "authorization": {"nonce": canary}},
+            headers={"authorization": canary},
+        )
+        headers = _headers(_payload("receipt-canary"))
+        with patch("live402.facilitator.verify", return_value=_verified()), patch(
+            "live402.route.run_probe", return_value=(200, _winner())
+        ), patch(
+            "live402.facilitator.settle",
+            return_value=facilitator.FacilitatorResult(ok=True, body=raw),
+        ), patch(
+            "live402.route._attach_pq_trust", side_effect=lambda _c, result, _b: result
+        ):
+            first = handle_route({"need": "weather"}, headers, RESOURCE)
+            replay.reset_memory()
+            second = handle_route({"need": "weather"}, headers, RESOURCE)
+        self.assertEqual(first, second)
+        self.assertEqual(first[0], 200)
+        exposed = json.dumps(first, sort_keys=True)
+        self.assertNotIn(canary, exposed)
+        receipt = json.loads(
+            base64.b64decode(first[2]["PAYMENT-RESPONSE"]).decode("utf-8")
+        )
+        self.assertEqual(set(receipt), {"success", "transaction", "network", "payer"})
+        conn = replay._connect()
+        stored = conn.execute("SELECT outcome_json FROM settle_ledger").fetchone()[0]
+        self.assertNotIn(canary, stored)
 
 
 class FreeMissReplayTests(unittest.TestCase):
@@ -537,6 +646,58 @@ class CompatibilityAndAbuseControlTests(unittest.TestCase):
             fp, (200, {"live": True, "billing": billing}, None), cache=True
         )
         self.assertEqual(replay.ledger_state(fp), replay.STATE_SETTLED)
+
+    def test_replay_redacts_payment_containers_but_preserves_public_proofs(self):
+        fp = "12" * 32
+        self.assertEqual(replay.begin(fp)[0], "run")
+        billing = {
+            "model": payment.ROUTING_BILLING_MODEL,
+            "condition": payment.ROUTING_SETTLEMENT_CONDITION,
+            "asset": "USDC",
+            "amount_atomic": payment.AMOUNT_ATOMIC,
+            "display_amount": payment.AMOUNT_USD,
+            "rail": "base",
+            "settlement_attempted": True,
+            "settled": True,
+            "settlement_state": "settled",
+        }
+        canary = "PRIVATE-PAYMENT-CANARY"
+        public_signature = "PUBLIC-CHECKPOINT-SIGNATURE"
+        body = {
+            "live": True,
+            "billing": billing,
+            "paymentPayload": {"signature": canary},
+            "pq_trust": {
+                "transparency": {
+                    "receipt": {
+                        "checkpoint": {"signature": public_signature}
+                    }
+                }
+            },
+        }
+        response = payment.payment_response_header(
+            {
+                "success": True,
+                "transaction": "0x" + ("cd" * 32),
+                "network": payment.BASE_CAIP2,
+                "payer": "0x1111111111111111111111111111111111111111",
+                "paymentPayload": {"signature": canary},
+            }
+        )
+        replay.finish(fp, (200, body, {"PAYMENT-RESPONSE": response}), cache=True)
+        immediate = replay.begin(fp)[1]
+        replay.reset_memory()
+        restarted = replay.begin(fp)[1]
+        for result in (immediate, restarted):
+            dumped = json.dumps(result)
+            self.assertNotIn(canary, dumped)
+            self.assertIn(public_signature, dumped)
+            decoded = json.loads(
+                base64.b64decode(result[2]["PAYMENT-RESPONSE"]).decode("utf-8")
+            )
+            self.assertEqual(
+                set(decoded), {"success", "transaction", "network", "payer"}
+            )
 
     def test_default_route_limit_is_twelve_and_override_remains(self):
         with patch.dict(os.environ, {"LIVE402_FIXTURE": ""}, clear=False):

@@ -73,7 +73,7 @@
         <h2>What comes back</h2>
         <dl class="checks compact">
           <div><dt>HTTP 200</dt><dd>A settled routing authorization, a current qualifying target, the exact observed <code>selected_payment</code>, and <code>billing.settled=true</code>.</dd></div>
-          <div><dt>HTTP 503</dt><dd>A normal typed miss has <code>billing.settlement_attempted=false</code> and <code>billing.settled=false</code>. <code>miss_reason</code> explains why evaluation stopped.</dd></div>
+          <div><dt>HTTP 503</dt><dd>Inspect <code>billing.settlement_state</code> before retrying. <code>not_attempted</code> is a free normal miss; <code>settled</code> can mean required transparency failed after settlement; <code>unknown</code> means settlement may have occurred and the authorization must not be reused.</dd></div>
           <div><dt>Payment boundary</dt><dd>$0.003 only when a valid live route is found. Normal typed misses are not settled. Seller payment is separate.</dd></div>
         </dl>
       </section>
@@ -82,6 +82,7 @@
         <p class="eyebrow">PQ Trust</p>
         <h2>Make routing evidence part of the response</h2>
         <p>Set <code>"require_transparency": true</code> when a settled winner must include a durable log leaf and signed checkpoint. A free miss creates no route-decision leaf. If settlement succeeds but the required receipt then cannot be produced, 402Signal returns a fail-closed HTTP 503 whose billing object still truthfully reports <code>settled=true</code>; it does not settle again or call the request free.</p>
+        <p>A lost or malformed facilitator settlement response is different: HTTP 503 reports <code>settlement_state=unknown</code> and <code>settled=null</code>. Do not reuse that authorization or assume the routing fee was not paid.</p>
         <p>The response includes <code>receipt</code> and <code>reveal</code> under <code>pq_trust.transparency</code>. Signed checkpoints are anchored on Algorand MainNet with native Falcon-1024 authorization. The route call does not wait for chain confirmation.</p>
         <p class="note"><strong>Keep the verification record:</strong> securely retain the complete paid <code>/route</code> response, including <code>compared[]</code>. At minimum, later verification requires both <code>pq_trust.transparency.receipt</code> and <code>pq_trust.transparency.reveal</code>. 402Signal does not retain the private reveal and cannot recover it if lost. A modified copy will fail verification against the public log. Because the reveal contains private request and decision evidence, do not put it in public logs.</p>
         <p class="pq-boundary"><strong>Scope:</strong> Falcon-1024 authorizes the checkpoint transaction. It does not authorize or secure the seller payment.</p>

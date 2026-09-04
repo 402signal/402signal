@@ -400,6 +400,9 @@ class PaywallTests(unittest.TestCase):
         self.assertIn('"need": "erc20 token balance"', devs)
         self.assertIn('"url": "https://seller.example/x402"', devs)
         self.assertIn("Use <code>need</code> to discover and rank services.", devs)
+        self.assertIn("billing.settlement_state", devs)
+        self.assertIn("settlement_state=unknown", devs)
+        self.assertIn("settled=null", devs)
         self.assertIn("/openapi.json", html)
         self.assertIn("/mcp.json", devs)
         self.assertIn("https://github.com/402signalhq/402signal", devs)
@@ -1859,6 +1862,7 @@ class ProductBriefTests(unittest.TestCase):
             "probe_budget_exhausted",
             "probe_limit_reached",
             "unsafe_to_probe",
+            "settlement_unknown",
         }
         self.assertEqual(set(MISS_REASONS), expected)
         self.assertEqual(public_miss_reason("probe_budget_exhausted"), "probe_budget_exhausted")
@@ -1870,6 +1874,7 @@ class ProductBriefTests(unittest.TestCase):
         self.assertEqual(public_miss_reason("http_503"), "upstream_5xx")
         self.assertEqual(public_miss_reason("ssrf"), "ssrf")
         self.assertEqual(public_miss_reason("unsafe_to_probe"), "unsafe_to_probe")
+        self.assertEqual(public_miss_reason("settlement_unknown"), "settlement_unknown")
         for key in expected:
             self.assertIn(public_miss_reason(key), expected)
 

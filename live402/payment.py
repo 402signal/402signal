@@ -76,6 +76,7 @@ BAZAAR_EXTENSION = {
                     "rail": "base",
                     "settlement_attempted": True,
                     "settled": True,
+                    "settlement_state": "settled",
                 },
             },
         },
@@ -241,6 +242,7 @@ BAZAAR_MCP = {
                     "rail": "base",
                     "settlement_attempted": True,
                     "settled": True,
+                    "settlement_state": "settled",
                 },
             },
         },
@@ -402,6 +404,71 @@ def payment_required_header(payload: dict) -> str:
 def payment_response_header(payload: dict) -> str:
     raw = json.dumps(payload, separators=(",", ":")).encode("utf-8")
     return base64.b64encode(raw).decode("ascii")
+
+
+def _base58_decoded_length(text: str) -> int | None:
+    if type(text) is not str or not text or not text.isascii():
+        return None
+    value = 0
+    for char in text:
+        idx = _B58_ALPHABET.find(char)
+        if idx < 0:
+            return None
+        value = value * 58 + idx
+    pad = len(text) - len(text.lstrip("1"))
+    raw_len = 0 if value == 0 else (value.bit_length() + 7) // 8
+    return pad + raw_len
+
+
+def _settlement_txid_ok(value, rail: str) -> bool:
+    if type(value) is not str or not value or len(value) > 128:
+        return False
+    if rail == "base":
+        return bool(re.fullmatch(r"0x[0-9a-fA-F]{64}", value))
+    if rail == "solana":
+        return _base58_decoded_length(value) == 64
+    if rail == "algorand":
+        if not re.fullmatch(r"[A-Z2-7]{52}", value):
+            return False
+        try:
+            return len(base64.b32decode(value + "====", casefold=False)) == 32
+        except Exception:
+            return False
+    return False
+
+
+def sanitize_settlement_receipt(payload, rail: str | None = None) -> dict | None:
+    """Allowlist one protocol settlement receipt; never reflect raw facilitator data."""
+    if not isinstance(payload, dict) or payload.get("success") is not True:
+        return None
+    network = payload.get("network")
+    if type(network) is not str or len(network) > 128:
+        return None
+    expected_networks = {
+        "base": BASE_CAIP2,
+        "solana": SOLANA_MAINNET,
+        "algorand": ALGORAND_MAINNET,
+    }
+    inferred = rail_of_network(network)
+    expected_rail = rail if rail in SUPPORTED_RAILS else inferred
+    if (
+        expected_rail not in SUPPORTED_RAILS
+        or inferred != expected_rail
+        or network != expected_networks.get(expected_rail)
+    ):
+        return None
+    transaction = payload.get("transaction")
+    if not _settlement_txid_ok(transaction, expected_rail):
+        return None
+    out = {"success": True, "transaction": transaction, "network": network}
+    payer = payload.get("payer")
+    if payer is not None:
+        if type(payer) is not str or len(payer) > 128:
+            return None
+        if not valid_payto_for_rail(payer, expected_rail):
+            return None
+        out["payer"] = payer
+    return out
 
 
 def _header_get(headers, *names) -> str:

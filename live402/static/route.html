@@ -28,7 +28,7 @@
       <section class="hero compact">
         <h1>This is the paid routing endpoint.</h1>
         <p class="lede">Agents POST /route. An unpaid call returns HTTP 402 to authorize $0.003 USDC. 402Signal settles only when it returns a valid live eligible route. A normal typed miss is not settled.</p>
-        <p class="note">Seller payment is separate. The response billing object states whether the 402Signal routing authorization was settled.</p>
+        <p class="note">Seller payment is separate. On every HTTP 503, inspect <code>billing.settlement_state</code> before retrying; never reuse an authorization marked <code>unknown</code>.</p>
         <p class="note">402Signal does not hold the buyer's keys or execute the selected service's payment.</p>
         <div class="hero-actions">
           <a class="btn" href="/developers">Developer docs</a>

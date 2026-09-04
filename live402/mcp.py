@@ -47,12 +47,17 @@ OUTPUT_SCHEMA = {
                 "amount_atomic": {"type": "string", "const": payment.AMOUNT_ATOMIC},
                 "display_amount": {"type": "string", "const": payment.AMOUNT_USD},
                 "rail": {"type": "string", "enum": ["base", "solana", "algorand"]},
-                "settlement_attempted": {"type": "boolean"},
-                "settled": {"type": "boolean"},
+                "settlement_attempted": {"type": ["boolean", "null"]},
+                "settled": {"type": ["boolean", "null"]},
+                "settlement_state": {
+                    "type": "string",
+                    "enum": ["settled", "not_attempted", "rejected", "unknown"],
+                    "description": "Inspect before retrying. unknown means do not reuse this authorization.",
+                },
             },
             "required": [
                 "model", "condition", "asset", "amount_atomic", "display_amount",
-                "rail", "settlement_attempted", "settled",
+                "rail", "settlement_attempted", "settled", "settlement_state",
             ],
         },
         "changes": {

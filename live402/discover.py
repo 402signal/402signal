@@ -31,8 +31,11 @@ GUIDANCE = (
     "We verify, probe, and settle only a valid live eligible route. "
     "Live means a parseable unpaid 402 (PAYMENT-REQUIRED or JSON accepts[]/x402Version), "
     "not merely reachable. HTTP 200 after pay is a live URL plus target contract; "
-    "A normal HTTP 503 typed miss has billing.settled=false and is not settled. "
-    "Seller payment is separate. Ambiguous settlement failures remain fail closed. "
+    "HTTP 503 has three fail-closed outcomes: a normal typed miss has "
+    "billing.settlement_state=not_attempted; a required-transparency failure after "
+    "settlement has settlement_state=settled; and an ambiguous settlement has "
+    "settlement_state=unknown. Inspect billing before retrying, and never reuse an "
+    "authorization whose settlement state is unknown. Seller payment is separate. "
     "If inputSchema is missing, live may still be true with invocable:false and miss_reason no_input_schema. "
     "GET /mcp.json lists the MCP route tool (type mcp, toolName route); "
     "POST /mcp initialize and tools/list need no payment; tools/call route is the paid probe. "
@@ -198,12 +201,17 @@ def openapi_spec(resource_url: str = ROUTE) -> dict:
                     "amount_atomic": {"type": "string", "const": payment.AMOUNT_ATOMIC},
                     "display_amount": {"type": "string", "const": payment.AMOUNT_USD},
                     "rail": {"type": "string", "enum": ["base", "solana", "algorand"]},
-                    "settlement_attempted": {"type": "boolean"},
-                    "settled": {"type": "boolean"},
+                    "settlement_attempted": {"type": ["boolean", "null"]},
+                    "settled": {"type": ["boolean", "null"]},
+                    "settlement_state": {
+                        "type": "string",
+                        "enum": ["settled", "not_attempted", "rejected", "unknown"],
+                        "description": "Inspect before retrying. unknown means do not reuse this authorization.",
+                    },
                 },
                 "required": [
                     "model", "condition", "asset", "amount_atomic", "display_amount",
-                    "rail", "settlement_attempted", "settled",
+                    "rail", "settlement_attempted", "settled", "settlement_state",
                 ],
             },
             "changes": {
@@ -553,6 +561,7 @@ def openapi_spec(resource_url: str = ROUTE) -> dict:
                                             "rail": "base",
                                             "settlement_attempted": True,
                                             "settled": True,
+                                            "settlement_state": "settled",
                                         },
                                         "target": {
                                             "method": "POST",
@@ -588,27 +597,72 @@ def openapi_spec(resource_url: str = ROUTE) -> dict:
                             },
                         },
                         "503": {
-                            "description": "Normal typed miss. Authorization verified, but settlement was not attempted.",
+                            "description": "Fail-closed route outcome. Inspect billing before retrying: a normal typed miss is not attempted, a required-transparency failure can already be settled, and an ambiguous settlement is unknown and must not reuse the authorization.",
                             "content": {
                                 "application/json": {
                                     "schema": live_schema,
-                                    "example": {
-                                        "live": False,
-                                        "invocable": False,
-                                        "url": None,
-                                        "tried": 0,
-                                        "miss_reason": "no_candidates",
-                                        "billing": {
-                                            "model": payment.ROUTING_BILLING_MODEL,
-                                            "condition": payment.ROUTING_SETTLEMENT_CONDITION,
-                                            "asset": "USDC",
-                                            "amount_atomic": payment.AMOUNT_ATOMIC,
-                                            "display_amount": payment.AMOUNT_USD,
-                                            "rail": "base",
-                                            "settlement_attempted": False,
-                                            "settled": False,
+                                    "examples": {
+                                        "normal_typed_miss": {
+                                            "summary": "Free normal miss",
+                                            "value": {
+                                                "live": False,
+                                                "invocable": False,
+                                                "url": None,
+                                                "tried": 0,
+                                                "miss_reason": "no_candidates",
+                                                "billing": {
+                                                    "model": payment.ROUTING_BILLING_MODEL,
+                                                    "condition": payment.ROUTING_SETTLEMENT_CONDITION,
+                                                    "asset": "USDC",
+                                                    "amount_atomic": payment.AMOUNT_ATOMIC,
+                                                    "display_amount": payment.AMOUNT_USD,
+                                                    "rail": "base",
+                                                    "settlement_attempted": False,
+                                                    "settled": False,
+                                                    "settlement_state": "not_attempted",
+                                                },
+                                                "probes": [],
+                                            },
                                         },
-                                        "probes": [],
+                                        "settled_transparency_failure": {
+                                            "summary": "Routing fee settled; required transparency unavailable",
+                                            "value": {
+                                                "error": "transparency receipt unavailable",
+                                                "live": False,
+                                                "invocable": False,
+                                                "billing": {
+                                                    "model": payment.ROUTING_BILLING_MODEL,
+                                                    "condition": payment.ROUTING_SETTLEMENT_CONDITION,
+                                                    "asset": "USDC",
+                                                    "amount_atomic": payment.AMOUNT_ATOMIC,
+                                                    "display_amount": payment.AMOUNT_USD,
+                                                    "rail": "base",
+                                                    "settlement_attempted": True,
+                                                    "settled": True,
+                                                    "settlement_state": "settled",
+                                                },
+                                            },
+                                        },
+                                        "settlement_unknown": {
+                                            "summary": "Settlement POST outcome ambiguous; do not retry authorization",
+                                            "value": {
+                                                "error": "Routing authorization outcome unknown; do not retry this authorization",
+                                                "live": False,
+                                                "invocable": False,
+                                                "miss_reason": "settlement_unknown",
+                                                "billing": {
+                                                    "model": payment.ROUTING_BILLING_MODEL,
+                                                    "condition": payment.ROUTING_SETTLEMENT_CONDITION,
+                                                    "asset": "USDC",
+                                                    "amount_atomic": payment.AMOUNT_ATOMIC,
+                                                    "display_amount": payment.AMOUNT_USD,
+                                                    "rail": "base",
+                                                    "settlement_attempted": True,
+                                                    "settled": None,
+                                                    "settlement_state": "unknown",
+                                                },
+                                            },
+                                        },
                                     },
                                 }
                             },
@@ -1155,7 +1209,7 @@ LLMS_TXT = "# 402Signal\n\n" + DESC + """
 We probe first. Live means an unpaid HTTP 402 with a parseable payment envelope, not merely reachable.
 $0.003 = 3000 atomic USDC (6 decimals). Retry unpaid 402 with PAYMENT-SIGNATURE.
 HTTP 200 = a live eligible route whose routing authorization was settled.
-HTTP 503 = a normal typed miss whose routing authorization was not settled.
+HTTP 503 = inspect billing: normal miss (not_attempted), settled transparency failure, or unknown settlement.
 Seller payment is separate. Ambiguous settlement failures remain fail closed.
 $0.003 only when a valid live route is found. Normal typed misses are not settled. Seller payment is separate.
 
@@ -1169,15 +1223,15 @@ $0.003 only when a valid live route is found. Normal typed misses are not settle
 - Agents that intend to pay should POST /route, not GET.
 - GET /route with Accept: application/json (or no Accept) returns HTTP 402 so crawlers can index payment. Browsers that send Accept: text/html get a human page.
 - Unpaid → HTTP 402 (routing authorization amount 3000 atomic = $0.003, 6 decimals)
-- Valid live winner → HTTP 200 + URL that 402s with a payment envelope + target {method,inputSchema,outputSchema,accepts,facilitator,amountAtomic,displayAmount,timeoutSeconds} + selected_payment {rail,network,asset,amount_atomic,display_amount,normalized_usd,payTo,facilitator} + billing {model,condition,asset,amount_atomic,display_amount,rail,settlement_attempted,settled}. target.accepts and selected_payment are CURRENT observed 402 options only. Catalog rails stay on claimed.payment_options and are never selected.
-- Normal typed miss → HTTP 503 + billing.settlement_attempted=false + billing.settled=false. The verified authorization is not settled and cannot be reused to repeat route work.
+- Valid live winner → HTTP 200 + URL that 402s with a payment envelope + target {method,inputSchema,outputSchema,accepts,facilitator,amountAtomic,displayAmount,timeoutSeconds} + selected_payment {rail,network,asset,amount_atomic,display_amount,normalized_usd,payTo,facilitator} + billing {model,condition,asset,amount_atomic,display_amount,rail,settlement_attempted,settled,settlement_state}. target.accepts and selected_payment are CURRENT observed 402 options only. Catalog rails stay on claimed.payment_options and are never selected.
+- Every HTTP 503 requires inspecting billing before retrying. A normal typed miss has settlement_attempted=false, settled=false, settlement_state=not_attempted. A required-transparency failure after successful settlement has true, true, settled. An ambiguous settlement has settlement_attempted=true (or null when recovered from an uncertain reservation), settled=null, settlement_state=unknown; never reuse that authorization.
 - 402Signal settles only its $0.003 routing authorization after a valid live eligible route is found; it does not pay the selected merchant. Seller payment is separate.
 - For later PQ Trust verification, set require_transparency=true and securely retain the complete paid /route response, including compared[]. At minimum, keep pq_trust.transparency.receipt and pq_trust.transparency.reveal together. 402Signal does not retain the private reveal and cannot recover it if lost. Modified evidence fails verification against the public log. The reveal contains private request and decision evidence; do not put it in public logs.
 - Upstream probe is GET first, then POST {} only with strong method justification (GET 405/501, or the catalog explicitly declares POST and does not require a request body). Never POST {} after an arbitrary 200/400/404. Never POST seller-declared or catalog-declared input bodies. If a required body means a valid unpaid probe cannot be constructed, miss_reason is unsafe_to_probe. DNS uses a bounded getaddrinfo pool (2s); TCP/TLS is pinned to those SSRF-checked public IPs with TLS SNI and HTTP Host set to the original hostname (re-pinned on redirects).
 - payable requires a complete observed option (rail/network, amount, asset, payTo). invocable is payable + input schema. challenge_observed is HTTP 402 + parseable x402.
 - If inputSchema is missing: live may be true, invocable false, miss_reason no_input_schema
-- Normal typed miss → HTTP 503 {live:false, miss_reason, billing:{settlement_attempted:false,settled:false}}
-- miss_reason enum: no_candidates, no_402_envelope, no_payto, reachable_200, probe_timeout, quote_expired, invalid_need, upstream_5xx, ssrf, no_input_schema, constraints_unmet, probe_budget_exhausted, probe_limit_reached, unsafe_to_probe
+- Normal typed miss → HTTP 503 {live:false, miss_reason, billing:{settlement_attempted:false,settled:false,settlement_state:"not_attempted"}}
+- miss_reason enum: no_candidates, no_402_envelope, no_payto, reachable_200, probe_timeout, quote_expired, invalid_need, upstream_5xx, ssrf, no_input_schema, constraints_unmet, probe_budget_exhausted, probe_limit_reached, unsafe_to_probe, settlement_unknown
 - Paid /route also returns discovery_matches, candidates_discovered, candidates_considered, candidates_probed, discovered_count, probed_count, unprobed_count, candidate_evaluation_complete, evaluation_complete, probe_ceiling, stop_reason, probe_budget_exhausted, interpreted_constraints, applied_constraints, unmet_constraints, unresolved_constraints. interpreted_constraints / applied_constraints echo constraints actually used (structured body keys included). candidate_evaluation_complete (also evaluation_complete) is true only when every ranked candidate in this request's working set was probed (not the global catalog). stop_reason is winner_selected | candidate_set_exhausted | probe_limit_reached | probe_budget_exhausted | constraints_unmet. Typical probe plan is 3 then +2–4; hard ceiling is 20. probe_limit_reached means ranked candidates remained after this request's probe_ceiling with budget still open; it is not no_candidates. probe_budget_exhausted means ranked candidates remained when the 55s budget ended; it is not no_candidates. max_latency_ms is a probe-RTT alias. Catalog rows stay slim; only top finalists are hydrated with claimed schemas (not observed payment options).
 - cheapest / fastest / most_reliable rank the currently probed eligible candidates, not every discovered endpoint. fastest is this-request probe/service RTT, not settlement latency. fastest_settlement is a separate objective (settlement/finality, never probe RTT).
 - compared[] rows include success_7d, n_7d, reputation components (and score+confidence+scoring_model_id/hash), and rail economics for the selected_payment option. The winner always appears even when compared is capped. success_7d is null when n_7d < 3. n_7d < 10 means low reputation_confidence and no public reliability %. Unique payer address lists are never returned. lowest_total_cost fails closed when a fee is unknown (merchant price is not total cost). Same scoring function on Base, Solana, and Algorand (no hidden Algorand preference). Vague "high reputation" stays unresolved; "established usage" / "strong observed evidence" compile to min_observations=10. Settlement / total cost compile only with a numeric bound.

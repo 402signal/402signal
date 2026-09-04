@@ -271,7 +271,13 @@ def _log_settle_skipped(rail: str) -> None:
     )
 
 
-def _billing(rail: str, *, settlement_attempted: bool, settled: bool) -> dict:
+def _billing(
+    rail: str,
+    *,
+    settlement_attempted: bool | None,
+    settled: bool | None,
+    settlement_state: str,
+) -> dict:
     return {
         "model": payment.ROUTING_BILLING_MODEL,
         "condition": payment.ROUTING_SETTLEMENT_CONDITION,
@@ -279,9 +285,27 @@ def _billing(rail: str, *, settlement_attempted: bool, settled: bool) -> dict:
         "amount_atomic": payment.AMOUNT_ATOMIC,
         "display_amount": payment.AMOUNT_USD,
         "rail": rail or "unknown",
-        "settlement_attempted": bool(settlement_attempted),
-        "settled": bool(settled),
+        "settlement_attempted": settlement_attempted,
+        "settled": settled,
+        "settlement_state": settlement_state,
     }
+
+
+def _unknown_outcome(rail: str, *, attempted: bool | None) -> tuple[int, dict, None]:
+    return 503, {
+        "error": "Routing authorization outcome unknown; do not retry this authorization",
+        "live": False,
+        "payable": False,
+        "invocable": False,
+        "selected_payment": None,
+        "miss_reason": "settlement_unknown",
+        "billing": _billing(
+            rail,
+            settlement_attempted=attempted,
+            settled=None,
+            settlement_state="unknown",
+        ),
+    }, None
 
 
 def _billable_winner(body: dict, code: int, result: dict) -> bool:
@@ -302,12 +326,12 @@ def _billable_winner(body: dict, code: int, result: dict) -> bool:
         constraints = policy_mod.merge_constraints(body)
         if not select.http200_winner_ok(result, objective, constraints):
             return False
-        if not select.passes_constraints(result, constraints):
-            return False
         if not select._payto_selectable(result, constraints):
             return False
         selected = result.get("selected_payment")
         if not payment.selected_payment_matches_current_envelope(selected, result):
+            return False
+        if not select.selected_payment_passes_constraints(result, selected, constraints):
             return False
         return payment.payto_equal(
             result.get("payTo"), selected.get("payTo"), selected.get("rail")
@@ -395,12 +419,24 @@ def _paid_execute(
         required, extra = _required_pair(
             resource_url, "Payment verification failed", bazaar=bazaar
         )
+        required["billing"] = _billing(
+            payment.rail_of_accept(accept),
+            settlement_attempted=False,
+            settled=False,
+            settlement_state="rejected",
+        )
         return 402, required, extra
 
     verify = facilitator.verify(parsed, accept, timeout=verify_t)
     if not verify.ok:
         required, extra = _required_pair(
-            resource_url, verify.error or "Payment verification failed", bazaar=bazaar
+            resource_url, "Payment verification failed", bazaar=bazaar
+        )
+        required["billing"] = _billing(
+            payment.rail_of_accept(accept),
+            settlement_attempted=False,
+            settled=False,
+            settlement_state="rejected",
         )
         return 402, required, extra
 
@@ -430,27 +466,57 @@ def _paid_execute(
             result = _downgrade_unbillable_result({})
             code = 503
         result["billing"] = _billing(
-            rail, settlement_attempted=False, settled=False
+            rail,
+            settlement_attempted=False,
+            settled=False,
+            settlement_state="not_attempted",
         )
         _log_settle_skipped(rail)
         # Free misses remain tentative history and create no PQ route leaf.
         return code, result, None
 
     settle_t = deadline_mod.settle_timeout(paid_deadline)
+    if settle_t <= 0:
+        required, extra = _required_pair(
+            resource_url, "Payment settlement not attempted", bazaar=bazaar
+        )
+        required["billing"] = _billing(
+            rail,
+            settlement_attempted=False,
+            settled=False,
+            settlement_state="rejected",
+        )
+        _log_settle_skipped(rail)
+        return 402, required, extra
     settle = facilitator.settle(parsed, accept, timeout=settle_t)
     extra: dict = {}
-    if settle.body:
-        extra["PAYMENT-RESPONSE"] = payment.payment_response_header(settle.body)
     if not settle.ok:
+        if settle.ambiguous:
+            _log_settle(False, rail)
+            return _unknown_outcome(rail, attempted=True)
         required, pay_extra = _required_pair(
-            resource_url, settle.error or "Payment settlement failed", bazaar=bazaar
+            resource_url, "Payment settlement failed", bazaar=bazaar
+        )
+        required["billing"] = _billing(
+            rail,
+            settlement_attempted=True,
+            settled=False,
+            settlement_state="rejected",
         )
         extra.update(pay_extra)
         _log_settle(False, rail)
         return 402, required, extra
+    safe_receipt = payment.sanitize_settlement_receipt(settle.body, rail=rail)
+    if safe_receipt is None:
+        _log_settle(False, rail)
+        return _unknown_outcome(rail, attempted=True)
+    extra["PAYMENT-RESPONSE"] = payment.payment_response_header(safe_receipt)
     _log_settle(True, rail)
     result["billing"] = _billing(
-        rail, settlement_attempted=True, settled=True
+        rail,
+        settlement_attempted=True,
+        settled=True,
+        settlement_state="settled",
     )
     try:
         from live402 import history as history_mod
@@ -512,23 +578,24 @@ def handle_route(body: dict, headers, resource_url: str, bazaar: dict | None = N
         return 402, required, extra
 
     paid_deadline = deadline_mod.payment_deadline(accept)
-    fp = replay.canonical_fingerprint(parsed, accept)
-    kind, token = replay.begin(fp)
-    if kind == "cached" and isinstance(token, tuple) and len(token) == 3:
-        return token[0], token[1], token[2]
-    if kind == "reject":
+    try:
+        fp = replay.canonical_fingerprint(parsed, accept)
+        legacy_fp = replay.legacy_fingerprint(parsed, accept)
+    except (TypeError, ValueError):
         required, extra = _required_pair(
             resource_url, "Payment verification failed", bazaar=bazaar
         )
         return 402, required, extra
+    kind, token = replay.begin(fp, legacy_fp=legacy_fp, scope=resource_url)
+    if kind == "cached" and isinstance(token, tuple) and len(token) == 3:
+        return token[0], token[1], token[2]
+    if kind == "reject":
+        return _unknown_outcome(payment.rail_of_accept(accept), attempted=None)
     if kind == "wait":
         waited = replay.wait_result(token, paid_deadline)
         if isinstance(waited, tuple) and len(waited) == 3:
             return waited[0], waited[1], waited[2]
-        required, extra = _required_pair(
-            resource_url, "Payment verification failed", bazaar=bazaar
-        )
-        return 402, required, extra
+        return _unknown_outcome(payment.rail_of_accept(accept), attempted=None)
 
     cache = False
     try:
@@ -538,5 +605,6 @@ def handle_route(body: dict, headers, resource_url: str, bazaar: dict | None = N
         replay.finish(fp, out, cache=cache)
         return out
     except Exception:
-        replay.abandon(fp)
-        raise
+        out = _unknown_outcome(payment.rail_of_accept(accept), attempted=None)
+        replay.finish(fp, out, cache=True)
+        return out

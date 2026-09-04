@@ -709,6 +709,57 @@ def passes_constraints(result, constraints) -> bool:
     return True
 
 
+def selected_payment_passes_constraints(result, selected, constraints) -> bool:
+    """Apply every option-specific constraint to the exact selected payment.
+
+    Candidate-level checks may accept a result when any observed option fits.
+    The final economic gate must never substitute that option for the one the
+    route actually selected.
+    """
+    if not isinstance(result, dict) or not selected_payment_is_complete(selected):
+        return False
+    cons = constraints if isinstance(constraints, dict) else {}
+    if cons.get("unmeasured"):
+        return False
+    keys = (
+        "rail",
+        "network",
+        "asset",
+        "amount_atomic",
+        "display_amount",
+        "normalized_usd",
+        "payTo",
+        "facilitator",
+    )
+    eligible = _complete_options_for_constraints(result, cons)
+    if not any(
+        all(selected.get(key) == payment.selected_payment_fields(opt).get(key) for key in keys)
+        for opt in eligible
+        if payment.selected_payment_fields(opt) is not None
+    ):
+        return False
+    max_total = cons.get("max_total_cost_usd")
+    if max_total is not None:
+        total = economics.total_cost_usd(result, selected)
+        if total is None or float(total) > float(max_total):
+            return False
+    max_settle = cons.get("max_settlement_latency_ms")
+    if max_settle is not None:
+        latency = economics.settlement_or_finality_ms(result, selected)
+        if latency is None or int(latency) > int(max_settle):
+            return False
+    common = dict(cons)
+    for key in (
+        "rails",
+        "max_amount_atomic",
+        "max_price_usd",
+        "max_total_cost_usd",
+        "max_settlement_latency_ms",
+    ):
+        common[key] = None
+    return passes_constraints(result, common)
+
+
 def _readiness_tier(result) -> int:
     """invocable > payable > live. Not a rail rank. Not catalog traction."""
     if not isinstance(result, dict):

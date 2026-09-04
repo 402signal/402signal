@@ -33,6 +33,18 @@ VERIFY_TIMEOUT = 8.0
 SETTLE_TIMEOUT = 10.0
 MAX_BODY = 64 * 1024
 
+# These values mean the facilitator itself says that the POST's economic
+# effect is not final. They are used only for state classification and are
+# never copied into a public response or the replay ledger.
+_AMBIGUOUS_SETTLE_REASONS = frozenset(
+    {
+        "pending",
+        "settlement_pending",
+        "submitted",
+        "unknown",
+    }
+)
+
 ALLOWLISTED_URLS = frozenset(
     {
         CDP_VERIFY_URL,
@@ -59,6 +71,7 @@ class FacilitatorResult:
     body: dict = field(default_factory=dict)
     error: str = ""
     url: str = ""
+    ambiguous: bool = False
 
 
 class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
@@ -215,18 +228,15 @@ def verify(payload: dict, accept: dict, timeout: float | None = None) -> Facilit
     cap = VERIFY_TIMEOUT if timeout is None else max(0.05, float(timeout))
     result = _call(rail, verify_url, _request_body(payload, accept), cap)
     if not result.ok:
-        return result
+        return FacilitatorResult(
+            ok=False, error="payment_verification_failed", url=verify_url
+        )
     body = result.body
     if body.get("isValid") is True:
-        return FacilitatorResult(ok=True, body=body, url=verify_url)
-    reason = (
-        body.get("invalidReason")
-        or body.get("invalidMessage")
-        or body.get("error")
-        or body.get("errorMessage")
-        or "payment_invalid"
+        return FacilitatorResult(ok=True, body={"isValid": True}, url=verify_url)
+    return FacilitatorResult(
+        ok=False, error="payment_verification_failed", url=verify_url
     )
-    return FacilitatorResult(ok=False, body=body, error=str(reason), url=verify_url)
 
 
 def settle(payload: dict, accept: dict, timeout: float | None = None) -> FacilitatorResult:
@@ -235,14 +245,40 @@ def settle(payload: dict, accept: dict, timeout: float | None = None) -> Facilit
     cap = SETTLE_TIMEOUT if timeout is None else max(0.05, float(timeout))
     result = _call(rail, settle_url, _request_body(payload, accept), cap)
     if not result.ok:
-        return result
+        # A POST may have reached the facilitator even when its response was
+        # lost, non-2xx, or unreadable. Never classify that as a terminal reject.
+        return FacilitatorResult(
+            ok=False,
+            error="settlement_outcome_unknown",
+            url=settle_url,
+            ambiguous=True,
+        )
     body = result.body
     if body.get("success") is True:
-        return FacilitatorResult(ok=True, body=body, url=settle_url)
-    reason = (
-        body.get("errorReason")
-        or body.get("errorMessage")
-        or body.get("error")
-        or "settlement_failed"
+        safe = payment.sanitize_settlement_receipt(body, rail=rail)
+        if safe is not None:
+            return FacilitatorResult(ok=True, body=safe, url=settle_url)
+        return FacilitatorResult(
+            ok=False,
+            error="settlement_outcome_unknown",
+            url=settle_url,
+            ambiguous=True,
+        )
+    if body.get("success") is False:
+        reason = body.get("errorReason")
+        if isinstance(reason, str) and reason.strip().lower() in _AMBIGUOUS_SETTLE_REASONS:
+            return FacilitatorResult(
+                ok=False,
+                error="settlement_outcome_unknown",
+                url=settle_url,
+                ambiguous=True,
+            )
+        return FacilitatorResult(
+            ok=False, error="payment_settlement_rejected", url=settle_url
+        )
+    return FacilitatorResult(
+        ok=False,
+        error="settlement_outcome_unknown",
+        url=settle_url,
+        ambiguous=True,
     )
-    return FacilitatorResult(ok=False, body=body, error=str(reason), url=settle_url)

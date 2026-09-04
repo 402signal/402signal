@@ -64,6 +64,7 @@ MISS_REASONS = (
     "probe_budget_exhausted",
     "probe_limit_reached",
     "unsafe_to_probe",
+    "settlement_unknown",
 )
 STOP_REASONS = (
     "winner_selected",
