@@ -1,0 +1,14 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.402signal/402signal",
+  "description": "Fail-closed x402 router. Authorize $0.003 USDC; live eligible routes settle, normal misses cost $0.",
+  "title": "402Signal",
+  "version": "0.3.1",
+  "websiteUrl": "https://402signal.com",
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://402signal.com/mcp"
+    }
+  ]
+}
