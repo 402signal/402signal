@@ -78,13 +78,33 @@
         </dl>
       </section>
 
+      <section class="block" id="route-binding">
+        <p class="eyebrow">Optional route binding</p>
+        <h2>Check the seller's terms before signing</h2>
+        <p>Add <code>"require_route_binding": true</code> to your initial route request. A successful response includes a signed v4 receipt and a <code>decision_binding</code> for the observed seller URL, HTTP method, exact request-body hash and complete x402 payment offer. The routing fee remains $0.003 USDC. Without this flag, requests keep the existing v3 receipt path.</p>
+        <pre class="code">{
+  "need": "weather data",
+  "max_price_usd": 0.02,
+  "require_route_binding": true
+}</pre>
+        <ol>
+          <li>Keep your actual route request and the complete response as raw JSON text. Preserve the private receipt and reveal outside public logs.</li>
+          <li>Pin the production log verification key through trusted configuration. Do not trust a key supplied by the same route response you are checking.</li>
+          <li>Use your own HTTP client to fetch the seller's unpaid 402 challenge with the same URL, method and body bytes. Disable redirects and keep the raw response body and payment-required headers.</li>
+          <li>Run the local verifier immediately before your payment code. It authenticates the receipt, checks your original route request, and compares the current seller challenge with the bound terms. Pass only the verified terms to your wallet flow.</li>
+        </ol>
+        <p>The <a href="https://github.com/402signalhq/402signal/tree/main/sdk/route-guard">Node/TypeScript guard</a> requires Node 22 or newer and has no runtime dependencies. Use its source from this repository; it is not published to npm. A <a href="https://github.com/402signalhq/402signal/blob/main/docs/proof-carrying-route-v1.md#python-verifier">Python verifier</a> is also included. Neither verifier holds keys, makes network requests or executes a payment. Your wallet must still validate the transaction and enforce spending limits and durable replay protection.</p>
+        <p class="note"><strong>Supported profile:</strong> exact x402 v2 offers on Base, Solana and Algorand, observed through GET without a body or a justified POST with exactly <code>{}</code>. The default freshness window is 60 seconds from observation. Redirects, changed requests, unknown extensions and expired evidence fail closed. Personalized or rotating offers and arbitrary POST bodies may not qualify. Repeat verification after a human approval delay; never fall back to unguarded payment.</p>
+        <p class="note"><strong>Billing:</strong> an unprovable binding before settlement is a free typed miss. If the routing fee was already settled, a later expired or changed seller challenge does not undo that charge. This flag also requires transparency: a receipt failure after settlement returns HTTP 503 with <code>billing.settled=true</code>. Do not retry settlement to repair a receipt.</p>
+        <p><a href="https://github.com/402signalhq/402signal/blob/main/docs/proof-carrying-route-v1.md">Full contract, offline examples and verification limits</a></p>
+      </section>
+
       <section class="block pq-developer" id="pq-trust">
         <p class="eyebrow">PQ Trust</p>
         <h2>Make routing evidence part of the response</h2>
-        <p>Opt-in proof-carrying routes: add <code>"require_route_binding": true</code> to require a v4 receipt binding the observed seller URL, method, exact request-body hash and complete x402 challenge to a short freshness window. Verify it locally with an independently pinned log key before your wallet signs, and compare the actual current seller challenge. Unknown extensions, redirects, changed terms and unproven request bodies fail closed. This also requires transparency; it does not wait for a Falcon anchor or authorize seller payment. <a href="https://github.com/402signalhq/402signal/blob/main/docs/proof-carrying-route-v1.md">Contract, verifier and limitations</a>.</p>
         <p>Set <code>"require_transparency": true</code> when a settled winner must include a durable log leaf and signed checkpoint. A free miss creates no route-decision leaf. If settlement succeeds but the required receipt then cannot be produced, 402Signal returns a fail-closed HTTP 503 whose billing object still truthfully reports <code>settled=true</code>; it does not settle again or call the request free.</p>
         <p>A lost or malformed facilitator settlement response is different: HTTP 503 reports <code>settlement_state=unknown</code> and <code>settled=null</code>. Do not reuse that authorization or assume the routing fee was not paid.</p>
-        <p>The response includes <code>receipt</code> and <code>reveal</code> under <code>pq_trust.transparency</code>. Signed checkpoints are anchored on Algorand MainNet with native Falcon-1024 authorization. The route call does not wait for chain confirmation.</p>
+        <p>The response includes <code>receipt</code> and <code>reveal</code> under <code>pq_trust.transparency</code>. The immediate checkpoint signature is Ed25519. The separate automation controller batches routing evidence into cumulative checkpoints anchored on Algorand MainNet with native Falcon-1024 authorization. The route call does not wait for chain confirmation. A pending receipt is not a confirmed Falcon anchor.</p>
         <p class="note"><strong>Keep the verification record:</strong> securely retain the complete paid <code>/route</code> response, including <code>compared[]</code>. At minimum, later verification requires both <code>pq_trust.transparency.receipt</code> and <code>pq_trust.transparency.reveal</code>. Private replay outcomes can retain the reveal; they are not a recovery service. Keep your own copy. A modified copy will fail verification against the public log. Because the reveal contains private request and decision evidence, do not put it in public logs.</p>
         <p class="pq-boundary"><strong>Scope:</strong> Falcon-1024 authorizes the checkpoint transaction. It does not authorize or secure the seller payment.</p>
         <p><a href="/transparency">Inspect checkpoints and verification details</a></p>

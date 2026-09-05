@@ -6,10 +6,11 @@ request and fresh raw x402 challenge before the buyer's authorization callback.
 It makes no network requests, stores no keys and does not create, sign, submit,
 retry or execute payments.
 
-This package is private and unpublished pending review. Use this repository's
-source; do not assume a package with this name on a registry is this code.
-The server contract must be deployed before real use. Existing v3 receipts fail
-closed in this guard.
+This package is distributed as source in this repository and is not published
+to npm. Do not assume a package with this name on a registry is this code.
+Request the server's opt-in v4 contract with `require_route_binding: true`;
+existing v3 receipts fail closed in this guard. See the
+[developer walkthrough](https://402signal.com/developers#route-binding).
 
 ## Offline example
 

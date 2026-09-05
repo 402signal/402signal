@@ -50,7 +50,7 @@
             <a class="btn secondary" href="/catalog">Search the free catalog</a>
           </div>
           <p class="price-note">Authorize $0.003 USDC. 402Signal settles only when it returns a valid live eligible route. Normal typed misses are not settled. Seller payment is separate.</p>
-          <p class="hero-trust-note"><a href="/transparency"><strong>PQ Trust</strong></a> adds a verifiable routing history. Checkpoints use native Falcon-1024 authorization on Algorand MainNet.</p>
+          <p class="hero-trust-note"><a href="/transparency"><strong>PQ Trust</strong></a> adds a verifiable routing history. Cumulative checkpoints are anchored on Algorand MainNet with native Falcon-1024 authorization.</p>
         </div>
         <figure class="hero-art">
           <img src="/hero-routing.png" width="1200" height="900" alt="A highlighted route selected from a network of possible API paths." fetchpriority="high" decoding="async" />
@@ -75,6 +75,12 @@
         </ol>
         <p class="scope-note"><strong>What “works right now” means:</strong> the endpoint returned a usable x402 payment offer when checked. It does not guarantee the quality of the seller's paid response.</p>
         <p><a href="/how">Read the full routing flow</a></p>
+      </section>
+
+      <section class="block" id="route-binding">
+        <h2>Check the terms again before signing</h2>
+        <p>Optional route binding lets your app compare the seller's current payment request with the terms 402Signal recorded. If the price, recipient, resource or request changes, or the evidence expires, the local guard refuses the handoff to your payment code.</p>
+        <p>Your wallet still validates and signs the payment. <a href="/developers#route-binding">Add the check to your buyer</a>.</p>
       </section>
 
       <section class="block comparison" id="why">
@@ -112,7 +118,7 @@
         </div>
         <h2>A routing history you can check</h2>
         <p>402Signal records routing evidence in an append-only Merkle log. Confirmed checkpoints are authorized by a native Falcon-1024 account and anchored on Algorand MainNet. Later changes to the published history can be detected.</p>
-        <p>To check a specific decision later, securely keep the verification record returned with the paid route. 402Signal does not retain the private evidence or recover it if lost.</p>
+        <p>To check a specific decision later, securely keep the verification record returned with the paid route. Private replay outcomes can retain the evidence; they are not a recovery service. Keep your own copy outside public logs.</p>
         <p class="pq-boundary">Falcon-1024 authorizes the checkpoint transaction. It does not make seller payments or API responses post-quantum secure.</p>
         <p><a class="btn secondary" href="/transparency">Inspect the latest checkpoint</a></p>
       </section>

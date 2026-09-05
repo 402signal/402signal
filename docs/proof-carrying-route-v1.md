@@ -101,7 +101,10 @@ v1-v3 historical leaves and their original verification paths remain unchanged.
 
 For Node/TypeScript, see the [local route guard](../sdk/route-guard/README.md).
 It uses the same signed fixtures and a caller-owned authorization callback, with
-no runtime dependencies or network operations. It is unpublished pending review.
+no runtime dependencies or network operations. It is distributed as source in
+this repository and is not published to npm. See the
+[developer walkthrough](https://402signal.com/developers#route-binding) for the
+request and buyer-side integration sequence.
 
 ```python
 from live402.route_binding import observed_challenge, verify_route

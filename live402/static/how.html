@@ -72,6 +72,7 @@
         <p class="scope-note"><strong>Billing:</strong> $0.003 only when a valid live route is found. Normal typed misses are not settled. On HTTP 503, inspect <code>billing.settlement_state</code>; never reuse an authorization marked <code>unknown</code>. Seller payment is separate.</p>
         <p class="scope-note"><strong>Scope:</strong> a live result means the endpoint returned a usable x402 payment offer during the check. It is not a guarantee about the seller's paid output.</p>
         <p class="scope-note"><strong>PQ Trust records:</strong> if you request transparency evidence, securely retain the complete paid <code>/route</code> response. Private replay outcomes can retain the reveal; they are not a recovery service. Keep your own copy.</p>
+        <p class="scope-note"><strong>Optional route binding:</strong> request <code>"require_route_binding": true</code> to bind the observed seller request and payment terms to a signed v4 receipt. Your buyer checks that evidence against the seller's current challenge before signing. Changed terms or expired evidence stop the handoff to payment code. This check does not undo a settled routing fee. <a href="/developers#route-binding">Add buyer-side verification</a>.</p>
         <p><a class="btn" href="/developers">Call POST /route</a></p>
       </section>
     </main>

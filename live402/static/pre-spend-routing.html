@@ -62,7 +62,11 @@
 
       <p>For buyers that require transparency, 402Signal commits routing evidence to an append-only log. Falcon-1024 authorizes the checkpoint transaction anchored on Algorand MainNet. That makes later changes to committed history detectable.</p>
 
-      <p>The boundary matters: this does not make the seller payment or API response post-quantum secure. The customer must also keep the private verification record returned with the route. 402Signal cannot recover it later.</p>
+      <p>The boundary matters: this does not make the seller payment or API response post-quantum secure. Keep the private verification record returned with the route. Private replay records can retain it, but they are not a recovery service.</p>
+
+      <p>There is now an optional check for the gap between finding a route and paying the seller. Ask for a bound route, then have your app compare the seller's current request with the signed terms. A changed price or recipient, a different request, or expired evidence stops the handoff to your payment code. Your wallet still validates and signs the transaction.</p>
+
+      <p>The immediate receipt uses the log's Ed25519 signature; the cumulative Falcon anchor comes later. This checks observed terms, not the quality of what the seller delivers. <a href="/developers#route-binding">The integration guide covers the supported requests and limits</a>.</p>
 
       <p>If you are building an x402 buyer, try it with a real request. I want to hear where it stops, where the evidence is thin, and what you would need before letting an agent use it repeatedly.</p>
 
