@@ -99,6 +99,10 @@ v1-v3 historical leaves and their original verification paths remain unchanged.
 
 ## Python verifier
 
+For Node/TypeScript, see the [local route guard](../sdk/route-guard/README.md).
+It uses the same signed fixtures and a caller-owned authorization callback, with
+no runtime dependencies or network operations. It is unpublished pending review.
+
 ```python
 from live402.route_binding import observed_challenge, verify_route
 

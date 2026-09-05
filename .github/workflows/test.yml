@@ -25,6 +25,11 @@ jobs:
           # keeps the fail-closed 12/minute default; rate tests set their own cap.
           LIVE402_ROUTE_RPM: "60"
         run: python -m unittest discover -s tests
+      - name: Check local route guard (no install or live network)
+        run: |
+          node --version
+          npm --prefix sdk/route-guard run check
+          npm --prefix sdk/route-guard test
       # Audit the exact universal hash lock used by CI and the image.
       - name: pip-audit locked requirements (no upgrades)
         uses: pypa/gh-action-pip-audit@1220774d901786e6f652ae159f7b6bc8fea6d266 # v1.1.0
