@@ -25,8 +25,8 @@ TRANSPARENCY_STATUSES = ("pending", "logged_uncheckpointed", "unavailable")
 TRANSPARENCY_RETENTION_DESC = (
     "To verify the routing decision later, securely retain the complete paid /route "
     "response, especially pq_trust.transparency.receipt and "
-    "pq_trust.transparency.reveal. 402Signal does not retain the private reveal and "
-    "cannot recover it if lost. Modified evidence fails verification against the "
+    "pq_trust.transparency.reveal. Private replay outcomes can retain the reveal; "
+    "they are not a recovery service. Keep your own copy. Modified evidence fails verification against the "
     "public log."
 )
 
