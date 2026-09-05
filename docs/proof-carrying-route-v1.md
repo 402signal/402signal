@@ -76,10 +76,12 @@ The outer commitment uses an RFC8785 subset: null, booleans, Unicode strings,
 arrays, objects, and safe integers only. Reject floats, non-finite numbers,
 duplicate keys, lone surrogates, unsafe integers, excessive size/depth, unknown
 binding/evidence fields, and unsupported versions. Public leaves still contain
-only `type`, minute-rounded `ts`, nonce and salted commitment. Raw seller bodies,
-buyer payment headers, keys, authorizations, and signatures are never included in
-this new evidence. Retain the private receipt/reveal securely, outside public
-logs. Do not include credentials in routing prompts, policy, or resource URLs.
+only `type`, minute-rounded `ts`, nonce and salted commitment. The producer does not copy seller response bodies or buyer payment headers,
+keys, authorizations or wallet signatures into this new evidence. Retain the private receipt/reveal securely, outside public
+logs. The private SQLite replay ledger retains completed response objects,
+including private reveals; its in-memory cache TTL is not a durable deletion
+policy. No new retention or deletion mechanism is added. Do not include
+credentials in routing prompts, policy, or resource URLs.
 
 Before comparing the seller challenge, verify the reveal/commitment, public leaf
 hash, Merkle inclusion, Ed25519 checkpoint signature, and expected log origin with

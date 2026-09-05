@@ -133,8 +133,8 @@ OUTPUT_SCHEMA = {
                         "reveal": {
                             "type": "object",
                             "description": (
-                                "Customer-private evidence. Not retained by 402Signal; "
-                                "retain securely with receipt."
+                                "Customer-private evidence, not in the public log. Private "
+                                "replay outcomes may retain it; keep securely with receipt."
                             ),
                         },
                     },
