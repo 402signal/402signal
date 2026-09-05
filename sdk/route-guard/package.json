@@ -1,0 +1,25 @@
+{
+  "name": "@402signal/route-guard",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Local verifier for 402Signal proof-carrying routes. No wallet, HTTP or payment execution.",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "import": "./index.mjs"
+    }
+  },
+  "files": [
+    "index.mjs",
+    "index.d.ts",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "check": "node --check index.mjs"
+  }
+}
