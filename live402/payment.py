@@ -30,7 +30,7 @@ USDC_DECIMALS = 6
 
 # CDP / Bazaar / PayAI / GoPlausible listing blurb. Keep at or under 500 chars.
 CATALOG_DESCRIPTION = (
-    "402Signal checks x402 routes across Base, Solana and Algorand before spending. "
+    "402Signal checks x402 routes across Base, Solana, and Algorand before spending. "
     "$0.003 only when a valid live route is found. Normal typed misses are not settled. "
     "Seller payment is separate. Your agent keeps the wallet. "
     "Routing evidence enters the PQ Trust log on Algorand MainNet. "

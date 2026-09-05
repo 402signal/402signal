@@ -1,6 +1,6 @@
 # 402Signal
 
-402Signal is the independent check an AI agent makes right before spending. It finds the strongest x402 route across Base, Solana, and Algorand, verifies it live, and shows the evidence behind the choice. Your agent keeps the wallet. The routing authorization settles only when a live eligible route is returned. The decision history is committed to an append-only PQ Trust log. Production identity is Algorand MainNet. Falcon authorizes a checkpoint transaction, not a merchant payment. This is not a PQ payment rail and not a claim that the product is fully quantum-proof.
+402Signal checks x402 routes across Base, Solana, and Algorand before spending. $0.003 only when a valid live route is found. Normal typed misses are not settled. Seller payment is separate. Your agent keeps the wallet. Routing evidence enters the PQ Trust log on Algorand MainNet. Optional require_route_binding=true adds a signed v4 receipt for buyer-side comparison with current seller terms before signing. Guide: https://402signal.com/developers#route-binding Falcon authorizes a checkpoint transaction, not a merchant payment. This is not a PQ payment rail and not a claim that the product is fully quantum-proof.
 
 - **Live site:** https://402signal.com
 - **Paid API:** `POST /route` — authorize $0.003 USDC; settlement is success-only
