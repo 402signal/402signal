@@ -3,11 +3,11 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>An x402 directory finds an API. Who checks it before the agent pays? · 402Signal</title>
-  <meta name="description" content="Why autonomous x402 buyers need a request-time check between discovery and payment." />
+  <title>Before an agent pays, someone should check the quote · 402Signal</title>
+  <meta name="description" content="Why I built 402Signal to check live x402 offers before an agent signs." />
   <link rel="canonical" href="https://402signal.com/insights/pre-spend-routing" />
-  <meta property="og:title" content="An x402 directory finds an API. Who checks it before the agent pays?" />
-  <meta property="og:description" content="Why autonomous x402 buyers need a request-time check between discovery and payment." />
+  <meta property="og:title" content="Before an agent pays, someone should check the quote" />
+  <meta property="og:description" content="Why I built 402Signal to check live x402 offers before an agent signs." />
   <meta property="og:url" content="https://402signal.com/insights/pre-spend-routing" />
   <meta property="og:type" content="article" />
   <meta property="og:site_name" content="402Signal" />
@@ -15,8 +15,8 @@
   <meta property="og:image:width" content="1200" />
   <meta property="og:image:height" content="630" />
   <meta name="twitter:card" content="summary_large_image" />
-  <meta name="twitter:title" content="An x402 directory finds an API. Who checks it before the agent pays?" />
-  <meta name="twitter:description" content="Why autonomous x402 buyers need a request-time check between discovery and payment." />
+  <meta name="twitter:title" content="Before an agent pays, someone should check the quote" />
+  <meta name="twitter:description" content="Why I built 402Signal to check live x402 offers before an agent signs." />
   <meta name="twitter:image" content="https://402signal.com/og.png" />
   <meta name="twitter:site" content="@402Signal" />
   <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
@@ -38,79 +38,35 @@
     </header>
 
     <main class="article">
-      <p class="eyebrow">402Signal insights</p>
-      <h1>An x402 directory finds an API. Who checks it before the agent pays?</h1>
-      <p class="article-meta">September 5, 2026 · Ross, 402Signal</p>
-      <p class="lede">Autonomous buyers need more than discovery and settlement. They need a current decision immediately before signing.</p>
+      <p class="eyebrow">A note from the builder</p>
+      <h1>Before an agent pays, someone should check the quote.</h1>
+      <p class="article-meta">September 5, 2026 · Ross</p>
 
       <figure class="article-hero">
         <img src="/og.png" width="1200" height="630" alt="402Signal highlights one route through a network of possible paid API paths across Base, Solana, and Algorand." />
       </figure>
 
-      <p>Imagine a research agent needs weather data and can spend no more than two cents. It finds several x402 services in a directory. One listing says the price is one cent. Another claims a faster response. A third supports the agent's preferred payment network.</p>
+      <p>A developer sent me his x402 endpoint this week. I caught myself asking the same questions a buying agent should ask: Is it live? Is the listed price still right? Can the agent actually call it? Does it use a rail the buyer allows?</p>
 
-      <p>The agent still does not know which offer it can use now.</p>
+      <p>A directory gets the agent to the endpoint. That is useful. It still does not make the buying decision.</p>
 
-      <p>The one-cent listing may have changed its price. An endpoint may still be online while returning an incomplete payment request. A service may advertise the right capability but omit the input schema an agent needs to call it safely. The cheapest option may no longer satisfy the buyer's network, latency, or total-cost limits.</p>
+      <p>That gap is why I built 402Signal.</p>
 
-      <p>A spending cap helps, but it only answers one question. It does not refresh stale metadata, inspect the current payment offer, compare eligible candidates, or explain why nothing qualified.</p>
+      <p>The buyer sends a capability or URL and its limits. 402Signal checks the strongest candidates during that request, reads the payment terms they return now, and applies the buyer's rules. It returns one route or a specific reason to stop.</p>
 
-      <h2>The missing step sits between discovery and payment</h2>
+      <p>It is not a wallet. The agent keeps its keys, signing authority, seller payment, and final decision.</p>
 
-      <p>x402 gives software a standard way to encounter a price and authorize payment over HTTP. Directories make paid services discoverable. Facilitators verify and settle payment. Wallets protect keys and apply authorization rules.</p>
+      <p>A successful route costs $0.003 USDC. A normal typed miss costs $0. If 402Signal cannot find something the buyer can use, that should not be the billable result.</p>
 
-      <p>The buyer still needs to turn several possible services into one current decision.</p>
+      <p>The other piece I care about is the record. A payment receipt proves that money moved. It does not explain what the agent saw or why one route passed its rules.</p>
 
-      <p>402Signal is an independent pre-spend routing check for that step. A buyer sends a capability or specific URL and any hard limits. 402Signal searches supported discovery sources across Base, Solana, and Algorand, calls the strongest candidates, and reads the payment options their endpoints return during that request.</p>
+      <p>For buyers that require transparency, 402Signal commits routing evidence to an append-only log. Falcon-1024 authorizes the checkpoint transaction anchored on Algorand MainNet. That makes later changes to committed history detectable.</p>
 
-      <p>It then applies the buyer's rules to observed options and returns one qualifying route. If no candidate qualifies, it returns a typed reason to stop instead of inventing confidence.</p>
+      <p>The boundary matters: this does not make the seller payment or API response post-quantum secure. The customer must also keep the private verification record returned with the route. 402Signal cannot recover it later.</p>
 
-      <div class="code-card">
-        <div class="code-toolbar"><span>POST /route</span><a href="/developers">Integration guide</a></div>
-        <pre class="code">curl -sS -D - https://402signal.com/route \
-  -H 'Content-Type: application/json' \
-  -d '{"need":"weather data","max_price_usd":0.02}'</pre>
-      </div>
+      <p>If you are building an x402 buyer, try it with a real request. I want to hear where it stops, where the evidence is thin, and what you would need before letting an agent use it repeatedly.</p>
 
-      <p>A successful result includes the selected payment option and evidence behind the choice. A miss can distinguish conditions such as no candidates, unusable payment terms, a missing input schema, an expired quote, a timeout, or buyer constraints that were not met.</p>
-
-      <h2>Why not let the agent do this itself?</h2>
-
-      <p>A capable agent can be programmed to check an endpoint, parse a payment request, and compare a price. The difficult part is making that behavior consistent across many sellers, discovery sources, payment rails, and failure modes.</p>
-
-      <p>Every buyer would otherwise need to maintain its own discovery adapters, network rules, timeouts, payment-term parser, schema checks, ranking logic, and evidence format. That duplicated code becomes part of the spending boundary and has to remain correct as services change.</p>
-
-      <p>402Signal packages those checks behind one request. It does not remove the buyer's final authorization. It gives the buyer a current, structured recommendation that can be accepted or rejected under the buyer's own policy.</p>
-
-      <h2>The agent keeps the wallet</h2>
-
-      <p>402Signal recommends a route. It does not take custody, hold the buyer's keys, or pay the selected seller.</p>
-
-      <p>The buyer keeps signing authority and decides whether to make the seller payment and invoke the service. That boundary matters. A routing service should help an agent decide without becoming another wallet or a new custodian.</p>
-
-      <p>The routing authorization is also separate from the seller's price. A buyer authorizes $0.003 USDC for a 402Signal route. 402Signal settles that authorization only when it returns a valid, live, eligible route. A normal typed miss costs $0.</p>
-
-      <p>This makes the economic incentive straightforward: finding nothing useful should not be the billable outcome.</p>
-
-      <h2>Evidence matters once software spends on its own</h2>
-
-      <p>As autonomous transactions increase, teams will need more than a payment receipt. They will want evidence of what terms were observed and why a route passed the buyer's policy at that moment.</p>
-
-      <p>402Signal's PQ Trust layer commits routing evidence to an append-only Merkle log. Signed checkpoints are anchored on Algorand MainNet using a native Falcon-1024 account. If previously published history is changed later, verification should fail.</p>
-
-      <p>The scope is deliberately narrow. Falcon-1024 authorizes the checkpoint transaction. It does not make the merchant payment, the seller, or the API response post-quantum secure.</p>
-
-      <p>A buyer that wants to verify a particular private decision later must securely retain the verification record returned with the paid route. 402Signal publishes commitments and proofs, not the customer's private routing evidence, and cannot recover that private record if it is lost.</p>
-
-      <h2>A buyer should be allowed to stop</h2>
-
-      <p>Autonomous commerce will not become trustworthy by teaching agents to pay every valid 402 response. A payment request is a quote to evaluate, not an instruction to spend.</p>
-
-      <p>The useful result is sometimes a route. It is sometimes a clear refusal because the current options do not meet the buyer's rules.</p>
-
-      <p>402Signal exists to make that decision current, constrained, and verifiable while leaving control of the money with the agent that owns it.</p>
-
-      <p class="scope-note"><strong>Start here:</strong> search the <a href="/catalog">free catalog</a>, read the <a href="/developers">developer guide</a>, or inspect the <a href="/transparency">PQ Trust log</a>.</p>
+      <p class="scope-note"><a href="/catalog">Search the free catalog</a> · <a href="/developers">Read the developer guide</a> · <a href="/transparency">Inspect PQ Trust</a></p>
     </main>
 
     <footer class="foot">

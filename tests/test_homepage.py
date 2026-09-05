@@ -628,7 +628,7 @@ class HomepageProductTests(unittest.TestCase):
     def test_pre_spend_routing_article_renders(self):
         status, html, hdrs = _get_full(self.port, "/insights/pre-spend-routing")
         self.assertEqual(status, 200)
-        self.assertIn("Who checks it before the agent pays?", html)
+        self.assertIn("Before an agent pays, someone should check the quote.", html)
         self.assertIn("$0.003 USDC", html)
         self.assertIn("normal typed miss costs $0", html.lower())
         self.assertIn("Falcon-1024 authorizes the checkpoint transaction", html)
