@@ -40,17 +40,17 @@
     <main>
       <section class="hero hero-with-visual">
         <div class="hero-content">
-          <p class="eyebrow">Pre-spend routing for x402</p>
-          <h1>Find a paid API that works right now.</h1>
-          <p class="lede hero-copy">x402 lets software pay for APIs one request at a time. 402Signal searches Base, Solana, and Algorand, checks the payment options candidates return now, and picks one that fits your rules.</p>
-          <p class="boundary-line">Your app keeps the wallet. It decides whether to pay the seller and make the call.</p>
+          <p class="eyebrow">For AI agents buying API access</p>
+          <h1>Check the deal before your agent pays.</h1>
+          <p class="lede hero-copy">402Signal finds paid APIs, checks their current price and payment terms against your rules, and returns one that qualifies. If nothing fits, it gives your agent a reason to stop.</p>
+          <p class="boundary-line">Your app keeps the wallet. It pays the API directly and receives the data directly.</p>
           <p class="rails-line">Base · Solana · Algorand</p>
           <div class="hero-actions">
             <a class="btn" href="/developers#quickstart">View the quick start</a>
             <a class="btn secondary" href="/catalog">Search the free catalog</a>
           </div>
-          <p class="price-note">Authorize $0.003 USDC. 402Signal settles only when it returns a valid live eligible route. Normal typed misses are not settled. Seller payment is separate.</p>
-          <p class="hero-trust-note"><a href="/transparency"><strong>PQ Trust</strong></a> adds a verifiable routing history. Cumulative checkpoints are anchored on Algorand MainNet with native Falcon-1024 authorization.</p>
+          <p class="price-note">$0.003 USDC when a live route qualifies. No routing charge when nothing qualifies. The API's own price is separate.</p>
+          <p class="hero-trust-note">Check before paying. Keep evidence afterward. <a href="#route-binding">Optional v4 protection</a> checks for changed terms; <a href="#pq-log"><strong>PQ Trust</strong></a> makes later changes to recorded evidence detectable.</p>
         </div>
         <figure class="hero-art">
           <img src="/hero-routing.png" width="1200" height="900" alt="A highlighted route selected from a network of possible API paths." fetchpriority="high" decoding="async" />
@@ -58,41 +58,45 @@
       </section>
 
       <section class="example-card" aria-labelledby="example-heading">
-        <p class="eyebrow">Example</p>
-        <h2 id="example-heading">An agent needs weather data under 2 cents.</h2>
-        <p>A directory finds possible services. 402Signal checks which ones still return usable x402 terms, applies the budget, and returns a route. If none qualify, the agent gets a reason to stop.</p>
+        <p class="eyebrow">An example</p>
+        <h2 id="example-heading">Your agent finds a weather API for 2 cents.</h2>
+        <p>Before it pays, 402Signal checks whether the API responds with usable payment terms, whether the price is still within your 2-cent limit, and whether it meets your other routing rules.</p>
+        <p>With optional v4 protection enabled in your app, the seller's fresh offer must also match the recorded terms before your payment code is called. A changed price, different recipient or expired record stops the handoff.</p>
+        <p>If the API still costs 2 cents and qualifies, the routing check costs $0.003: $0.023 combined, before any network fees. Your agent then decides whether to pay the API directly. If nothing qualifies, there is no routing charge.</p>
       </section>
 
       <section class="block" id="how-it-works">
         <div class="section-heading">
           <p class="eyebrow">One routing check</p>
-          <h2>From a need to a usable route</h2>
+          <h2>Tell us what your agent needs.</h2>
         </div>
         <ol class="route-steps">
-          <li><span>1</span><div><h3>Describe the job</h3><p>Send a capability, a specific URL, and any limits the route must meet.</p></div></li>
-          <li><span>2</span><div><h3>Check candidates</h3><p>402Signal searches supported sources and reads the payment requirements endpoints return now.</p></div></li>
-          <li><span>3</span><div><h3>Get a decision</h3><p>Receive the best qualifying payment option, or a typed reason nothing qualified.</p></div></li>
+          <li><span>1</span><div><h3>Set your rules</h3><p>Describe the service or provide its URL. Set limits such as price, payment network and response time.</p></div></li>
+          <li><span>2</span><div><h3>Check what's available now</h3><p>402Signal searches supported sources across Base, Solana and Algorand and checks the offers APIs return.</p></div></li>
+          <li><span>3</span><div><h3>Get a route or a reason to stop</h3><p>Your app receives a qualifying option or an explanation of why none fit. Your wallet stays in control.</p></div></li>
         </ol>
         <p class="scope-note"><strong>What “works right now” means:</strong> the endpoint returned a usable x402 payment offer when checked. It does not guarantee the quality of the seller's paid response.</p>
         <p><a href="/how">Read the full routing flow</a></p>
       </section>
 
       <section class="block" id="route-binding">
-        <h2>Check the terms again before signing</h2>
-        <p>Optional route binding lets your app compare the seller's current payment request with the terms 402Signal recorded. If the price, recipient, resource or request changes, or the evidence expires, the local guard refuses the handoff to your payment code.</p>
-        <p>Your wallet still validates and signs the payment. <a href="/developers#route-binding">Add the check to your buyer</a>.</p>
+        <p class="eyebrow">Optional v4 protection</p>
+        <h2>Still the same deal at payment time?</h2>
+        <p>An API can change its terms after it is discovered. V4 gives your app a signed record to compare with the seller's fresh payment request immediately before signing.</p>
+        <p>Enable <code>require_route_binding: true</code> and integrate the local route guard. It verifies the record, checks the exact URL, request method and body, and compares the full payment offer. Changed terms, failed verification or expired evidence block the handoff to your payment code.</p>
+        <p>Your wallet still validates and signs the actual transaction. This is an opt-in integration, not an automatic lock on every agent payment. Some APIs, including those with changing personalized offers or different request bodies, cannot use this check. <a href="/developers#route-binding">Add v4 to your buyer</a>.</p>
       </section>
 
       <section class="block comparison" id="why">
         <p class="eyebrow">Why 402Signal</p>
-        <h2>A catalog finds candidates. 402Signal makes a current decision.</h2>
+        <h2>Know what was checked, not just what was paid.</h2>
         <div class="comparison-grid">
           <div class="comparison-head" aria-hidden="true"></div>
-          <div class="comparison-head">Directory</div>
-          <div class="comparison-head signal">402Signal</div>
-          <div>Payment data</div><div>Listed metadata</div><div>Endpoint response now</div>
-          <div>Policy</div><div>Search filters</div><div>Rules applied to observed options</div>
-          <div>Result</div><div>Possible services</div><div>One route or a clear miss</div>
+          <div class="comparison-head">Your question</div>
+          <div class="comparison-head signal">402Signal's role</div>
+          <div>Before choosing</div><div>Does an offer fit my rules now?</div><div>Live checks and one qualifying route, or a reason to stop</div>
+          <div>Before signing</div><div>Have the terms changed?</div><div>Optional v4 guard compares the fresh offer with signed evidence</div>
+          <div>Later</div><div>Has the recorded evidence been altered?</div><div>Verify your saved record against the public log</div>
         </div>
         <p><a href="/insights/pre-spend-routing">Why I built the check before pay</a></p>
       </section>
@@ -101,7 +105,8 @@
         <div>
           <p class="eyebrow">For developers</p>
           <h2>Start with one POST request.</h2>
-          <p>The first response is HTTP 402 with a $0.003 USDC authorization option. 402Signal verifies it, searches, checks, and ranks candidates, then settles only a valid live eligible route.</p>
+          <p>x402 lets software pay for APIs one request at a time. Authorize $0.003 USDC. 402Signal charges only when a live route qualifies. Normal typed misses are not settled. Seller payment is separate.</p>
+          <p>This example starts the routing flow; it does not pay or enable v4 by itself. The developer guide covers authorization and the optional local guard.</p>
         </div>
         <div class="code-card">
           <div class="code-toolbar"><span>POST /route</span><a href="/developers">Full guide</a></div>
@@ -116,8 +121,10 @@
           <p class="pq-badge">Algorand MainNet</p>
           <p class="pq-chip"><!--PQ_LATEST-->Awaiting anchor</p>
         </div>
-        <h2>A routing history you can check</h2>
-        <p>402Signal records routing evidence in an append-only Merkle log. Confirmed checkpoints are authorized by a native Falcon-1024 account and anchored on Algorand MainNet. Later changes to the published history can be detected.</p>
+        <h2>A record of what was checked.</h2>
+        <p>A payment receipt shows that money moved. The routing record captures the request, the observed terms and the decision evidence. If someone edits your saved record later, verification against the public log fails.</p>
+        <p>402Signal records routing evidence in an append-only Merkle log. Think of it as publishing a fingerprint of the evidence, not the private details themselves. Cumulative checkpoints are anchored on Algorand MainNet with native Falcon-1024 authorization.</p>
+        <p>V4 requires a signed log receipt immediately. The on-chain anchor follows separately; a pending record is not yet confirmed on-chain. The record supports checking what 402Signal observed, not proving that a seller delivered accurate data.</p>
         <p>To check a specific decision later, securely keep the verification record returned with the paid route. Private replay outcomes can retain the evidence; they are not a recovery service. Keep your own copy outside public logs.</p>
         <p class="pq-boundary">Falcon-1024 authorizes the checkpoint transaction. It does not make seller payments or API responses post-quantum secure.</p>
         <p><a class="btn secondary" href="/transparency">Inspect the latest checkpoint</a></p>
