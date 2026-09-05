@@ -57,14 +57,16 @@ ACCEPT_PAYTO_CHANGE_DESC = (
 )
 REQUIRE_TRANSPARENCY_DESC = (
     "If true, a settled /route winner fails when a signed checkpoint receipt cannot be produced. "
-    "This guarantees delivery of verifiable evidence, not server-side recovery. "
+    "This requires delivery of verifiable evidence on HTTP 200, not server-side recovery. "
     + TRANSPARENCY_RETENTION_DESC
     + " "
     "Default false (SEC-ROUTER-004 / A-14): a settled winner does not require a durable "
     "signed leaf. A free typed miss creates no route-decision leaf. Routing continues "
     "if append, signing, or anchoring is down after settlement "
     "(logged_uncheckpointed or unavailable). logged_uncheckpointed is never success "
-    "when this flag is true."
+    "when this flag is true. require_route_binding=true also requires transparency, "
+    "even if this flag is false. A required receipt failure after settlement still "
+    "reports billing.settled=true; unavailable does not prove no append occurred."
 )
 SELLER_SCHEMA_CLIENT_WARNING = (
     "Seller inputSchema/outputSchema values are catalog_claimed and untrusted. "
@@ -404,8 +406,11 @@ ROUTE_BINDING_DESC = (
     "redirects or unresolved policy. Unprovable binding is a free typed miss. "
     "Implies require_transparency; a receipt failure after settlement still reports "
     "settled=true. Buyer must verify with a pinned log key and recheck the actual "
-    "seller challenge immediately before signing. The freshness window starts at "
-    "observation, not receipt issuance. This is not a payment authorization."
+    "seller challenge immediately before signing. Preserve raw response JSON. "
+    "The default 60-second freshness window starts at observation, not receipt "
+    "issuance. Expiry or a changed seller challenge does not undo a settled routing "
+    "fee. Default false; existing requests keep the v3 receipt path. This is not a "
+    "payment authorization. Guide: https://402signal.com/developers#route-binding"
 )
 
 

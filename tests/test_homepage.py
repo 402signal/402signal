@@ -306,7 +306,7 @@ class HomepageProductTests(unittest.TestCase):
         self.assertIn('src="/hero-routing.png"', html)
         self.assertIn('alt="A highlighted route selected from a network of possible API paths."', html)
         self.assertIn("PQ Trust", html)
-        self.assertIn("Checkpoints use native Falcon-1024 authorization on Algorand MainNet.", html)
+        self.assertIn("Cumulative checkpoints are anchored on Algorand MainNet with native Falcon-1024 authorization.", html)
         self.assertIn('class="hero-trust-note"', html)
         self.assertNotIn("Falcon", _parse(html).h1[0])
 
@@ -937,6 +937,9 @@ class HomepageProductTests(unittest.TestCase):
         from live402 import discover, mcp, payment, schema_fields
 
         self.assertIn("securely keep the verification record", self.home)
+        self.assertIn("Private replay outcomes can retain", self.home)
+        self.assertNotIn("does not retain the private evidence", self.home)
+        self.assertIn("Private replay records can retain", self.insight)
         self.assertIn("securely retain the complete paid", self.how)
         self.assertIn("Keep the verification record", self.devs)
         self.assertIn("pq_trust.transparency.receipt", self.devs)

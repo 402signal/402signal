@@ -35,6 +35,12 @@
           <a class="btn secondary" href="/catalog">Try a free preview</a>
         </div>
       </section>
+      <section class="block">
+        <h2>Bind the route to the seller's terms</h2>
+        <p>Add <code>"require_route_binding": true</code> to your request for a signed v4 receipt covering the observed seller URL, method, request body and x402 payment offer. This is optional and uses the same $0.003 success-only routing fee.</p>
+        <p>Your buyer verifies the receipt and compares the current seller challenge before signing. An expired or changed challenge blocks the seller handoff; it does not undo an already-settled routing fee.</p>
+        <p><a href="/developers#route-binding">Integration guide and supported request shapes</a></p>
+      </section>
     </main>
 
     <footer class="foot">

@@ -1,8 +1,10 @@
 # 402signal.route_decision.v3
 
-New paid `/route` receipts use `402signal.route_decision.v3`. Historical
-`route_decision.v1` and `route_decision.v2` leaves are not rewritten and
-stay verifiable with their original semantics.
+Default paid `/route` receipts use `402signal.route_decision.v3`. Requests with
+`require_route_binding: true` instead use the opt-in
+[v4 binding contract](proof-carrying-route-v1.md). This document describes v3;
+historical v1, v2 and v3 leaves are not rewritten and stay verifiable with
+their original semantics.
 
 This is metadata minimization, not anonymity. Do not call v3 leaves
 anonymous or unlinkable.
@@ -21,7 +23,11 @@ The public log does not receive private evidence or the salt.
 Not on the public leaf: need, url, wallet, payTo, network, amount, asset,
 outcome, live, miss_reason, identity, auth, seller body, salt.
 
-## Private evidence (customer reveal only)
+## Private evidence (customer reveal)
+
+The reveal is returned privately with the route. Completed private replay
+records can also retain it; they are not a customer recovery service. Keep your
+own complete response securely and do not publish the reveal or salt.
 
 Deterministic canonical object, `evidence_version` 1, RFC 8785 JCS.
 Missing facts are `null`. Catalog claims are never stored as observed.

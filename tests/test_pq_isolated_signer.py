@@ -674,7 +674,7 @@ class SignerClientProtocolTests(unittest.TestCase):
         self.assertIn("A routing history you can check", text)
         self.assertIn("Awaiting anchor", text)
         self.assertIn("PQ Trust", text)
-        self.assertIn("native Falcon-1024 authorization on Algorand MainNet", text)
+        self.assertIn("Cumulative checkpoints are anchored on Algorand MainNet with native Falcon-1024 authorization", text)
         self.assertNotIn("PQ transparency", text)
         self.assertIsNone(worker.public_anchor())
         self.assertEqual(worker.homepage_pq_html(), "")

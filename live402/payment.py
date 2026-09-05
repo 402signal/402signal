@@ -30,12 +30,13 @@ USDC_DECIMALS = 6
 
 # CDP / Bazaar / PayAI / GoPlausible listing blurb. Keep at or under 500 chars.
 CATALOG_DESCRIPTION = (
-    "402Signal is the independent check an AI agent makes right before spending. "
-    "It finds the strongest x402 route across Base, Solana, and Algorand, verifies it live, "
-    "and shows the evidence behind the choice. Your agent keeps the wallet. "
-    "The routing authorization settles only when a live eligible route is returned. "
-    "The decision history is committed to an append-only PQ Trust log. "
-    "Production identity is Algorand MainNet."
+    "402Signal checks x402 routes across Base, Solana, and Algorand before spending. "
+    "$0.003 only when a valid live route is found. Normal typed misses are not settled. "
+    "Seller payment is separate. Your agent keeps the wallet. "
+    "Routing evidence enters the PQ Trust log on Algorand MainNet. "
+    "Optional require_route_binding=true adds a signed v4 receipt for buyer-side "
+    "comparison with current seller terms before signing. "
+    "Guide: https://402signal.com/developers#route-binding"
 )
 
 # Spec-shaped bazaar declaration for POST /route.
@@ -96,6 +97,14 @@ BAZAAR_EXTENSION = {
                         "properties": {
                             "need": {"type": "string"},
                             "url": {"type": "string"},
+                            "require_route_binding": {
+                                "type": "boolean",
+                                "description": "Opt in to a signed v4 route binding; implies require_transparency even if false. Default false; ordinary requests keep v3. Buyer verifies raw response JSON with a pinned log key and compares the current seller request and challenge before signing. Expiry or changed terms do not undo a settled routing fee. Guide: https://402signal.com/developers#route-binding",
+                            },
+                            "require_transparency": {
+                                "type": "boolean",
+                                "description": "Require a durable leaf and signed checkpoint receipt on HTTP 200. Default false; require_route_binding=true also requires transparency. Receipt failure after settlement remains billed. Private replay records can retain the reveal; they are not a recovery service. Keep your own copy outside public logs.",
+                            },
                         },
                         "anyOf": [{"required": ["need"]}, {"required": ["url"]}],
                     },
@@ -197,20 +206,22 @@ BAZAAR_MCP = {
                     },
                     "require_route_binding": {
                         "type": "boolean",
-                        "description": "Opt in to a v4 proof-carrying route. Requires exact observed x402 v2 terms and a signed checkpoint receipt; implies require_transparency. Buyer verifies before seller signing.",
+                        "description": "Opt in to a v4 proof-carrying route. Requires exact observed x402 v2 terms and a signed checkpoint receipt; implies require_transparency even if false. Default false; ordinary requests keep v3. Buyer verifies raw response JSON with a pinned log key and compares the current seller request and challenge before signing. Expiry or changed terms do not undo a settled routing fee. Guide: https://402signal.com/developers#route-binding",
                     },
                     "require_transparency": {
                         "type": "boolean",
                         "description": (
                             "If true, a settled /route winner fails when a signed checkpoint receipt "
-                            "cannot be produced. This guarantees delivery, not server-side "
+                            "cannot be produced. HTTP 200 requires evidence delivery, not server-side "
                             "recovery. Securely retain the complete paid /route response, "
                             "especially pq_trust.transparency.receipt and "
                             "pq_trust.transparency.reveal. Private replay outcomes can retain "
                             "the reveal; they are not a recovery service. Keep your own copy. Default false "
                             "(SEC-ROUTER-004 / A-14): "
                             "a settled winner does not require a durable signed leaf; "
-                            "free typed misses create no route-decision leaf."
+                            "free typed misses create no route-decision leaf. "
+                            "require_route_binding=true also requires transparency even if this "
+                            "flag is false. Receipt failure after settlement remains billed."
                         ),
                     },
                 },
