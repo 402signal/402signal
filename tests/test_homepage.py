@@ -214,6 +214,7 @@ class HomepageProductTests(unittest.TestCase):
         cls.catalog = _get_full(cls.port, "/catalog")[1]
         cls.how = _get_full(cls.port, "/how")[1]
         cls.devs = _get_full(cls.port, "/developers")[1]
+        cls.insight = _get_full(cls.port, "/insights/pre-spend-routing")[1]
         cls.contact = _get_full(cls.port, "/contact")[1]
         cls.transparency = _get_full(cls.port, "/transparency")[1]
         cls.js = _read("app.js")
@@ -223,6 +224,7 @@ class HomepageProductTests(unittest.TestCase):
             "/catalog": cls.catalog,
             "/how": cls.how,
             "/developers": cls.devs,
+            "/insights/pre-spend-routing": cls.insight,
             "/contact": cls.contact,
             "/transparency": cls.transparency,
         }
@@ -623,6 +625,16 @@ class HomepageProductTests(unittest.TestCase):
         self.assertNotIn("periodically anchored to Algorand TestNet", html)
         self.assertIn('href="/transparency"', html)
 
+    def test_pre_spend_routing_article_renders(self):
+        status, html, hdrs = _get_full(self.port, "/insights/pre-spend-routing")
+        self.assertEqual(status, 200)
+        self.assertIn("Who checks it before the agent pays?", html)
+        self.assertIn("$0.003 USDC", html)
+        self.assertIn("normal typed miss costs $0", html.lower())
+        self.assertIn("Falcon-1024 authorizes the checkpoint transaction", html)
+        self.assertIn('property="og:image" content="https://402signal.com/og.png"', html)
+        self.assertIn("default-src 'none'", hdrs.get("content-security-policy", ""))
+
     def test_developers_example_fields_are_in_openapi_route_schema(self):
         spec = json.loads(_get_full(self.port, "/openapi.json")[1])
         live_props = (
@@ -794,6 +806,7 @@ class HomepageProductTests(unittest.TestCase):
             "live402/static/catalog.html",
             "live402/static/how.html",
             "live402/static/developers.html",
+            "live402/static/pre-spend-routing.html",
             "live402/static/contact.html",
             "live402/static/route.html",
             "live402/static/app.js",
@@ -810,7 +823,7 @@ class HomepageProductTests(unittest.TestCase):
         self.assertNotIn("\N{EM DASH}", pulse.dashboard_html())
 
     def test_human_pages_are_static_html_same_csp(self):
-        for path in ("/", "/catalog", "/how", "/developers", "/contact", "/transparency"):
+        for path in ("/", "/catalog", "/how", "/developers", "/insights/pre-spend-routing", "/contact", "/transparency"):
             status, raw, hdrs = _get_full(self.port, path)
             self.assertEqual(status, 200, path)
             self.assertIn("text/html", hdrs.get("content-type", ""), path)
@@ -1105,6 +1118,7 @@ class HomepageProductTests(unittest.TestCase):
         conn.close()
         sitemap = _get_full(self.port, "/sitemap.xml")[1]
         self.assertIn("https://402signal.com/catalog", sitemap)
+        self.assertIn("https://402signal.com/insights/pre-spend-routing", sitemap)
         robots = _get_full(self.port, "/robots.txt")[1]
         self.assertIn("Sitemap: https://402signal.com/sitemap.xml", robots)
         self.assertNotIn("Allow: /dashboard", robots)

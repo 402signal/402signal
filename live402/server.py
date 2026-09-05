@@ -34,6 +34,8 @@ HUMAN_PAGES = {
     "/how.html": "how.html",
     "/developers": "developers.html",
     "/developers.html": "developers.html",
+    "/insights/pre-spend-routing": "pre-spend-routing.html",
+    "/insights/pre-spend-routing.html": "pre-spend-routing.html",
     "/contact": "contact.html",
     "/contact.html": "contact.html",
 }

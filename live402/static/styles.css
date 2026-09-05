@@ -177,6 +177,16 @@ p:last-child { margin-bottom: 0; }
 .hero.compact { margin-bottom: 28px; }
 .hero.compact h1 { max-width: 22ch; }
 .hero.builder h1 { max-width: 28ch; }
+.article-page { max-width: 920px; }
+.article { max-width: 720px; margin: 0 auto; }
+.article h1 { max-width: 20ch; }
+.article h2 { margin-top: 34px; }
+.article-meta { color: var(--muted); margin: 14px 0 24px; }
+.article-hero { margin: 24px 0 34px; }
+.article-hero img { display: block; width: 100%; height: auto; border: 1px solid var(--line); }
+.article .lede { font-size: 19px; line-height: 1.6; }
+.article .code-card { margin: 22px 0; }
+.article .scope-note { margin-top: 22px; }
 .hero-actions {
   display: flex;
   flex-wrap: wrap;
