@@ -365,7 +365,7 @@ def verify_route(
         if not _request_equal(strict_json(evidence["request_json"]), expected_request):
             _fail("request_mismatch")
         binding = evidence["binding"]
-        if result.get("decision_binding") != binding:
+        if canonical(result.get("decision_binding")) != canonical(binding):
             _fail("binding_mismatch")
         return verify_challenge(
             binding,
