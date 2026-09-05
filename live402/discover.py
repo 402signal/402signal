@@ -338,6 +338,8 @@ def openapi_spec(resource_url: str = ROUTE) -> dict:
                     }
                 },
             },
+            "decision_binding": schema_fields.decision_binding_schema(),
+            "binding_error": {"type": "string", "enum": ["route_binding_unavailable"]},
             "pq_trust": {
                 "type": "object",
                 "description": (
@@ -1226,6 +1228,7 @@ $0.003 only when a valid live route is found. Normal typed misses are not settle
 - Valid live winner → HTTP 200 + URL that 402s with a payment envelope + target {method,inputSchema,outputSchema,accepts,facilitator,amountAtomic,displayAmount,timeoutSeconds} + selected_payment {rail,network,asset,amount_atomic,display_amount,normalized_usd,payTo,facilitator} + billing {model,condition,asset,amount_atomic,display_amount,rail,settlement_attempted,settled,settlement_state}. target.accepts and selected_payment are CURRENT observed 402 options only. Catalog rails stay on claimed.payment_options and are never selected.
 - Every HTTP 503 requires inspecting billing before retrying. A normal typed miss has settlement_attempted=false, settled=false, settlement_state=not_attempted. A required-transparency failure after successful settlement has true, true, settled. An ambiguous settlement has settlement_attempted=true (or null when recovered from an uncertain reservation), settled=null, settlement_state=unknown; never reuse that authorization.
 - 402Signal settles only its $0.003 routing authorization after a valid live eligible route is found; it does not pay the selected merchant. Seller payment is separate.
+- Optional require_route_binding=true requests a proof_carrying_route_v1 binding with a signed v4 receipt. Validate the private evidence with a pinned log key, then compare the current seller challenge and actual URL/method/body before signing. Unprovable binding is a free miss; receipt failure after settlement remains settled. Ordinary requests retain v3 receipts. See docs/proof-carrying-route-v1.md in the repository.
 - For later PQ Trust verification, set require_transparency=true and securely retain the complete paid /route response, including compared[]. At minimum, keep pq_trust.transparency.receipt and pq_trust.transparency.reveal together. 402Signal does not retain the private reveal and cannot recover it if lost. Modified evidence fails verification against the public log. The reveal contains private request and decision evidence; do not put it in public logs.
 - Upstream probe is GET first, then POST {} only with strong method justification (GET 405/501, or the catalog explicitly declares POST and does not require a request body). Never POST {} after an arbitrary 200/400/404. Never POST seller-declared or catalog-declared input bodies. If a required body means a valid unpaid probe cannot be constructed, miss_reason is unsafe_to_probe. DNS uses a bounded getaddrinfo pool (2s); TCP/TLS is pinned to those SSRF-checked public IPs with TLS SNI and HTTP Host set to the original hostname (re-pinned on redirects).
 - payable requires a complete observed option (rail/network, amount, asset, payTo). invocable is payable + input schema. challenge_observed is HTTP 402 + parseable x402.

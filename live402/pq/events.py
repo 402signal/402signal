@@ -24,6 +24,7 @@ from live402.pq import jcs
 TYPE_ROUTE_DECISION = "402signal.route_decision.v1"
 TYPE_ROUTE_DECISION_V2 = "402signal.route_decision.v2"
 TYPE_ROUTE_DECISION_V3 = "402signal.route_decision.v3"
+TYPE_ROUTE_DECISION_V4 = "402signal.route_decision.v4"
 TYPE_OBSERVATION_BATCH = "402signal.observation_batch.v1"
 TYPE_SCORING_MODEL = "402signal.scoring_model.v1"
 SALT_BYTES = 32
@@ -630,13 +631,18 @@ def assert_public(event: dict) -> dict:
         TYPE_ROUTE_DECISION,
         TYPE_ROUTE_DECISION_V2,
         TYPE_ROUTE_DECISION_V3,
+        TYPE_ROUTE_DECISION_V4,
         TYPE_OBSERVATION_BATCH,
         TYPE_SCORING_MODEL,
     }:
         raise PrivacyError("unknown event type")
+    if typ == TYPE_ROUTE_DECISION_V4:
+        import re
+        if any(type(event.get(k)) is not str or not re.fullmatch(r"[0-9a-f]{64}", event[k]) for k in ("nonce", "commitment")):
+            raise PrivacyError("invalid v4 commitment metadata")
     jcs.require_timestamp(event.get("ts") or "")
     _forbid(event)
-    if typ in {TYPE_ROUTE_DECISION, TYPE_ROUTE_DECISION_V2, TYPE_ROUTE_DECISION_V3}:
+    if typ in {TYPE_ROUTE_DECISION, TYPE_ROUTE_DECISION_V2, TYPE_ROUTE_DECISION_V3, TYPE_ROUTE_DECISION_V4}:
         nonce = event.get("nonce") or ""
         if not isinstance(nonce, str) or len(nonce) < 32:
             raise PrivacyError("route_decision nonce must be high entropy")
@@ -648,7 +654,7 @@ def assert_public(event: dict) -> dict:
                 raise PrivacyError("v2 public leaf has forbidden field")
             if "salt" in event or "evidence" in event:
                 raise PrivacyError("v2 public leaf must not include salt or evidence")
-        if typ == TYPE_ROUTE_DECISION_V3:
+        if typ in {TYPE_ROUTE_DECISION_V3, TYPE_ROUTE_DECISION_V4}:
             extra = set(event) - V3_PUBLIC_FIELDS
             if extra:
                 raise PrivacyError("v3 public leaf has forbidden field")

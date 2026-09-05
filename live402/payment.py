@@ -195,6 +195,10 @@ BAZAAR_MCP = {
                         "type": "boolean",
                         "description": "If true, allow selecting a destination whose payTo just changed for the first time.",
                     },
+                    "require_route_binding": {
+                        "type": "boolean",
+                        "description": "Opt in to a v4 proof-carrying route. Requires exact observed x402 v2 terms and a signed checkpoint receipt; implies require_transparency. Buyer verifies before seller signing.",
+                    },
                     "require_transparency": {
                         "type": "boolean",
                         "description": (

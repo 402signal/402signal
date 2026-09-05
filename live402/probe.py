@@ -962,6 +962,9 @@ class _SSRFRedirectHandler(urllib.request.HTTPRedirectHandler):
         nxt = super().redirect_request(req, fp, code, msg, headers, newurl)
         if nxt is None:
             raise ProbeBlocked("blocked redirect")
+        root = getattr(req, "binding_root", req)
+        root.binding_redirected = True
+        nxt.binding_root = root
         nxt.ssrf_hops = hops
         nxt.pinned_addrs = pinned[1]
         nxt.pinned_host = _hostname(urlparse(joined))
@@ -1539,6 +1542,8 @@ def health_from_probe(url: str, snap: dict) -> dict:
             "status": snap.get("status"),
         },
     }
+    if snap.get("binding_observation") is not None:
+        out["binding_observation"] = snap["binding_observation"]
     if snap.get("probes") is not None:
         out["probes"] = snap["probes"]
     if not live and snap.get("miss_reason"):
@@ -1602,23 +1607,28 @@ def _one_request(
         headers["Content-Type"] = "application/json"
     req = urllib.request.Request(url, data=data, method=method, headers=headers)
     req.ssrf_hops = 0
+    req.binding_root = req
+    req.binding_redirected = False
     req.pinned_addrs = list(addrs)
     req.pinned_host = host
     opener = _opener()
     status = None
     hdrs: dict[str, str] = {}
     body = b""
+    final_url = None
     try:
         try:
             with opener.open(req, timeout=timeout) as resp:
                 status = getattr(resp, "status", None) or resp.getcode()
                 hdrs = _headers_map(resp.headers)
+                final_url = resp.geturl()
                 body = _read_limited(resp)
         except ProbeBlocked:
             raise
         except urllib.error.HTTPError as err:
             status = err.code
             hdrs = _headers_map(err.headers)
+            final_url = err.geturl()
             body = _read_limited(err)
     except ProbeBlocked:
         return {
@@ -1648,7 +1658,22 @@ def _one_request(
 
     envelope, miss = parse_envelope(status, hdrs, body)
     live = envelope is not None and miss is None and status == 402
+    binding_observation = None
+    if live and final_url == url and not req.binding_redirected:
+        from live402 import route_binding
+
+        try:
+            strict_env = route_binding.observed_challenge(status, hdrs, body)
+            if route_binding.canonical(strict_env) == route_binding.canonical(envelope):
+                binding_observation = {
+                    "request": route_binding.request_context(url, method, data or b""),
+                    "observed_at": int(time.time()),
+                    "quote_sha256": route_binding.digest(strict_env),
+                }
+        except route_binding.BindingError:
+            pass  # Opt-in binding unavailable; ordinary probe semantics unchanged.
     return {
+        "binding_observation": binding_observation,
         "live": live,
         "status": status,
         "has_402_challenge": _has_402_challenge(status, hdrs),
@@ -1823,6 +1848,7 @@ def probe_url(url: str, catalog_item: dict | None = None, deadline: float | None
     latency_ms = int((time.perf_counter() - start) * 1000)
     snap = {
         "live": live,
+        "binding_observation": (winner or {}).get("binding_observation"),
         "status": (winner or {}).get("status"),
         "latency_ms": latency_ms,
         "has_402_challenge": bool((winner or {}).get("has_402_challenge")),

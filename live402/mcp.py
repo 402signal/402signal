@@ -110,6 +110,8 @@ OUTPUT_SCHEMA = {
             "type": "string",
             "enum": list(schema_fields.OBJECTIVES),
         },
+        "decision_binding": schema_fields.decision_binding_schema(),
+        "binding_error": {"type": "string", "enum": ["route_binding_unavailable"]},
         "pq_trust": {
             "type": "object",
             "description": schema_fields.TRANSPARENCY_RETENTION_DESC,
