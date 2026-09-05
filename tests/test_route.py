@@ -257,7 +257,7 @@ class PaywallTests(unittest.TestCase):
         status, html = _get(self.port, "/")
         self.assertEqual(status, 200)
         self.assertIn("402Signal", html)
-        self.assertIn("Find a paid API that works right now.", html)
+        self.assertIn("Check the deal before your agent pays.", html)
         self.assertNotIn("Check before your agent pays.", html)
         self.assertNotIn("Catalog said X. We observed Y.", html)
         self.assertNotIn("Index is filling. Preview has no hits yet. Pulse counts are 0. Probe live still 402s /route.", html)

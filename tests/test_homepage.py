@@ -242,7 +242,7 @@ class HomepageProductTests(unittest.TestCase):
     def test_homepage_is_concise_product_landing(self):
         html = self.home
         parsed = _parse(html)
-        self.assertEqual(parsed.h1, ["Find a paid API that works right now."])
+        self.assertEqual(parsed.h1, ["Check the deal before your agent pays."])
         self.assertNotIn("<h1>402Signal</h1>", html)
         self.assertEqual(html.count("<h1"), 1)
         self.assertIn("402Signal · Find a paid API that works right now", html)
@@ -253,9 +253,9 @@ class HomepageProductTests(unittest.TestCase):
         self.assertIn("Search the free catalog", html)
         self.assertIn('href="/catalog"', html)
         self.assertIn('href="/developers"', html)
-        self.assertIn("An agent needs weather data under 2 cents.", html)
-        self.assertIn("From a need to a usable route", html)
-        self.assertIn("A catalog finds candidates. 402Signal makes a current decision.", html)
+        self.assertIn("Your agent finds a weather API for 2 cents.", html)
+        self.assertIn("Tell us what your agent needs.", html)
+        self.assertIn("Know what was checked, not just what was paid.", html)
         self.assertIn("What “works right now” means:", html)
         self.assertIn("Authorize $0.003 USDC.", html)
         self.assertIn("Normal typed misses are not settled.", html)
@@ -281,7 +281,7 @@ class HomepageProductTests(unittest.TestCase):
         self.assertNotIn("Currently Algorand TestNet", html)
         self.assertNotIn("Latest confirmed Tree", html)
         self.assertNotIn("Algorand MainNet log · awaiting first confirmed checkpoint", html)
-        self.assertIn("A routing history you can check", html)
+        self.assertIn("A record of what was checked.", html)
         self.assertIn("402Signal records routing evidence in an append-only Merkle log.", html)
         self.assertIn("Falcon-1024 authorizes the checkpoint transaction.", html)
         self.assertIn('class="pq-trust"', html)
@@ -310,6 +310,19 @@ class HomepageProductTests(unittest.TestCase):
         self.assertIn('class="hero-trust-note"', html)
         self.assertNotIn("Falcon", _parse(html).h1[0])
 
+    def test_plain_language_home_preserves_v4_boundaries(self):
+        for phrase in (
+            "$0.023 combined, before any network fees",
+            "require_route_binding: true",
+            "integrate the local route guard",
+            "Your wallet still validates and signs the actual transaction",
+            "a pending record is not yet confirmed on-chain",
+            "not proving that a seller delivered accurate data",
+            "securely keep the verification record",
+        ):
+            self.assertIn(phrase, self.home)
+        self.assertNotIn("payment/data never passes through", self.home)
+
     def test_old_one_page_sections_gone_from_home(self):
         html = self.home
         for snippet in OLD_HOME_SECTIONS:
@@ -323,7 +336,7 @@ class HomepageProductTests(unittest.TestCase):
 
     def test_exactly_one_h1_per_human_page(self):
         expected = {
-            "/": "Find a paid API that works right now.",
+            "/": "Check the deal before your agent pays.",
             "/catalog": "Explore paid APIs",
             "/how": "What happens during a route check",
             "/developers": "Call POST /route",
@@ -904,9 +917,9 @@ class HomepageProductTests(unittest.TestCase):
     def test_how_it_works_cards_are_homepage_only(self):
         html = self.pages["/"]
         self.assertIn('id="how-it-works"', html)
-        self.assertIn("Describe the job", html)
-        self.assertIn("Check candidates", html)
-        self.assertIn("Get a decision", html)
+        self.assertIn("Set your rules", html)
+        self.assertIn("Check what's available now", html)
+        self.assertIn("Get a route or a reason to stop", html)
         self.assertNotIn("YOUR AGENT", html)
         self.assertNotIn("What catalogs claim", html)
         self.assertNotIn("Check it now", html)
