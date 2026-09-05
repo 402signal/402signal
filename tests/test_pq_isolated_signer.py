@@ -671,7 +671,7 @@ class SignerClientProtocolTests(unittest.TestCase):
         self.assertNotIn("View TestNet transaction", text)
         self.assertNotIn("placeholder", text.lower())
         self.assertNotIn("YOUR_TXID", text)
-        self.assertIn("A routing history you can check", text)
+        self.assertIn("A record of what was checked.", text)
         self.assertIn("Awaiting anchor", text)
         self.assertIn("PQ Trust", text)
         self.assertIn("Cumulative checkpoints are anchored on Algorand MainNet with native Falcon-1024 authorization", text)
