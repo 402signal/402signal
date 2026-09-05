@@ -254,14 +254,14 @@ class HomepageProductTests(unittest.TestCase):
         self.assertIn('href="/catalog"', html)
         self.assertIn('href="/developers"', html)
         self.assertIn("Your agent finds a weather API for 2 cents.", html)
-        self.assertIn("Tell us what your agent needs.", html)
-        self.assertIn("Know what was checked, not just what was paid.", html)
-        self.assertIn("What “works right now” means:", html)
+        self.assertIn("One check before choosing. Another before signing.", html)
+        self.assertIn("Pay for a qualifying route.", html)
+        self.assertIn("It does not guarantee delivery", html)
         self.assertIn("Authorize $0.003 USDC.", html)
-        self.assertIn("Normal typed misses are not settled.", html)
+        self.assertIn("Normal typed misses are not settled", html)
         self.assertIn("Seller payment is separate.", html)
-        self.assertIn("Start with one POST request.", html)
-        self.assertIn("curl -sS -D - https://402signal.com/route", html)
+        self.assertIn("Connect through HTTP or MCP.", html)
+        self.assertNotIn('<pre class="code">', html)
 
         css = Path("live402/static/styles.css").read_text(encoding="utf-8")
         self.assertIn("overflow-wrap: break-word", css)
@@ -298,7 +298,7 @@ class HomepageProductTests(unittest.TestCase):
         self.assertNotIn(">MISS<", html)
         self.assertNotIn(">HISTORY<", html)
         self.assertIn('id="why"', html)
-        self.assertIn("comparison-grid", html)
+        self.assertNotIn("comparison-grid", html)
         self.assertIn("route-steps", html)
         self.assertIn('property="og:image" content="https://402signal.com/og.png"', html)
         self.assertIn('rel="icon" href="/favicon.svg"', html)
@@ -307,17 +307,17 @@ class HomepageProductTests(unittest.TestCase):
         self.assertIn('alt="A highlighted route selected from a network of possible API paths."', html)
         self.assertIn("PQ Trust", html)
         self.assertIn("Cumulative checkpoints are anchored on Algorand MainNet with native Falcon-1024 authorization.", html)
-        self.assertIn('class="hero-trust-note"', html)
+        self.assertNotIn('class="hero-trust-note"', html)
         self.assertNotIn("Falcon", _parse(html).h1[0])
 
     def test_plain_language_home_preserves_v4_boundaries(self):
         for phrase in (
             "$0.023 combined, before any network fees",
-            "require_route_binding: true",
-            "integrate the local route guard",
+            "optional v4 protection integrated into your app",
+            "a local guard compares the fresh seller offer",
             "Your wallet still validates and signs the actual transaction",
-            "a pending record is not yet confirmed on-chain",
-            "not proving that a seller delivered accurate data",
+            "A pending record is not yet confirmed on-chain",
+            "It does not guarantee delivery or the quality of the weather data",
             "securely keep the verification record",
         ):
             self.assertIn(phrase, self.home)
@@ -917,9 +917,9 @@ class HomepageProductTests(unittest.TestCase):
     def test_how_it_works_cards_are_homepage_only(self):
         html = self.pages["/"]
         self.assertIn('id="how-it-works"', html)
-        self.assertIn("Set your rules", html)
-        self.assertIn("Check what's available now", html)
-        self.assertIn("Get a route or a reason to stop", html)
+        self.assertIn("Find an API", html)
+        self.assertIn("Check it against your rules", html)
+        self.assertIn("Verify the offer before signing", html)
         self.assertNotIn("YOUR AGENT", html)
         self.assertNotIn("What catalogs claim", html)
         self.assertNotIn("Check it now", html)
