@@ -352,6 +352,23 @@ class BindingTests(unittest.TestCase):
         with self.assertRaises(rb.BindingError):
             self.check(result)
 
+    def test_display_binding_rejects_bool_and_float_integer_coercion(self):
+        result = self.issue()
+        for field, value in (
+            ("selected_index", False),
+            ("selected_index", 0.0),
+            ("observed_at", float(result["decision_binding"]["observed_at"])),
+        ):
+            # Real JSON transport removes producer-side object aliasing. Change
+            # only the untrusted display field, leaving signed evidence intact.
+            changed = json.loads(json.dumps(result))
+            changed["decision_binding"][field] = value
+            with (
+                self.subTest(field=field, value=value),
+                self.assertRaises(rb.BindingError),
+            ):
+                self.check(changed)
+
     def test_concurrent_unprovable_binding_does_not_duplicate_work(self):
         started, release = threading.Event(), threading.Event()
         results = []
