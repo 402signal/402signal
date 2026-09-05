@@ -186,7 +186,7 @@ class TransparencyPageTests(unittest.TestCase):
         self.assertNotIn('class="pq-chip is-anchored"', html)
         self.assertNotIn("Latest confirmed Tree", html)
         self.assertNotIn("Round 66860001", html)
-        self.assertIn("Later changes to the published history can be detected.", html)
+        self.assertIn("If someone edits your saved record later, verification against the public log fails.", html)
         self.assertNotIn("PQ-safe", html)
         self.assertIn("Inspect the latest checkpoint", html)
         self.assertNotIn("Latest checkpoint · Tree", html)
