@@ -71,7 +71,7 @@
         </dl>
         <p class="scope-note"><strong>Billing:</strong> $0.003 only when a valid live route is found. Normal typed misses are not settled. On HTTP 503, inspect <code>billing.settlement_state</code>; never reuse an authorization marked <code>unknown</code>. Seller payment is separate.</p>
         <p class="scope-note"><strong>Scope:</strong> a live result means the endpoint returned a usable x402 payment offer during the check. It is not a guarantee about the seller's paid output.</p>
-        <p class="scope-note"><strong>PQ Trust records:</strong> if you request transparency evidence, securely retain the complete paid <code>/route</code> response. 402Signal does not retain the private reveal and cannot recover it later.</p>
+        <p class="scope-note"><strong>PQ Trust records:</strong> if you request transparency evidence, securely retain the complete paid <code>/route</code> response. Private replay outcomes can retain the reveal; they are not a recovery service. Keep your own copy.</p>
         <p><a class="btn" href="/developers">Call POST /route</a></p>
       </section>
     </main>

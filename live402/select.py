@@ -58,6 +58,7 @@ EXPLICIT_CONSTRAINT_KEYS = (
     "max_candidates_to_probe",
     "accept_payTo_change",
     "require_transparency",
+    "require_route_binding",
 )
 
 
@@ -283,6 +284,8 @@ def validate_explicit_constraints(body: dict) -> None:
         _require_bool(src.get("require_invocable"), "require_invocable")
     if _explicit_present(src, "accept_payTo_change"):
         _require_bool(src.get("accept_payTo_change"), "accept_payTo_change")
+    if "require_route_binding" in src and type(src["require_route_binding"]) is not bool:
+        _reject("require_route_binding must be a boolean")
     if _explicit_present(src, "require_transparency"):
         _require_bool(src.get("require_transparency"), "require_transparency")
     if _explicit_present(src, "max_price_usd"):

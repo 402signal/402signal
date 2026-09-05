@@ -1,0 +1,742 @@
+{
+  "format": "proof_carrying_route_v1_conformance",
+  "test_only": true,
+  "trusted_vkey": "402signal.com/pq/log+6cc295a4+AQOhB7/zzhC+HXDdGOdLwJln5NYwm6UNXx3chmQSVTG4",
+  "cases": [
+    {
+      "rail": "base",
+      "request": {
+        "need": "weather",
+        "max_price_usd": 0.02,
+        "require_route_binding": true
+      },
+      "response": {
+        "url": "https://example.com/api",
+        "live": true,
+        "payable": true,
+        "invocable": true,
+        "status": 402,
+        "payTo": "0xb18fc2275f36dae99eb215caeff03b431f887d16",
+        "envelope": {
+          "x402Version": 2,
+          "accepts": [
+            {
+              "scheme": "exact",
+              "network": "eip155:8453",
+              "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+              "currency": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+              "amount": "10000",
+              "payTo": "0xb18fc2275f36dae99eb215caeff03b431f887d16",
+              "maxTimeoutSeconds": 60
+            }
+          ]
+        },
+        "selected_payment": {
+          "rail": "base",
+          "network": "eip155:8453",
+          "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+          "amount_atomic": 10000,
+          "display_amount": "$0.01",
+          "normalized_usd": 0.01,
+          "payTo": "0xb18fc2275f36dae99eb215caeff03b431f887d16",
+          "facilitator": null
+        },
+        "probed_at": "2026-09-05T00:00:00Z",
+        "latency_ms": 12,
+        "applied_constraints": {
+          "max_price_usd": 0.02
+        },
+        "decision_binding": {
+          "model": "proof_carrying_route_v1",
+          "observed_at": 1788566400,
+          "expires_at": 1788566460,
+          "request": {
+            "url": "https://example.com/api",
+            "method": "GET",
+            "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          "quote_sha256": "a685c8dc55c793fd047c27cc8cf3f6067deef2a667b37c237af634d5c5c8e1fe",
+          "selected_index": 0
+        },
+        "payment_authorization": {
+          "pq_native": false
+        },
+        "pq_trust": {
+          "transparency": {
+            "log_origin": "402signal.com/pq/log",
+            "leaf_type": "402signal.route_decision.v4",
+            "reveal": {
+              "type": "402signal.route_decision.v4",
+              "ts": "2026-09-05T00:00:00Z",
+              "nonce": "0000000000000000000000000000000000000000000000000000000000000001",
+              "commitment": "17b26aba6fa2fc6f728bd602d4666ba03a8cb4340814c758fad57181666aeb5d",
+              "event_version": "402signal.route_decision.v4",
+              "evidence": {
+                "evidence_version": 2,
+                "routing_evidence_json": "{\"comparison\":{\"candidate_count\":null,\"candidate_set_digest\":null,\"observation_batch_hash\":null,\"probe_batch_id\":null},\"decision\":{\"miss_reason\":null,\"outcome\":\"winner\",\"winner_url\":\"https://example.com/api\"},\"evidence_version\":1,\"observation\":{\"challenge_observed\":true,\"http_status\":402,\"invocable\":true,\"latency_ms\":12,\"live\":true,\"observed_at\":\"2026-09-05T00:00:00Z\",\"payable\":true},\"policy\":{\"constraints\":{\"max_price_usd\":0.02},\"objective\":null,\"unresolved\":[]},\"request\":{\"need\":\"weather\",\"url\":\"https://example.com/api\"},\"scoring\":{\"model_hash\":\"499ecdaf05b310ee79634f5d5faff77d77d7d5c84be9f81a7cebd9f64b3ad7f3\",\"model_id\":\"reputation-v1\"},\"selected_payment\":{\"amount_atomic\":\"10000\",\"asset\":\"0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913\",\"network\":\"eip155:8453\",\"payTo\":\"0xb18fc2275f36dae99eb215caeff03b431f887d16\",\"rail\":\"base\",\"scheme\":null}}",
+                "request_json": "{\"max_price_usd\":0.02,\"need\":\"weather\",\"require_route_binding\":true}",
+                "binding": {
+                  "model": "proof_carrying_route_v1",
+                  "observed_at": 1788566400,
+                  "expires_at": 1788566460,
+                  "request": {
+                    "url": "https://example.com/api",
+                    "method": "GET",
+                    "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  "quote_sha256": "a685c8dc55c793fd047c27cc8cf3f6067deef2a667b37c237af634d5c5c8e1fe",
+                  "selected_index": 0
+                }
+              },
+              "salt": "0000000000000000000000000000000000000000000000000000000000000000"
+            },
+            "status": "pending",
+            "state": "checkpoint_signed",
+            "index": 0,
+            "checkpoint_size": 1,
+            "receipt": {
+              "index": 0,
+              "inclusion_path": [],
+              "checkpoint": "402signal.com/pq/log\n1\n807YGwnMFg80xKfBQkHH6nz6WLYL8Pk8ZP+wyJqiteU=\n\n— 402signal.com/pq/log bMKVpNUKqL3Z1GL0wjzFw4xIFe3ZUnowYiZ2GP/S0PXdn2N4ts48kdbACumQZvS5bDoXU0KasK5naxtVnXh5eVOzFw8=\n",
+              "leaf_hash": "f34ed81b09cc160f34c4a7c14241c7ea7cfa58b60bf0f93c64ffb0c89aa2b5e5"
+            }
+          }
+        }
+      },
+      "challenge": {
+        "x402Version": 2,
+        "accepts": [
+          {
+            "scheme": "exact",
+            "network": "eip155:8453",
+            "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+            "currency": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+            "amount": "10000",
+            "payTo": "0xb18fc2275f36dae99eb215caeff03b431f887d16",
+            "maxTimeoutSeconds": 60
+          }
+        ]
+      },
+      "now": 1788566402,
+      "method": "GET",
+      "body": ""
+    },
+    {
+      "rail": "solana",
+      "request": {
+        "need": "weather",
+        "max_price_usd": 0.02,
+        "require_route_binding": true
+      },
+      "response": {
+        "url": "https://example.com/api",
+        "live": true,
+        "payable": true,
+        "invocable": true,
+        "status": 402,
+        "payTo": "HCM423cyKYVUoq9GvmqUphZwYVB6M2wez34i9jzSewLy",
+        "envelope": {
+          "x402Version": 2,
+          "accepts": [
+            {
+              "scheme": "exact",
+              "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+              "asset": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+              "currency": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+              "amount": "10000",
+              "payTo": "HCM423cyKYVUoq9GvmqUphZwYVB6M2wez34i9jzSewLy",
+              "maxTimeoutSeconds": 60
+            }
+          ]
+        },
+        "selected_payment": {
+          "rail": "solana",
+          "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+          "asset": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+          "amount_atomic": 10000,
+          "display_amount": "$0.01",
+          "normalized_usd": 0.01,
+          "payTo": "HCM423cyKYVUoq9GvmqUphZwYVB6M2wez34i9jzSewLy",
+          "facilitator": null
+        },
+        "probed_at": "2026-09-05T00:00:00Z",
+        "latency_ms": 12,
+        "applied_constraints": {
+          "max_price_usd": 0.02
+        },
+        "decision_binding": {
+          "model": "proof_carrying_route_v1",
+          "observed_at": 1788566400,
+          "expires_at": 1788566460,
+          "request": {
+            "url": "https://example.com/api",
+            "method": "GET",
+            "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          "quote_sha256": "473ddc41896a86ec10f9aa84f576e4d5ba98d87e31a60f4bc66860ca266e782f",
+          "selected_index": 0
+        },
+        "payment_authorization": {
+          "pq_native": false
+        },
+        "pq_trust": {
+          "transparency": {
+            "log_origin": "402signal.com/pq/log",
+            "leaf_type": "402signal.route_decision.v4",
+            "reveal": {
+              "type": "402signal.route_decision.v4",
+              "ts": "2026-09-05T00:00:00Z",
+              "nonce": "0000000000000000000000000000000000000000000000000000000000000002",
+              "commitment": "7edf2f914f1cf9acec3c165f23a1a089466d9b3f0e8fd3e5a471234b8f8b1d42",
+              "event_version": "402signal.route_decision.v4",
+              "evidence": {
+                "evidence_version": 2,
+                "routing_evidence_json": "{\"comparison\":{\"candidate_count\":null,\"candidate_set_digest\":null,\"observation_batch_hash\":null,\"probe_batch_id\":null},\"decision\":{\"miss_reason\":null,\"outcome\":\"winner\",\"winner_url\":\"https://example.com/api\"},\"evidence_version\":1,\"observation\":{\"challenge_observed\":true,\"http_status\":402,\"invocable\":true,\"latency_ms\":12,\"live\":true,\"observed_at\":\"2026-09-05T00:00:00Z\",\"payable\":true},\"policy\":{\"constraints\":{\"max_price_usd\":0.02},\"objective\":null,\"unresolved\":[]},\"request\":{\"need\":\"weather\",\"url\":\"https://example.com/api\"},\"scoring\":{\"model_hash\":\"499ecdaf05b310ee79634f5d5faff77d77d7d5c84be9f81a7cebd9f64b3ad7f3\",\"model_id\":\"reputation-v1\"},\"selected_payment\":{\"amount_atomic\":\"10000\",\"asset\":\"EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v\",\"network\":\"solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp\",\"payTo\":\"HCM423cyKYVUoq9GvmqUphZwYVB6M2wez34i9jzSewLy\",\"rail\":\"solana\",\"scheme\":null}}",
+                "request_json": "{\"max_price_usd\":0.02,\"need\":\"weather\",\"require_route_binding\":true}",
+                "binding": {
+                  "model": "proof_carrying_route_v1",
+                  "observed_at": 1788566400,
+                  "expires_at": 1788566460,
+                  "request": {
+                    "url": "https://example.com/api",
+                    "method": "GET",
+                    "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  "quote_sha256": "473ddc41896a86ec10f9aa84f576e4d5ba98d87e31a60f4bc66860ca266e782f",
+                  "selected_index": 0
+                }
+              },
+              "salt": "0101010101010101010101010101010101010101010101010101010101010101"
+            },
+            "status": "pending",
+            "state": "checkpoint_signed",
+            "index": 1,
+            "checkpoint_size": 2,
+            "receipt": {
+              "index": 1,
+              "inclusion_path": [
+                "807YGwnMFg80xKfBQkHH6nz6WLYL8Pk8ZP+wyJqiteU="
+              ],
+              "checkpoint": "402signal.com/pq/log\n2\nfhp7ftEUGpJKGrWA2XlfAgh3B6ckL7gOqtVHj7xSSpE=\n\n— 402signal.com/pq/log bMKVpPMkJeAtuE21ukRKLs1vRKJC74uNEJfDBNaQ4U81uXVF7x0D3LhnpoxMV3OzS5OoGPLKZFIhipMZ22cn34JpTg4=\n",
+              "leaf_hash": "5284a8ca4e8fe252c41271efeb3789535b63e4848a7d878148e6f72552bc2b46"
+            }
+          }
+        }
+      },
+      "challenge": {
+        "x402Version": 2,
+        "accepts": [
+          {
+            "scheme": "exact",
+            "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+            "asset": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+            "currency": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+            "amount": "10000",
+            "payTo": "HCM423cyKYVUoq9GvmqUphZwYVB6M2wez34i9jzSewLy",
+            "maxTimeoutSeconds": 60
+          }
+        ]
+      },
+      "now": 1788566402,
+      "method": "GET",
+      "body": ""
+    },
+    {
+      "rail": "algorand",
+      "request": {
+        "need": "weather",
+        "max_price_usd": 0.02,
+        "require_route_binding": true
+      },
+      "response": {
+        "url": "https://example.com/api",
+        "live": true,
+        "payable": true,
+        "invocable": true,
+        "status": 402,
+        "payTo": "N2JSJZCSORMYGYO2NSIYRUEMBFRHEOMYODVXV2MXYYHB5H2JVUGG6NJ4NQ",
+        "envelope": {
+          "x402Version": 2,
+          "accepts": [
+            {
+              "scheme": "exact",
+              "network": "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=",
+              "asset": "31566704",
+              "currency": "31566704",
+              "amount": "10000",
+              "payTo": "N2JSJZCSORMYGYO2NSIYRUEMBFRHEOMYODVXV2MXYYHB5H2JVUGG6NJ4NQ",
+              "maxTimeoutSeconds": 60
+            }
+          ]
+        },
+        "selected_payment": {
+          "rail": "algorand",
+          "network": "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=",
+          "asset": "31566704",
+          "amount_atomic": 10000,
+          "display_amount": "$0.01",
+          "normalized_usd": 0.01,
+          "payTo": "N2JSJZCSORMYGYO2NSIYRUEMBFRHEOMYODVXV2MXYYHB5H2JVUGG6NJ4NQ",
+          "facilitator": null
+        },
+        "probed_at": "2026-09-05T00:00:00Z",
+        "latency_ms": 12,
+        "applied_constraints": {
+          "max_price_usd": 0.02
+        },
+        "decision_binding": {
+          "model": "proof_carrying_route_v1",
+          "observed_at": 1788566400,
+          "expires_at": 1788566460,
+          "request": {
+            "url": "https://example.com/api",
+            "method": "GET",
+            "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          "quote_sha256": "8495a15278032f64c8ff6e228f5200bcdc89df6b2f3df0daa0881ea2ad0d4bf3",
+          "selected_index": 0
+        },
+        "payment_authorization": {
+          "pq_native": false
+        },
+        "pq_trust": {
+          "transparency": {
+            "log_origin": "402signal.com/pq/log",
+            "leaf_type": "402signal.route_decision.v4",
+            "reveal": {
+              "type": "402signal.route_decision.v4",
+              "ts": "2026-09-05T00:00:00Z",
+              "nonce": "0000000000000000000000000000000000000000000000000000000000000003",
+              "commitment": "41a6273116da65c405627aa4dd01c72f3425308d144475b48e5d8770e7b094a5",
+              "event_version": "402signal.route_decision.v4",
+              "evidence": {
+                "evidence_version": 2,
+                "routing_evidence_json": "{\"comparison\":{\"candidate_count\":null,\"candidate_set_digest\":null,\"observation_batch_hash\":null,\"probe_batch_id\":null},\"decision\":{\"miss_reason\":null,\"outcome\":\"winner\",\"winner_url\":\"https://example.com/api\"},\"evidence_version\":1,\"observation\":{\"challenge_observed\":true,\"http_status\":402,\"invocable\":true,\"latency_ms\":12,\"live\":true,\"observed_at\":\"2026-09-05T00:00:00Z\",\"payable\":true},\"policy\":{\"constraints\":{\"max_price_usd\":0.02},\"objective\":null,\"unresolved\":[]},\"request\":{\"need\":\"weather\",\"url\":\"https://example.com/api\"},\"scoring\":{\"model_hash\":\"499ecdaf05b310ee79634f5d5faff77d77d7d5c84be9f81a7cebd9f64b3ad7f3\",\"model_id\":\"reputation-v1\"},\"selected_payment\":{\"amount_atomic\":\"10000\",\"asset\":\"31566704\",\"network\":\"algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=\",\"payTo\":\"N2JSJZCSORMYGYO2NSIYRUEMBFRHEOMYODVXV2MXYYHB5H2JVUGG6NJ4NQ\",\"rail\":\"algorand\",\"scheme\":null}}",
+                "request_json": "{\"max_price_usd\":0.02,\"need\":\"weather\",\"require_route_binding\":true}",
+                "binding": {
+                  "model": "proof_carrying_route_v1",
+                  "observed_at": 1788566400,
+                  "expires_at": 1788566460,
+                  "request": {
+                    "url": "https://example.com/api",
+                    "method": "GET",
+                    "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  "quote_sha256": "8495a15278032f64c8ff6e228f5200bcdc89df6b2f3df0daa0881ea2ad0d4bf3",
+                  "selected_index": 0
+                }
+              },
+              "salt": "0202020202020202020202020202020202020202020202020202020202020202"
+            },
+            "status": "pending",
+            "state": "checkpoint_signed",
+            "index": 2,
+            "checkpoint_size": 3,
+            "receipt": {
+              "index": 2,
+              "inclusion_path": [
+                "fhp7ftEUGpJKGrWA2XlfAgh3B6ckL7gOqtVHj7xSSpE="
+              ],
+              "checkpoint": "402signal.com/pq/log\n3\n/EDev2GoEf0bh3gS7thSyhb1fX0X3pNkdOsM0bwcwBI=\n\n— 402signal.com/pq/log bMKVpIyl8CJA/tRv87ctmOxtoZSM3L7I5RnbdUpItOXgvcglhSAeKucRqZEw91oUCHda+e2Jk6sc1e25IF59FvfiWwg=\n",
+              "leaf_hash": "7e30fca534693576e66440f7a73e3b48b2200a26e45cf30ffe23920e5c3807c1"
+            }
+          }
+        }
+      },
+      "challenge": {
+        "x402Version": 2,
+        "accepts": [
+          {
+            "scheme": "exact",
+            "network": "algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=",
+            "asset": "31566704",
+            "currency": "31566704",
+            "amount": "10000",
+            "payTo": "N2JSJZCSORMYGYO2NSIYRUEMBFRHEOMYODVXV2MXYYHB5H2JVUGG6NJ4NQ",
+            "maxTimeoutSeconds": 60
+          }
+        ]
+      },
+      "now": 1788566402,
+      "method": "GET",
+      "body": ""
+    },
+    {
+      "rail": "base",
+      "request": {
+        "need": "weather",
+        "max_price_usd": 0.02,
+        "require_route_binding": true
+      },
+      "response": {
+        "url": "https://example.com/api",
+        "live": true,
+        "payable": true,
+        "invocable": true,
+        "status": 402,
+        "payTo": "0xb18fc2275f36dae99eb215caeff03b431f887d16",
+        "envelope": {
+          "x402Version": 2,
+          "accepts": [
+            {
+              "scheme": "exact",
+              "network": "eip155:8453",
+              "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+              "currency": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+              "amount": "10000",
+              "payTo": "0xb18fc2275f36dae99eb215caeff03b431f887d16",
+              "maxTimeoutSeconds": 60
+            }
+          ],
+          "extensions": {
+            "bazaar": {
+              "😀": "a\nb",
+              "": " "
+            }
+          }
+        },
+        "selected_payment": {
+          "rail": "base",
+          "network": "eip155:8453",
+          "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+          "amount_atomic": 10000,
+          "display_amount": "$0.01",
+          "normalized_usd": 0.01,
+          "payTo": "0xb18fc2275f36dae99eb215caeff03b431f887d16",
+          "facilitator": null
+        },
+        "probed_at": "2026-09-05T00:00:00Z",
+        "latency_ms": 12,
+        "applied_constraints": {
+          "max_price_usd": 0.02
+        },
+        "decision_binding": {
+          "model": "proof_carrying_route_v1",
+          "observed_at": 1788566400,
+          "expires_at": 1788566460,
+          "request": {
+            "url": "https://example.com/api",
+            "method": "POST",
+            "body_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+          },
+          "quote_sha256": "e1c979045e9c6280ebb640f7a03758ec981b20f7612c76601756455e624cf17a",
+          "selected_index": 0
+        },
+        "payment_authorization": {
+          "pq_native": false
+        },
+        "pq_trust": {
+          "transparency": {
+            "log_origin": "402signal.com/pq/log",
+            "leaf_type": "402signal.route_decision.v4",
+            "reveal": {
+              "type": "402signal.route_decision.v4",
+              "ts": "2026-09-05T00:00:00Z",
+              "nonce": "0000000000000000000000000000000000000000000000000000000000000004",
+              "commitment": "0b36d5810bbcc9a449f4c82641cffa9a1b1d9410508ee6d5f237bf5eb96b785e",
+              "event_version": "402signal.route_decision.v4",
+              "evidence": {
+                "evidence_version": 2,
+                "routing_evidence_json": "{\"comparison\":{\"candidate_count\":null,\"candidate_set_digest\":null,\"observation_batch_hash\":null,\"probe_batch_id\":null},\"decision\":{\"miss_reason\":null,\"outcome\":\"winner\",\"winner_url\":\"https://example.com/api\"},\"evidence_version\":1,\"observation\":{\"challenge_observed\":true,\"http_status\":402,\"invocable\":true,\"latency_ms\":12,\"live\":true,\"observed_at\":\"2026-09-05T00:00:00Z\",\"payable\":true},\"policy\":{\"constraints\":{\"max_price_usd\":0.02},\"objective\":null,\"unresolved\":[]},\"request\":{\"need\":\"weather\",\"url\":\"https://example.com/api\"},\"scoring\":{\"model_hash\":\"499ecdaf05b310ee79634f5d5faff77d77d7d5c84be9f81a7cebd9f64b3ad7f3\",\"model_id\":\"reputation-v1\"},\"selected_payment\":{\"amount_atomic\":\"10000\",\"asset\":\"0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913\",\"network\":\"eip155:8453\",\"payTo\":\"0xb18fc2275f36dae99eb215caeff03b431f887d16\",\"rail\":\"base\",\"scheme\":null}}",
+                "request_json": "{\"max_price_usd\":0.02,\"need\":\"weather\",\"require_route_binding\":true}",
+                "binding": {
+                  "model": "proof_carrying_route_v1",
+                  "observed_at": 1788566400,
+                  "expires_at": 1788566460,
+                  "request": {
+                    "url": "https://example.com/api",
+                    "method": "POST",
+                    "body_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+                  },
+                  "quote_sha256": "e1c979045e9c6280ebb640f7a03758ec981b20f7612c76601756455e624cf17a",
+                  "selected_index": 0
+                }
+              },
+              "salt": "0303030303030303030303030303030303030303030303030303030303030303"
+            },
+            "status": "pending",
+            "state": "checkpoint_signed",
+            "index": 3,
+            "checkpoint_size": 4,
+            "receipt": {
+              "index": 3,
+              "inclusion_path": [
+                "fjD8pTRpNXbmZED3pz47SLIgCibkXPMP/iOSDlw4B8E=",
+                "fhp7ftEUGpJKGrWA2XlfAgh3B6ckL7gOqtVHj7xSSpE="
+              ],
+              "checkpoint": "402signal.com/pq/log\n4\nphtkaR9cfr3H8bUQY2cjvmKvR7rXPycyvJsCt0C7Sco=\n\n— 402signal.com/pq/log bMKVpIyjPAE4OkqClnXc5TADQekUnnRA9pI+zAs2czzHsabEag8OZZrtAlsUzkBHJYsGNhN6JlwI59L0Cbwg1HjyJwA=\n",
+              "leaf_hash": "45867aa27ae75609952facfc3fbcec969ec12a180b26673902955f491ed8b847"
+            }
+          }
+        }
+      },
+      "challenge": {
+        "x402Version": 2,
+        "accepts": [
+          {
+            "scheme": "exact",
+            "network": "eip155:8453",
+            "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+            "currency": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+            "amount": "10000",
+            "payTo": "0xb18fc2275f36dae99eb215caeff03b431f887d16",
+            "maxTimeoutSeconds": 60
+          }
+        ],
+        "extensions": {
+          "bazaar": {
+            "😀": "a\nb",
+            "": " "
+          }
+        }
+      },
+      "now": 1788566402,
+      "method": "POST",
+      "body": "{}"
+    }
+  ],
+  "historical_inclusions": [
+    {
+      "rail": "base",
+      "request": {
+        "need": "weather",
+        "max_price_usd": 0.02,
+        "require_route_binding": true
+      },
+      "response": {
+        "url": "https://example.com/api",
+        "live": true,
+        "payable": true,
+        "invocable": true,
+        "status": 402,
+        "payTo": "0xb18fc2275f36dae99eb215caeff03b431f887d16",
+        "envelope": {
+          "x402Version": 2,
+          "accepts": [
+            {
+              "scheme": "exact",
+              "network": "eip155:8453",
+              "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+              "currency": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+              "amount": "10000",
+              "payTo": "0xb18fc2275f36dae99eb215caeff03b431f887d16",
+              "maxTimeoutSeconds": 60
+            }
+          ]
+        },
+        "selected_payment": {
+          "rail": "base",
+          "network": "eip155:8453",
+          "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+          "amount_atomic": 10000,
+          "display_amount": "$0.01",
+          "normalized_usd": 0.01,
+          "payTo": "0xb18fc2275f36dae99eb215caeff03b431f887d16",
+          "facilitator": null
+        },
+        "probed_at": "2026-09-05T00:00:00Z",
+        "latency_ms": 12,
+        "applied_constraints": {
+          "max_price_usd": 0.02
+        },
+        "decision_binding": {
+          "model": "proof_carrying_route_v1",
+          "observed_at": 1788566400,
+          "expires_at": 1788566460,
+          "request": {
+            "url": "https://example.com/api",
+            "method": "GET",
+            "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          "quote_sha256": "a685c8dc55c793fd047c27cc8cf3f6067deef2a667b37c237af634d5c5c8e1fe",
+          "selected_index": 0
+        },
+        "payment_authorization": {
+          "pq_native": false
+        },
+        "pq_trust": {
+          "transparency": {
+            "log_origin": "402signal.com/pq/log",
+            "leaf_type": "402signal.route_decision.v4",
+            "reveal": {
+              "type": "402signal.route_decision.v4",
+              "ts": "2026-09-05T00:00:00Z",
+              "nonce": "0000000000000000000000000000000000000000000000000000000000000001",
+              "commitment": "17b26aba6fa2fc6f728bd602d4666ba03a8cb4340814c758fad57181666aeb5d",
+              "event_version": "402signal.route_decision.v4",
+              "evidence": {
+                "evidence_version": 2,
+                "routing_evidence_json": "{\"comparison\":{\"candidate_count\":null,\"candidate_set_digest\":null,\"observation_batch_hash\":null,\"probe_batch_id\":null},\"decision\":{\"miss_reason\":null,\"outcome\":\"winner\",\"winner_url\":\"https://example.com/api\"},\"evidence_version\":1,\"observation\":{\"challenge_observed\":true,\"http_status\":402,\"invocable\":true,\"latency_ms\":12,\"live\":true,\"observed_at\":\"2026-09-05T00:00:00Z\",\"payable\":true},\"policy\":{\"constraints\":{\"max_price_usd\":0.02},\"objective\":null,\"unresolved\":[]},\"request\":{\"need\":\"weather\",\"url\":\"https://example.com/api\"},\"scoring\":{\"model_hash\":\"499ecdaf05b310ee79634f5d5faff77d77d7d5c84be9f81a7cebd9f64b3ad7f3\",\"model_id\":\"reputation-v1\"},\"selected_payment\":{\"amount_atomic\":\"10000\",\"asset\":\"0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913\",\"network\":\"eip155:8453\",\"payTo\":\"0xb18fc2275f36dae99eb215caeff03b431f887d16\",\"rail\":\"base\",\"scheme\":null}}",
+                "request_json": "{\"max_price_usd\":0.02,\"need\":\"weather\",\"require_route_binding\":true}",
+                "binding": {
+                  "model": "proof_carrying_route_v1",
+                  "observed_at": 1788566400,
+                  "expires_at": 1788566460,
+                  "request": {
+                    "url": "https://example.com/api",
+                    "method": "GET",
+                    "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  "quote_sha256": "a685c8dc55c793fd047c27cc8cf3f6067deef2a667b37c237af634d5c5c8e1fe",
+                  "selected_index": 0
+                }
+              },
+              "salt": "0000000000000000000000000000000000000000000000000000000000000000"
+            },
+            "status": "pending",
+            "state": "checkpoint_signed",
+            "index": 0,
+            "checkpoint_size": 1,
+            "receipt": {
+              "index": 0,
+              "inclusion_path": [
+                "UoSoyk6P4lLEEnHv6zeJU1tj5ISKfYeBSOb3JVK8K0Y=",
+                "fjD8pTRpNXbmZED3pz47SLIgCibkXPMP/iOSDlw4B8E="
+              ],
+              "checkpoint": "402signal.com/pq/log\n3\n/EDev2GoEf0bh3gS7thSyhb1fX0X3pNkdOsM0bwcwBI=\n\n— 402signal.com/pq/log bMKVpIyl8CJA/tRv87ctmOxtoZSM3L7I5RnbdUpItOXgvcglhSAeKucRqZEw91oUCHda+e2Jk6sc1e25IF59FvfiWwg=\n",
+              "leaf_hash": "f34ed81b09cc160f34c4a7c14241c7ea7cfa58b60bf0f93c64ffb0c89aa2b5e5"
+            }
+          }
+        }
+      },
+      "challenge": {
+        "x402Version": 2,
+        "accepts": [
+          {
+            "scheme": "exact",
+            "network": "eip155:8453",
+            "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+            "currency": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+            "amount": "10000",
+            "payTo": "0xb18fc2275f36dae99eb215caeff03b431f887d16",
+            "maxTimeoutSeconds": 60
+          }
+        ]
+      },
+      "now": 1788566402,
+      "method": "GET",
+      "body": ""
+    },
+    {
+      "rail": "solana",
+      "request": {
+        "need": "weather",
+        "max_price_usd": 0.02,
+        "require_route_binding": true
+      },
+      "response": {
+        "url": "https://example.com/api",
+        "live": true,
+        "payable": true,
+        "invocable": true,
+        "status": 402,
+        "payTo": "HCM423cyKYVUoq9GvmqUphZwYVB6M2wez34i9jzSewLy",
+        "envelope": {
+          "x402Version": 2,
+          "accepts": [
+            {
+              "scheme": "exact",
+              "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+              "asset": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+              "currency": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+              "amount": "10000",
+              "payTo": "HCM423cyKYVUoq9GvmqUphZwYVB6M2wez34i9jzSewLy",
+              "maxTimeoutSeconds": 60
+            }
+          ]
+        },
+        "selected_payment": {
+          "rail": "solana",
+          "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+          "asset": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+          "amount_atomic": 10000,
+          "display_amount": "$0.01",
+          "normalized_usd": 0.01,
+          "payTo": "HCM423cyKYVUoq9GvmqUphZwYVB6M2wez34i9jzSewLy",
+          "facilitator": null
+        },
+        "probed_at": "2026-09-05T00:00:00Z",
+        "latency_ms": 12,
+        "applied_constraints": {
+          "max_price_usd": 0.02
+        },
+        "decision_binding": {
+          "model": "proof_carrying_route_v1",
+          "observed_at": 1788566400,
+          "expires_at": 1788566460,
+          "request": {
+            "url": "https://example.com/api",
+            "method": "GET",
+            "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          "quote_sha256": "473ddc41896a86ec10f9aa84f576e4d5ba98d87e31a60f4bc66860ca266e782f",
+          "selected_index": 0
+        },
+        "payment_authorization": {
+          "pq_native": false
+        },
+        "pq_trust": {
+          "transparency": {
+            "log_origin": "402signal.com/pq/log",
+            "leaf_type": "402signal.route_decision.v4",
+            "reveal": {
+              "type": "402signal.route_decision.v4",
+              "ts": "2026-09-05T00:00:00Z",
+              "nonce": "0000000000000000000000000000000000000000000000000000000000000002",
+              "commitment": "7edf2f914f1cf9acec3c165f23a1a089466d9b3f0e8fd3e5a471234b8f8b1d42",
+              "event_version": "402signal.route_decision.v4",
+              "evidence": {
+                "evidence_version": 2,
+                "routing_evidence_json": "{\"comparison\":{\"candidate_count\":null,\"candidate_set_digest\":null,\"observation_batch_hash\":null,\"probe_batch_id\":null},\"decision\":{\"miss_reason\":null,\"outcome\":\"winner\",\"winner_url\":\"https://example.com/api\"},\"evidence_version\":1,\"observation\":{\"challenge_observed\":true,\"http_status\":402,\"invocable\":true,\"latency_ms\":12,\"live\":true,\"observed_at\":\"2026-09-05T00:00:00Z\",\"payable\":true},\"policy\":{\"constraints\":{\"max_price_usd\":0.02},\"objective\":null,\"unresolved\":[]},\"request\":{\"need\":\"weather\",\"url\":\"https://example.com/api\"},\"scoring\":{\"model_hash\":\"499ecdaf05b310ee79634f5d5faff77d77d7d5c84be9f81a7cebd9f64b3ad7f3\",\"model_id\":\"reputation-v1\"},\"selected_payment\":{\"amount_atomic\":\"10000\",\"asset\":\"EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v\",\"network\":\"solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp\",\"payTo\":\"HCM423cyKYVUoq9GvmqUphZwYVB6M2wez34i9jzSewLy\",\"rail\":\"solana\",\"scheme\":null}}",
+                "request_json": "{\"max_price_usd\":0.02,\"need\":\"weather\",\"require_route_binding\":true}",
+                "binding": {
+                  "model": "proof_carrying_route_v1",
+                  "observed_at": 1788566400,
+                  "expires_at": 1788566460,
+                  "request": {
+                    "url": "https://example.com/api",
+                    "method": "GET",
+                    "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  "quote_sha256": "473ddc41896a86ec10f9aa84f576e4d5ba98d87e31a60f4bc66860ca266e782f",
+                  "selected_index": 0
+                }
+              },
+              "salt": "0101010101010101010101010101010101010101010101010101010101010101"
+            },
+            "status": "pending",
+            "state": "checkpoint_signed",
+            "index": 1,
+            "checkpoint_size": 2,
+            "receipt": {
+              "index": 1,
+              "inclusion_path": [
+                "807YGwnMFg80xKfBQkHH6nz6WLYL8Pk8ZP+wyJqiteU=",
+                "fjD8pTRpNXbmZED3pz47SLIgCibkXPMP/iOSDlw4B8E="
+              ],
+              "checkpoint": "402signal.com/pq/log\n3\n/EDev2GoEf0bh3gS7thSyhb1fX0X3pNkdOsM0bwcwBI=\n\n— 402signal.com/pq/log bMKVpIyl8CJA/tRv87ctmOxtoZSM3L7I5RnbdUpItOXgvcglhSAeKucRqZEw91oUCHda+e2Jk6sc1e25IF59FvfiWwg=\n",
+              "leaf_hash": "5284a8ca4e8fe252c41271efeb3789535b63e4848a7d878148e6f72552bc2b46"
+            }
+          }
+        }
+      },
+      "challenge": {
+        "x402Version": 2,
+        "accepts": [
+          {
+            "scheme": "exact",
+            "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+            "asset": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+            "currency": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+            "amount": "10000",
+            "payTo": "HCM423cyKYVUoq9GvmqUphZwYVB6M2wez34i9jzSewLy",
+            "maxTimeoutSeconds": 60
+          }
+        ]
+      },
+      "now": 1788566402,
+      "method": "GET",
+      "body": ""
+    }
+  ]
+}

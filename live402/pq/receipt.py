@@ -7,7 +7,8 @@ States: logged_uncheckpointed → checkpoint_signed → authorized →
 submitted → confirmed. Public status "pending" still means durable leaf
 + signed checkpoint (checkpoint_signed), not an Algorand inclusion.
 Never say pending if the leaf is not durable. Never say signed if there
-is no checkpoint. unavailable = could not append. Do not wait for
+is no checkpoint. unavailable = receipt unavailable; an append may have occurred.
+Do not wait for
 Algorand on the request path. Never emit pq_secure:true.
 """
 
@@ -273,11 +274,11 @@ def issue(event: dict) -> dict:
 
 
 def verify_route_receipt(receipt: dict, reveal: dict, vkey: str | None = None) -> dict:
-    """Fail-closed v3 receipt check: event version, reveal, commitment, leaf, inclusion, Ed25519."""
+    """Fail-closed v3/v4 check: version, reveal, commitment, leaf, inclusion, Ed25519."""
     if not isinstance(receipt, dict) or not isinstance(reveal, dict):
         raise ReceiptError("invalid receipt")
     version = reveal.get("event_version") or reveal.get("type")
-    if version != events.TYPE_ROUTE_DECISION_V3:
+    if version not in {events.TYPE_ROUTE_DECISION_V3, events.TYPE_ROUTE_DECISION_V4}:
         raise ReceiptError("unsupported event version")
     commitment = reveal.get("commitment")
     if not isinstance(commitment, str) or len(commitment) != 64:
@@ -288,7 +289,10 @@ def verify_route_receipt(receipt: dict, reveal: dict, vkey: str | None = None) -
     ts = reveal.get("ts")
     if not isinstance(evidence, dict) or not salt or not nonce or not ts:
         raise ReceiptError("missing reveal fields")
-    if not events.verify_reveal_v3(commitment, reveal):
+    from live402.pq import route_v4
+
+    verify_reveal = route_v4.verify_reveal if version == route_v4.TYPE else events.verify_reveal_v3
+    if not verify_reveal(commitment, reveal):
         raise ReceiptError("reveal mismatch")
     leaf_hex = receipt.get("leaf_hash")
     if not isinstance(leaf_hex, str) or not leaf_hex:
@@ -297,7 +301,7 @@ def verify_route_receipt(receipt: dict, reveal: dict, vkey: str | None = None) -
         "commitment": commitment.lower(),
         "nonce": nonce,
         "ts": ts,
-        "type": events.TYPE_ROUTE_DECISION_V3,
+        "type": version,
     }
     try:
         body = events.leaf_bytes(public_leaf)
@@ -306,7 +310,13 @@ def verify_route_receipt(receipt: dict, reveal: dict, vkey: str | None = None) -
     expected_leaf = merkle.leaf_hash(body).hex()
     if expected_leaf != leaf_hex.lower():
         raise ReceiptError("leaf hash mismatch")
-    return verify_receipt(receipt, vkey)
+    checked = verify_receipt(receipt, vkey)
+    if version == events.TYPE_ROUTE_DECISION_V4:
+        if not vkey or checked["body"]["origin"] != ckpt.vkey_parse(vkey)["name"]:
+            raise ReceiptError("untrusted log origin")
+        if type(receipt.get("index")) is not int:
+            raise ReceiptError("invalid receipt index")
+    return checked
 
 
 def verify_receipt(receipt: dict, vkey: str | None = None) -> dict:
@@ -367,11 +377,17 @@ def attach_to_route(result: dict, request_body: dict | None = None) -> dict:
         return _unavailable(result, origin)
     try:
         req = request_body if isinstance(request_body, dict) else {}
-        evidence = events.private_evidence_v3_from_route(result, req)
-        ev, reveal = events.route_decision_event_v3(evidence=evidence)
+        if req.get("require_route_binding") is True:
+            from live402.pq import route_v4
+
+            evidence = route_v4.evidence_from_route(result, req)
+            ev, reveal = route_v4.event(evidence)
+        else:
+            evidence = events.private_evidence_v3_from_route(result, req)
+            ev, reveal = events.route_decision_event_v3(evidence=evidence)
         transparency = {
             "log_origin": origin,
-            "leaf_type": events.TYPE_ROUTE_DECISION_V3,
+            "leaf_type": ev["type"],
             "reveal": reveal,
         }
         if available():
@@ -392,6 +408,8 @@ def attach_to_route(result: dict, request_body: dict | None = None) -> dict:
                     }
                 )
             except ReceiptError:
+                if req.get("require_route_binding") is True:
+                    raise  # An append may already be durable; never append v4 twice.
                 rec = append_event(ev)
                 transparency.update(
                     {

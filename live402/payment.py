@@ -195,6 +195,10 @@ BAZAAR_MCP = {
                         "type": "boolean",
                         "description": "If true, allow selecting a destination whose payTo just changed for the first time.",
                     },
+                    "require_route_binding": {
+                        "type": "boolean",
+                        "description": "Opt in to a v4 proof-carrying route. Requires exact observed x402 v2 terms and a signed checkpoint receipt; implies require_transparency. Buyer verifies before seller signing.",
+                    },
                     "require_transparency": {
                         "type": "boolean",
                         "description": (
@@ -202,8 +206,8 @@ BAZAAR_MCP = {
                             "cannot be produced. This guarantees delivery, not server-side "
                             "recovery. Securely retain the complete paid /route response, "
                             "especially pq_trust.transparency.receipt and "
-                            "pq_trust.transparency.reveal. 402Signal does not retain the "
-                            "private reveal and cannot recover it if lost. Default false "
+                            "pq_trust.transparency.reveal. Private replay outcomes can retain "
+                            "the reveal; they are not a recovery service. Keep your own copy. Default false "
                             "(SEC-ROUTER-004 / A-14): "
                             "a settled winner does not require a durable signed leaf; "
                             "free typed misses create no route-decision leaf."

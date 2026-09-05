@@ -25,8 +25,8 @@ TRANSPARENCY_STATUSES = ("pending", "logged_uncheckpointed", "unavailable")
 TRANSPARENCY_RETENTION_DESC = (
     "To verify the routing decision later, securely retain the complete paid /route "
     "response, especially pq_trust.transparency.receipt and "
-    "pq_trust.transparency.reveal. 402Signal does not retain the private reveal and "
-    "cannot recover it if lost. Modified evidence fails verification against the "
+    "pq_trust.transparency.reveal. Private replay outcomes can retain the reveal; "
+    "they are not a recovery service. Keep your own copy. Modified evidence fails verification against the "
     "public log."
 )
 
@@ -274,6 +274,10 @@ def route_constraint_properties() -> dict:
             "type": "boolean",
             "description": ACCEPT_PAYTO_CHANGE_DESC,
         },
+        "require_route_binding": {
+            "type": "boolean",
+            "description": ROUTE_BINDING_DESC,
+        },
         "require_transparency": {
             "type": "boolean",
             "description": REQUIRE_TRANSPARENCY_DESC,
@@ -392,3 +396,38 @@ def v3_unbound_fields() -> tuple[str, ...]:
         "full_compared_rows",
         "salt",
     )
+
+
+ROUTE_BINDING_DESC = (
+    "Opt in to proof_carrying_route_v1 and a signed v4 receipt. Requires exact "
+    "x402 v2 terms observed on the same HTTPS URL, method and probe body, without "
+    "redirects or unresolved policy. Unprovable binding is a free typed miss. "
+    "Implies require_transparency; a receipt failure after settlement still reports "
+    "settled=true. Buyer must verify with a pinned log key and recheck the actual "
+    "seller challenge immediately before signing. The freshness window starts at "
+    "observation, not receipt issuance. This is not a payment authorization."
+)
+
+
+def decision_binding_schema() -> dict:
+    return {
+        "type": "object", "additionalProperties": False,
+        "required": ["model", "observed_at", "expires_at", "request", "quote_sha256", "selected_index"],
+        "properties": {
+            "model": {"type": "string", "const": "proof_carrying_route_v1"},
+            "observed_at": {"type": "integer", "minimum": 0},
+            "expires_at": {"type": "integer", "minimum": 1},
+            "quote_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            "selected_index": {"type": "integer", "minimum": 0, "maximum": 31},
+            "request": {
+                "type": "object", "additionalProperties": False,
+                "required": ["url", "method", "body_sha256"],
+                "properties": {
+                    "url": {"type": "string", "format": "uri"},
+                    "method": {"type": "string", "enum": ["GET", "POST"]},
+                    "body_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                },
+            },
+        },
+        "description": ROUTE_BINDING_DESC,
+    }

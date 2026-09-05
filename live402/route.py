@@ -357,6 +357,8 @@ def _downgrade_unbillable_result(result: dict) -> dict:
 def _require_transparency(body: dict | None) -> bool:
     if not isinstance(body, dict):
         return False
+    if body.get("require_route_binding") is True:
+        return True
     raw = body.get("require_transparency")
     return raw is True or (isinstance(raw, str) and raw.strip().lower() in {"1", "true", "yes"})
 
@@ -475,6 +477,23 @@ def _paid_execute(
         # Free misses remain tentative history and create no PQ route leaf.
         return code, result, None
 
+    if body.get("require_route_binding") is True:
+        from live402 import route_binding
+        from live402.pq import route_v4
+
+        try:
+            result["decision_binding"] = route_binding.build(result, body)
+            # Prevalidate full evidence before an economic action.
+            route_v4.evidence_from_route(result, body)
+        except (ValueError, TypeError, KeyError):
+            result = _downgrade_unbillable_result(result)
+            result.pop("decision_binding", None)
+            result["binding_error"] = "route_binding_unavailable"
+            result["billing"] = _billing(rail, settlement_attempted=False, settled=False,
+                                         settlement_state="not_attempted")
+            _log_settle_skipped(rail)
+            return 503, result, None
+
     settle_t = deadline_mod.settle_timeout(paid_deadline)
     if settle_t <= 0:
         required, extra = _required_pair(
@@ -524,6 +543,7 @@ def _paid_execute(
         history_mod.mark_batch_settled(result.get("batch_id") if isinstance(result, dict) else None)
     except Exception:
         pass
+    result.pop("binding_observation", None)
     attached = _attach_pq_trust(code, result, body if isinstance(body, dict) else {})
     if _require_transparency(body) and not _transparency_ok(attached):
         return 503, {

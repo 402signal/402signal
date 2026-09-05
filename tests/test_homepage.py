@@ -941,10 +941,10 @@ class HomepageProductTests(unittest.TestCase):
         self.assertIn("Keep the verification record", self.devs)
         self.assertIn("pq_trust.transparency.receipt", self.devs)
         self.assertIn("pq_trust.transparency.reveal", self.devs)
-        self.assertIn("402Signal does not retain the private reveal", self.devs)
+        self.assertIn("Private replay outcomes can retain", self.devs)
         self.assertIn("do not put it in public logs", self.devs)
         self.assertIn("Keep your verification record", self.transparency)
-        self.assertIn("cannot recover it if lost", self.transparency)
+        self.assertIn("not a recovery service", self.transparency)
         self.assertIn("changed evidence will fail verification", self.transparency)
 
         spec = discover.openapi_spec()
@@ -952,30 +952,30 @@ class HomepageProductTests(unittest.TestCase):
         request_schema = request_props["application/json"]["schema"]
         request_desc = request_schema["properties"]["require_transparency"]["description"]
         self.assertIn("not server-side recovery", request_desc)
-        self.assertIn("does not retain the private reveal", request_desc)
+        self.assertIn("Private replay outcomes can retain", request_desc)
         response_schema = spec["paths"]["/route"]["post"]["responses"]["200"]
         response_props = response_schema["content"]["application/json"]["schema"]["properties"]
         transparency = response_props["pq_trust"]["properties"]["transparency"]
         self.assertIn("reveal", transparency["properties"])
-        self.assertIn("Not published or retained", transparency["properties"]["reveal"]["description"])
+        self.assertIn("Not published in the public log", transparency["properties"]["reveal"]["description"])
 
         route_tool = next(tool for tool in mcp.manifest()["tools"] if tool["name"] == "route")
         mcp_input_desc = route_tool["inputSchema"]["properties"]["require_transparency"]["description"]
         self.assertEqual(mcp_input_desc, schema_fields.REQUIRE_TRANSPARENCY_DESC)
         mcp_transparency = route_tool["outputSchema"]["properties"]["pq_trust"]["properties"]["transparency"]
-        self.assertIn("does not retain the private reveal", mcp_transparency["description"])
+        self.assertIn("Private replay outcomes can retain", mcp_transparency["description"])
         self.assertIn("reveal", mcp_transparency["properties"])
 
         bazaar_desc = payment.BAZAAR_MCP["info"]["input"]["inputSchema"]["properties"]
-        self.assertIn("does not retain the private reveal", bazaar_desc["require_transparency"]["description"])
-        self.assertIn("does not retain the private reveal", discover.GUIDANCE)
+        self.assertIn("Private replay outcomes can retain", bazaar_desc["require_transparency"]["description"])
+        self.assertIn("Private replay outcomes can retain", discover.GUIDANCE)
         self.assertIn("do not put it in public logs", discover.LLMS_TXT)
 
         readme = Path(__file__).resolve().parent.parent.joinpath("README.md").read_text(
             encoding="utf-8"
         )
         self.assertIn("must securely retain the complete paid `/route` response", readme)
-        self.assertIn("cannot recover it if lost", readme)
+        self.assertIn("not a recovery service", readme)
 
     def test_seo_titles(self):
         self.assertIn("<title>402Signal · Find a paid API that works right now</title>", self.home)
