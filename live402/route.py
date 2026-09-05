@@ -8,6 +8,7 @@ import time
 from live402 import deadline as deadline_mod
 from live402 import facilitator, fixtures, payment, probe, replay, reqctx, select
 from live402 import policy as policy_mod
+from live402 import lab_traffic
 
 
 def _preserve_observed_facts(result: dict) -> None:
@@ -88,27 +89,28 @@ def _direct_url_result(body: dict, url: str, need: str, deadline: float) -> tupl
         return 503, result
     result = probe.probe_url(url, catalog_item=item, deadline=deadline, record=False)
     result = probe.attach_catalog_fields(result, item)
-    try:
-        from live402 import history as history_mod
+    if not lab_traffic.is_lab_url(url):
+        try:
+            from live402 import history as history_mod
 
-        bid = result.get("batch_id")
-        metas = history_mod.persist_route_batch(bid, [result]) if bid else {}
-        meta = metas.get(url) if isinstance(metas, dict) else None
-        if meta and meta.get("payTo_pending"):
-            result["payTo_pending"] = True
-            result["payTo_changed"] = True
-            result.setdefault("risk", ["payTo_changed"])
-        elif meta and meta.get("payTo_flipped"):
-            result["payTo_changed"] = True
-            result.setdefault("risk", ["payTo_changed"])
-    except Exception:
-        pass
-    try:
-        from live402 import history as history_mod
-        result = history_mod.attach_to_result(result)
-    except Exception:
-        if result.get("payTo_changed"):
-            result["risk"] = ["payTo_changed"]
+            bid = result.get("batch_id")
+            metas = history_mod.persist_route_batch(bid, [result]) if bid else {}
+            meta = metas.get(url) if isinstance(metas, dict) else None
+            if meta and meta.get("payTo_pending"):
+                result["payTo_pending"] = True
+                result["payTo_changed"] = True
+                result.setdefault("risk", ["payTo_changed"])
+            elif meta and meta.get("payTo_flipped"):
+                result["payTo_changed"] = True
+                result.setdefault("risk", ["payTo_changed"])
+        except Exception:
+            pass
+        try:
+            from live402 import history as history_mod
+            result = history_mod.attach_to_result(result)
+        except Exception:
+            if result.get("payTo_changed"):
+                result["risk"] = ["payTo_changed"]
     result["need"] = need or None
     result["objective"] = objective
     result["tried"] = 1
@@ -138,7 +140,7 @@ def _direct_url_result(body: dict, url: str, need: str, deadline: float) -> tupl
     if selected:
         result["selected_payment"] = selected
         probe._align_target_with_selected(result, selected)
-        if result.get("reputation") is None:
+        if result.get("reputation") is None and not lab_traffic.is_lab_url(url):
             try:
                 from live402 import reputation as reputation_mod
 
@@ -232,12 +234,18 @@ def _required_pair(resource_url: str, error: str | None = None, bazaar: dict | N
     if error:
         required = dict(required)
         required["error"] = error
+    lab_traffic.advertise(required)
     extra = {"PAYMENT-REQUIRED": payment.payment_required_header(required)}
     return required, extra
 
 
 def _bad_request(body: dict) -> tuple[int, dict] | None:
     """Body errors after a successful verify. Unpaid callers always get 402."""
+    if "lab_test" in body and (body.get("lab_test") != lab_traffic.PROTOCOL
+                                  or not lab_traffic.is_lab_url(body.get("url"))):
+        return 400, {"error": "lab target is not configured", "live": False}
+    if lab_traffic.is_lab_url(body.get("url")) and _require_transparency(body):
+        return 400, {"error": "lab tests exclude production transparency", "live": False}
     need = body.get("need")
     url = body.get("url")
     if need is not None and not isinstance(need, str):
@@ -453,6 +461,9 @@ def _paid_execute(
         return 400, result, None
 
     rail = payment.rail_of_accept(accept)
+    is_lab = lab_traffic.is_lab_url(body.get("url"))
+    if is_lab and isinstance(result, dict):
+        result["lab_testing"] = lab_traffic.classification()
     if not _billable_winner(body, code, result):
         if code == 200 or (
             isinstance(result, dict)
@@ -537,6 +548,10 @@ def _paid_execute(
         settled=True,
         settlement_state="settled",
     )
+    if is_lab:
+        result.pop("binding_observation", None)
+        result["pq_trust"] = {"transparency": {"status": "excluded_self_test", "state": "not_recorded"}}
+        return code, result, extra
     try:
         from live402 import history as history_mod
 
@@ -566,6 +581,9 @@ def handle_route(body: dict, headers, resource_url: str, bazaar: dict | None = N
     """
     if fixtures.local_free():
         code, result = run_probe(body if isinstance(body, dict) else {})
+        if lab_traffic.is_lab_url((body or {}).get("url")):
+            result["lab_testing"] = lab_traffic.classification()
+            return code, result, None
         try:
             from live402 import history as history_mod
 
