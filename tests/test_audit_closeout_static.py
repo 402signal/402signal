@@ -168,7 +168,7 @@ class CloseoutStaticTests(unittest.TestCase):
         text = _read("docs/route-transparency-atomicity.md")
         self.assertIn("SEC-ROUTER-004", text)
         self.assertIn("A-14", text)
-        self.assertIn("durable signed leaf", text)
+        self.assertIn("durable leaf and signed checkpoint", text)
         self.assertIn("require_transparency", text)
         self.assertIn("logged_uncheckpointed", text)
         self.assertIn("env wins", text.lower())
